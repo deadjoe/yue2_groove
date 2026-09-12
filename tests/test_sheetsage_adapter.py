@@ -270,6 +270,32 @@ def test_transformers_and_torch_are_imported_lazily() -> None:
             assert "yue2" not in top_level, name
 
 
+def _imported_modules(path: Path) -> set[str]:
+    modules = set()
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Import):
+            modules.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            modules.add(node.module or "")
+    return modules
+
+
+def test_yue2_is_imported_only_by_adapter_py() -> None:
+    """The UI/skill modules must go through ``adapter.py`` for every yue2 call."""
+    offenders = {}
+    for path in sorted(PACKAGE.rglob("*.py")):
+        names = {name for name in _imported_modules(path)
+                 if name == "yue2" or name.startswith("yue2.")}
+        if names:
+            offenders[path.name] = names
+    assert set(offenders) == {"adapter.py"}, offenders
+
+
+def test_webui_never_imports_transformers() -> None:
+    assert not any(name == "transformers" or name.startswith("transformers.")
+                   for name in _imported_modules(PACKAGE / "webui.py"))
+
+
 def test_sheetsage_env_does_not_leak_into_yue2_config(monkeypatch) -> None:
     monkeypatch.setenv("YUE2_GROOVE_SHEETSAGE_MODEL", "/models/SheetSage2")
     assert config.default_sheetsage_model() == "/models/SheetSage2"
