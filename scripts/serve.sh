@@ -117,13 +117,22 @@ lan_ips() {
   fi
 }
 
+auth_label() {
+  # never print the password itself
+  if [ -n "${YUE2_GROOVE_AUTH:-}" ]; then
+    echo "${YUE2_GROOVE_AUTH%%:*}:***"
+  else
+    echo "no password set (anyone on the LAN can use it)"
+  fi
+}
+
 print_urls() {
   local port="$1"
   echo "  local:  http://127.0.0.1:${port}/"
   while IFS= read -r ip; do
     [ -n "$ip" ] && echo "  LAN:    http://${ip}:${port}/"
   done < <(lan_ips)
-  echo "  login:  ${YUE2_GROOVE_AUTH:-no password set (anyone on the LAN can use it)}"
+  echo "  login:  $(auth_label)"
 }
 
 start_service() {
@@ -142,8 +151,10 @@ start_service() {
     return 1
   fi
 
+  # The login is handed to the app through the environment (YUE2_GROOVE_AUTH), not
+  # as a command-line argument, so it does not show up in `ps` or in this output.
+  export YUE2_GROOVE_AUTH="${YUE2_GROOVE_AUTH:-}"
   local args=(-m yue2_groove --host "$HOST" --port "$PORT" --tab "$TAB" --runs "$RUN_DIR")
-  [ -n "${YUE2_GROOVE_AUTH:-}" ] && args+=("--auth" "$YUE2_GROOVE_AUTH")
   # bash 3.2 treats an empty array as unbound under set -u, hence the length check
   if [ "${#EXTRA_ARGS[@]}" -gt 0 ]; then
     args+=("${EXTRA_ARGS[@]}")
@@ -229,5 +240,10 @@ case "$cmd" in
   stop)    stop_service ;;
   restart) stop_service; start_service ;;
   status)  status_service ;;
-  log)     [ -f "$LOG_FILE" ] && tail -n 100 -f "$LOG_FILE" || { echo "No log yet (the service has not been started)."; exit 1; } ;;
+  log)
+    if [ -f "$LOG_FILE" ]; then
+      tail -n 100 -f "$LOG_FILE" || true      # Ctrl-C ends the tail; that is not an error
+    else
+      echo "No log yet (the service has not been started)."; exit 1
+    fi ;;
 esac

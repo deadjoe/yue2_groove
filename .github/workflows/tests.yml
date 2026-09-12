@@ -33,6 +33,8 @@ jobs:
           uv pip install --python .venv/bin/python \
             "yue2-infer @ git+https://github.com/multimodal-art-projection/YuE@${{ matrix.upstream }}" \
             -e ".[test]" --overrides overrides/linux.txt
+      - name: Static check (syntax errors and undefined names)
+        run: uvx ruff check --select E9,F821 .
       - name: Model-free tests (library, adapter, upstream contract)
         run: .venv/bin/python -m pytest -q
       - name: Import and build the UI

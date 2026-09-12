@@ -273,7 +273,7 @@ def player_html(audio_path: str) -> str:
 
 
 def _table(title: str, rows) -> str:
-    rows = [(l, v) for l, v in rows if v not in (None, "", "—", {})]
+    rows = [(name, v) for name, v in rows if v not in (None, "", "—", {})]
     if not rows:
         return ""
     out = [f'<div class="bb-lib-section">{html.escape(title)}</div>',

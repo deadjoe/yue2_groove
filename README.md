@@ -66,6 +66,10 @@ that fail loudly when an upstream release changes something the UI depends on.
    uv pip install --python .venv/bin/python ../YuE -e . --overrides overrides/linux.txt
    ```
 
+   Prefer not to clone YuE2 at all? The `yue2` extra pulls the pinned upstream tag
+   straight from GitHub: `uv pip install --python .venv/bin/python -e ".[yue2]" --overrides overrides/macos.txt`
+   (this is also what CI does).
+
 4. **(macOS) Check the attention kernel** — takes a few seconds, loads no weights:
 
    ```bash

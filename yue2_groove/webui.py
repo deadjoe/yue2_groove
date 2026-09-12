@@ -1795,7 +1795,7 @@ def build_ui(defaults):
                     with gr.Tab("02 // DECODE", id="decode"):
                         gr.Markdown(
                             "Re-decode a saved **latent.npy** without generating again "
-                            "(same as upstream `run_yue2.py decode`). "
+                            "(same as the upstream skill script `run_yue2.py decode`). "
                             "Typical use: compare `standard` and `legacy` decoders on the same song.",
                             elem_classes=["bb-note"],
                         )
@@ -1991,14 +1991,14 @@ def build_ui(defaults):
         gen_common = [style, lyrics, cot, seed, cfg, abc, out_id, preset,
                       abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
                       sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max] + model_args
-        run_event = run_btn.click(generate, inputs=gen_common,
-                                  outputs=[audio_out, score_out, gen_status, files_out,
-                                           run_btn, plan_btn])
-        plan_event = plan_btn.click(plan_only,
-                                    inputs=[style, lyrics, cot, seed, cfg, out_id,
-                                            abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max]
-                                           + model_args,
-                                    outputs=[score_out, gen_status, files_out, run_btn, plan_btn])
+        run_btn.click(generate, inputs=gen_common,
+                      outputs=[audio_out, score_out, gen_status, files_out,
+                               run_btn, plan_btn])
+        plan_btn.click(plan_only,
+                       inputs=[style, lyrics, cot, seed, cfg, out_id,
+                               abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max]
+                              + model_args,
+                       outputs=[score_out, gen_status, files_out, run_btn, plan_btn])
         # Cooperative cancel only: do NOT use cancels=[...] here, because Gradio would
         # tear down the running generator event and drop its final "re-enable buttons" yield.
         cancel_btn.click(cancel_run, outputs=gen_status)
@@ -2035,7 +2035,7 @@ def build_ui(defaults):
                         inputs=[batch_text, batch_file, batch_id,
                                 abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
                                 sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max]
-                               + model_args,
+                              + model_args,
                         outputs=[batch_table, batch_status, batch_btn])
         cancel_btn.click(cancel_run, outputs=batch_status)
 
