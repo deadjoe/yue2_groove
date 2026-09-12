@@ -27,6 +27,17 @@ that fail loudly when an upstream release changes something the UI depends on.
 > is the platform YuE2 itself supports and validates; this UI has not been exercised there
 > yet — it should work, and reports are welcome.
 
+## Screenshots
+
+Dark scene (the UI also has a bright one). **05 // LIBRARY** — work list, spectrum player,
+per-run request / sampling tables:
+
+<img src="docs/images/library-dark.png" alt="05 // LIBRARY: work list, spectrum player, request and sampling tables" width="100%">
+
+**01 // GENERATE** — style, lyrics, plan mode, sampling presets, score and status panes:
+
+<img src="docs/images/generate-dark.png" alt="01 // GENERATE: style, lyrics, plan mode, sampling presets" width="58%">
+
 ## Requirements
 
 - Python 3.10 or newer and [uv](https://docs.astral.sh/uv/) (`pip` also works, see below).
@@ -68,7 +79,7 @@ that fail loudly when an upstream release changes something the UI depends on.
 
    Prefer not to clone YuE2 at all? The `yue2` extra pulls the pinned upstream tag
    straight from GitHub: `uv pip install --python .venv/bin/python -e ".[yue2]" --overrides overrides/macos.txt`
-   (this is also what CI does).
+   (CI pins the same revision explicitly, and also runs the suite against upstream `main`).
 
 4. **(macOS) Check the attention kernel** — takes a few seconds, loads no weights:
 
