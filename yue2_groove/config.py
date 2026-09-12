@@ -88,6 +88,14 @@ def default_sheetsage_device() -> str:
     return value if value in ("auto", "cuda", "mps", "cpu") else "auto"
 
 
-def transcriptions_dir() -> Path:
+def transcriptions_dir(base=None) -> Path:
+    """Where transcription outputs go.
+
+    ``YUE2_GROOVE_TRANSCRIPTIONS`` wins when set; otherwise ``<base>/transcriptions``,
+    where *base* defaults to the configured runs directory.  The web UI passes its
+    ``--runs`` override as *base* so both stay in sync.
+    """
     override = os.environ.get("YUE2_GROOVE_TRANSCRIPTIONS")
-    return Path(override).expanduser().resolve() if override else runs_dir() / "transcriptions"
+    if override:
+        return Path(override).expanduser().resolve()
+    return (Path(base) if base is not None else runs_dir()) / "transcriptions"

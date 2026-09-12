@@ -33,7 +33,7 @@ run ``scripts/mps_sdpa_check.py`` to verify.  vLLM / FP8 need NVIDIA CUDA.
 
 Usage:
   python -m yue2_groove --port 7860             # opens the browser
-  python -m yue2_groove --tab 1                 # start on a given tab 0..4
+  python -m yue2_groove --tab 1                 # start on a given tab 0..6
   python -m yue2_groove --host 0.0.0.0 --auth user:pass   # LAN access (set a password)
   bash scripts/serve.sh start|stop|restart|status|log     # background service
 
@@ -813,8 +813,8 @@ def cover_check_environment():
         return f"SheetSage2 environment not ready: {exc}"
 
 
-def cover_transcribe(audio_path, task, max_seconds, model, device, dtype, revision, offline,
-                     progress=gr.Progress()):
+def cover_transcribe(audio_path, task, max_seconds, model, device, dtype, revision, base_model,
+                     offline, progress=gr.Progress()):
     """Generator: transcription disables the TRANSCRIBE button while running."""
     if not (audio_path or "").strip():
         raise gr.Error("Upload a source audio file first")
@@ -828,7 +828,7 @@ def cover_transcribe(audio_path, task, max_seconds, model, device, dtype, revisi
     busy, idle = gr.update(interactive=False), gr.update(interactive=True)
     try:
         yield gr.update(), gr.update(), "Starting SheetSage2 transcription…", busy
-        outdir = RUNS / "transcriptions" / \
+        outdir = config.transcriptions_dir(RUNS) / \
             f"{time.strftime('%Y%m%d-%H%M%S')}-{_slug(Path(audio_path).stem)}"
 
         def on_progress(value, text):
@@ -837,6 +837,7 @@ def cover_transcribe(audio_path, task, max_seconds, model, device, dtype, revisi
         record = sheetsage_adapter.transcribe(
             audio_path, output_dir=outdir, task=task,
             model=(model or "").strip() or None, revision=(revision or "").strip() or None,
+            base_model=(base_model or "").strip() or None,
             offline=bool(offline), device=device, dtype=dtype,
             max_seconds=float(max_seconds) if max_seconds else None,
             cancelled=_CANCEL.is_set, progress=on_progress)
@@ -1569,8 +1570,8 @@ button:disabled, button[disabled] { opacity: .4 !important; cursor: not-allowed 
 /* ── phones ──────────────────────────────────────────────────────────────
    Gradio 6 hides overflowing tabs behind a tiny ⋯ menu and the theme button
    is absolutely positioned over the title. Below 700px: tighter frame, theme
-   button parked in the header corner with reserved room, and the four tabs
-   wrap 2×2 (the overflow containers become display:contents so every tab is
+   button parked in the header corner with reserved room, and the tabs
+   wrap (the overflow containers become display:contents so every tab is
    always visible instead of hidden in the dropdown). */
 @media (max-width: 700px) {
   .gradio-container { padding: 14px 10px 6px !important; }
@@ -1699,6 +1700,7 @@ TIPS = {
     "TRANSCRIPTION TASK": "MELODY // VOCAL keeps only the sung line; MELODY // VOCAL+INST keeps vocal and instrumental melodies (chord-free, best for covers); FULL SCORE adds chords for cot=full regeneration.",
     "MAX SECONDS (0 = WHOLE FILE)": "Deliberately crop the transcript to the first N seconds; 0 processes the whole file. Long files take longer and use more GPU memory.",
     "SHEETSAGE2 MODEL / DIR": "Hugging Face id (m-a-p/SheetSage2) or the path of a downloaded snapshot. MERT-v2-FullSong loads automatically as its parent encoder.",
+    "BASE MODEL / MERT SNAPSHOT": "Optional local path of the MERT-v2-FullSong snapshot; passed as base_model_path so a fully offline adapter load does not need the Hub cache.",
     "COVER ABC": "The transcription, editable. Fix wrong notes/meter before covering; STRIP CHORDS removes harmony for cot=melody, SEND TO GENERATE fills 01 GENERATE and sets the plan mode.",
     "SOURCE WORK": "A saved work with a score.abc (generated plan or an earlier edit); its ABC becomes the frozen baseline.",
     "BASELINE": "Record of the frozen source: hashes plus copies of score.abc/request.json. The original run directory is never modified.",
@@ -2382,6 +2384,10 @@ def build_ui(defaults):
                         with gr.Accordion("SHEETSAGE2 OPTIONS", open=False):
                             cover_model = gr.Textbox(value=config.default_sheetsage_model(),
                                                      label="SHEETSAGE2 MODEL / DIR")
+                            cover_base_model = gr.Textbox(
+                                value=config.default_sheetsage_base_model(),
+                                label="BASE MODEL / MERT SNAPSHOT",
+                                placeholder="Optional local MERT-v2-FullSong path for offline loads")
                             with gr.Row():
                                 cover_device = gr.Dropdown(choices=["auto", "cuda", "mps", "cpu"],
                                                            value=config.default_sheetsage_device(),
@@ -2468,6 +2474,12 @@ def build_ui(defaults):
                                                      size="lg", scale=3, elem_id="bb-edit-run")
                             edit_cancel_btn = gr.Button("CANCEL", variant="stop", size="lg", scale=1)
                         edit_audio = gr.Audio(label="RESULT", type="filepath")
+                        edit_result_abc = gr.Textbox(label="RESULT ABC", lines=8, max_lines=24,
+                                                     interactive=False, elem_classes=["bb-output"],
+                                                     elem_id="bb-edit-result-abc")
+                        gr.HTML('<div class="bb-score-title">SCORE VIEW // RESULT</div>'
+                                + _score_panel("RESULT ABC", "No edit generated yet."),
+                                elem_id="bb-edit-result-score-panel")
                         with gr.Accordion("ARTIFACTS", open=False):
                             edit_files = gr.File(label="FILES", file_count="multiple", height=120)
                         with gr.Row():
@@ -2608,7 +2620,8 @@ def build_ui(defaults):
         # ───── cover wiring (SheetSage2 lives in sheetsage_adapter.py) ─────
         cover_btn.click(cover_transcribe,
                         inputs=[cover_audio, cover_task, cover_max_seconds, cover_model,
-                                cover_device, cover_dtype, cover_revision, cover_offline],
+                                cover_device, cover_dtype, cover_revision, cover_base_model,
+                                cover_offline],
                         outputs=[cover_abc, cover_files, cover_status, cover_btn])
         cover_cancel_btn.click(cancel_run, outputs=cover_status)
         cover_env_btn.click(cover_check_environment, outputs=cover_status)
@@ -2636,7 +2649,8 @@ def build_ui(defaults):
                     edit_baseline_state,
                     abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
                     sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max] + model_args,
-            outputs=[edit_audio, edit_abc, edit_files, edit_status, edit_run_btn, edit_last_run])
+            outputs=[edit_audio, edit_result_abc, edit_files, edit_status, edit_run_btn,
+                     edit_last_run])
         edit_cancel_btn.click(cancel_run, outputs=edit_status)
         edit_compare_btn.click(edit_compare, inputs=[edit_source_rel, edit_last_run],
                                outputs=[edit_compare_file, edit_compare_link, edit_compare_status])

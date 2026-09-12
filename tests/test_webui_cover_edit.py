@@ -102,23 +102,43 @@ def test_cover_transcribe_yields_result_and_frees_the_lock(monkeypatch, tmp_path
 
     monkeypatch.setattr(webui.sheetsage_adapter, "transcribe", fake_transcribe)
     yields = list(webui.cover_transcribe(str(audio), "melody-full", 0, "m-a-p/SheetSage2",
-                                         "auto", "auto", "", False))
+                                         "auto", "auto", "", "/mert-snapshot", False))
     assert all(len(chunk) == 4 for chunk in yields)          # matches the 4 wired outputs
     abc, files, status, button = yields[-1]
     assert abc == CHORD_FREE and files and str(transcript / "score.abc") in files
     assert "low confidence" in status and button["interactive"] is True
-    assert seen["cancelled"] is not None and seen["output_dir"].parent.name == "transcriptions"
+    assert seen["cancelled"] is not None and seen["base_model"] == "/mert-snapshot"
+    assert seen["output_dir"].parent == webui.RUNS / "transcriptions"
     # the lock was released: a second transcription can start
-    assert list(webui.cover_transcribe(str(audio), "melody-full", 0, "m", "auto", "auto", "", False))
+    assert list(webui.cover_transcribe(str(audio), "melody-full", 0, "m", "auto", "auto", "",
+                                       "", False))
+
+
+def test_cover_transcribe_honours_the_transcriptions_override(monkeypatch, tmp_path: Path) -> None:
+    audio = tmp_path / "ref.wav"
+    audio.write_bytes(b"RIFF")
+    transcript = tmp_path / "transcript"
+    transcript.mkdir()
+    seen = {}
+    monkeypatch.setenv("YUE2_GROOVE_TRANSCRIPTIONS", str(tmp_path / "custom-place"))
+
+    def fake_transcribe(audio_path, **kwargs):
+        seen.update(kwargs)
+        return {"abc": CHORD_FREE, "warnings": [], "task": "melody-full", "melody_only": True,
+                "output_dir": str(transcript), "device": "cpu", "dtype": "fp32"}
+
+    monkeypatch.setattr(webui.sheetsage_adapter, "transcribe", fake_transcribe)
+    list(webui.cover_transcribe(str(audio), "melody-full", 0, "m", "auto", "auto", "", "", False))
+    assert Path(seen["output_dir"]).parent == tmp_path / "custom-place"
 
 
 def test_cover_transcribe_refuses_without_audio_and_when_busy() -> None:
     with pytest.raises(gr.Error, match="Upload a source audio"):
-        next(webui.cover_transcribe("", "melody-full", 0, "", "auto", "auto", "", False))
+        next(webui.cover_transcribe("", "melody-full", 0, "", "auto", "auto", "", "", False))
     webui._RUNNING.acquire()
     try:
         yields = list(webui.cover_transcribe("/tmp/x.wav", "melody-full", 0, "", "auto",
-                                             "auto", "", False))
+                                             "auto", "", "", False))
         assert "already running" in yields[0][2]
     finally:
         webui._RUNNING.release()
@@ -224,13 +244,27 @@ def test_edit_generate_happy_path_writes_a_manifest(isolated_runs: Path, monkeyp
     monkeypatch.setattr(webui, "_run_generation", fake_run_generation)
     yields = list(webui.edit_generate(*edit_generate_args()))
     assert all(len(chunk) == 6 for chunk in yields)
-    audio, abc, files, status, button, last_run = yields[-1]
-    assert audio.endswith("audio.flac") and abc == BASE_ABC
+    audio, result_abc, files, status, button, last_run = yields[-1]
+    # the editor is not an output: only the separate RESULT ABC box receives song.abc
+    assert audio.endswith("audio.flac") and result_abc == FakeSong.abc
     assert button["interactive"] is True and "edit_manifest.json" in status
     manifest = json.loads(Path(last_run, "edit_manifest.json").read_text(encoding="utf-8"))
     assert manifest["source"]["rel"] == "20260901-120000-source"
     assert manifest["invariants"]["match"] is True
     assert manifest["abc"]["after_sha256"] == edit_flow.sha256_text(edit_flow.clean_abc(BASE_ABC))
+
+
+def test_edit_generate_event_targets_the_result_box_not_the_editor(isolated_runs: Path) -> None:
+    """Regression: GENERATE EDITED must never write back into EDITED ABC."""
+    demo = webui.build_ui({"device": "cpu", "dtype": "float32", "model": "m-a-p/YuE2-3B",
+                           "vae": "standard", "tab": 6, "status": ""})
+    components = {c.elem_id: c for c in demo.blocks.values()
+                  if getattr(c, "elem_id", None) in ("bb-edit-abc", "bb-edit-result-abc")}
+    events = [f for f in demo.fns.values()
+              if getattr(f.fn, "__name__", "") == "edit_generate"]
+    assert len(events) == 1
+    assert components["bb-edit-result-abc"] in events[0].outputs
+    assert components["bb-edit-abc"] not in events[0].outputs
 
 
 def test_edit_compare_requires_both_sides(isolated_runs: Path) -> None:

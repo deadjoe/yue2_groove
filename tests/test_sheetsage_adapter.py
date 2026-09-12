@@ -312,3 +312,10 @@ def test_sheetsage_env_does_not_leak_into_yue2_config(monkeypatch) -> None:
     monkeypatch.delenv("YUE2_GROOVE_SHEETSAGE_MODEL", raising=False)
     monkeypatch.setenv("YUE2_GROOVE_MODELS", "/models")
     assert config.default_sheetsage_model() == "m-a-p/SheetSage2"  # subdir absent → hub id
+
+
+def test_transcriptions_dir_follows_the_runs_override_and_the_env(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("YUE2_GROOVE_TRANSCRIPTIONS", raising=False)
+    assert config.transcriptions_dir(tmp_path / "runs") == tmp_path / "runs" / "transcriptions"
+    monkeypatch.setenv("YUE2_GROOVE_TRANSCRIPTIONS", str(tmp_path / "custom"))
+    assert config.transcriptions_dir(tmp_path / "runs") == (tmp_path / "custom").resolve()

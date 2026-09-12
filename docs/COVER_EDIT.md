@@ -42,9 +42,15 @@ picks it up; env vars and the `--sheetsage-python` flag are equivalent):
 YUE2_GROOVE_SHEETSAGE_PYTHON=/path/to/YuE/.venv-sheetsage2/bin/python
 # optional:
 YUE2_GROOVE_SHEETSAGE_MODEL=/path/to/YuE/models/SheetSage2   # defaults to m-a-p/SheetSage2
+YUE2_GROOVE_SHEETSAGE_BASE_MODEL=/path/to/MERT-v2-FullSong  # parent encoder snapshot, offline loads
 YUE2_GROOVE_SHEETSAGE_DEVICE=auto                            # auto | cuda | mps | cpu
 YUE2_GROOVE_TRANSCRIPTIONS=/path/to/transcriptions           # defaults to <runs>/transcriptions
 ```
+
+`YUE2_GROOVE_SHEETSAGE_BASE_MODEL` is passed to the model loader as `base_model_path`, which is
+what makes `OFFLINE` work against a locally downloaded MERT-v2-FullSong snapshot instead of the
+Hub cache. `YUE2_GROOVE_TRANSCRIPTIONS` wins over the default `<runs>/transcriptions` when set;
+the 06 COVER UI writes every transcription into a fresh timestamped directory there.
 
 The **CHECK ENVIRONMENT** button in 06 COVER probes that interpreter (`torch`,
 `transformers`, ffmpeg) without loading weights. If SheetSage2 is not configured, the
@@ -92,7 +98,9 @@ symbolic invariant check, regeneration from the edited score, and a listening co
    edited score is always submitted (an edit can never silently turn into a fresh plan). For
    intentional melody/rhythm changes, tick `ALLOW MELODY/RHYTHM CHANGES`. Every attempt is a new
    run directory with `edit_manifest.json`: source and edit hashes, the invariant result,
-   permitted changes, request fields.
+   permitted changes, request fields. The score that was actually generated appears in a
+   separate **RESULT ABC** box (with its own score view) — the `EDITED ABC` editor is never
+   overwritten, so the next CHECK INVARIANTS still compares what you wrote.
 6. **BUILD COMPARISON // baseline vs edit** — builds a local listening page from the original
    run and the new one (same player as 04 TOOLS → LISTENING COMPARISON). Listen to the whole
    song and to the changed passage.
@@ -165,6 +173,8 @@ bfloat16; SheetSage2 venv Python 3.11, torch 2.8.0, transformers 4.45.2):
   notes, 32 s, Fm / 105 BPM), SEND TO GENERATE set `cot=melody`, and YuE2 produced a complete
   20.5 s 48 kHz stereo run whose `request.json` carries the transcribed melody. The same setup
   was probed with CHECK ENVIRONMENT and a second transcription (10 s) confirmed repeatability.
+  A fully offline transcription (`offline=True` plus the local MERT-v2-FullSong snapshot wired
+  through `base_model_path`) also completed in 10 s on MPS.
 - **ALL MODES** (see the README section) completed `full` / `melody` / `off` back to back on
   the same loaded pipeline and produced the three run directories plus the automatic listening
   bundle (`run.json`, per-mode `input.json`, comparison `index.html` + `manifest.json`).

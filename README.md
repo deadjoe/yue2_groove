@@ -145,8 +145,9 @@ YUE2_GROOVE_VAE_LEGACY=m-a-p/YuE2-Vae-legacy
 YUE2_GROOVE_MODELS=/path/to/models   # optional: a folder holding YuE2-3B/, YuE2-Vae/, YuE2-Vae-legacy/, SheetSage2/
 YUE2_GROOVE_SHEETSAGE_PYTHON=/path/to/.venv-sheetsage2/bin/python   # 06 COVER (separate env)
 YUE2_GROOVE_SHEETSAGE_MODEL=m-a-p/SheetSage2   # or a local SheetSage2 snapshot
+YUE2_GROOVE_SHEETSAGE_BASE_MODEL=/path/to/MERT-v2-FullSong   # offline parent encoder snapshot
 YUE2_GROOVE_SHEETSAGE_DEVICE=auto              # auto | cuda | mps | cpu
-YUE2_GROOVE_TRANSCRIPTIONS=/path/to/transcriptions   # default: <runs>/transcriptions
+YUE2_GROOVE_TRANSCRIPTIONS=/path/to/transcriptions   # wins over <runs>/transcriptions
 ```
 
 The same things are available as command-line flags:
