@@ -63,6 +63,9 @@ per-run request / sampling tables:
    cd yue2_groove
    ```
 
+   Already have a YuE2 clone somewhere else? Skip the first line and use its path
+   wherever `../YuE` appears below.
+
 3. **Create a virtual environment and install both packages into it.**
    Pick the override file for your platform (it pins two dependency versions; see
    [Why the override file?](#why-the-override-file)):
@@ -96,6 +99,14 @@ per-run request / sampling tables:
    The script prints the local and LAN URLs (default `http://127.0.0.1:7860/`). The model
    loads in the background after the page is up; the first start also downloads the
    weights (about 8 GB) to your Hugging Face cache, so the first generation waits for that.
+
+   Already have the weights on disk (for example in `../YuE/models/YuE2-3B` and
+   `../YuE/models/YuE2-Vae`)? Create `.env` **before** the first start so nothing is
+   downloaded again:
+
+   ```bash
+   echo "YUE2_GROOVE_MODELS=/absolute/path/to/YuE/models" > .env
+   ```
 
 6. **Stop, restart, inspect:**
 
