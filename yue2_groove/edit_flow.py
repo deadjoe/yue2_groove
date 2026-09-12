@@ -161,7 +161,7 @@ def build_edit_manifest(*, source_rel: str, before_abc: str, after_abc: str, cot
     return {
         "schema": "yue2-groove-edit-v1",
         "created": datetime.fromtimestamp(now if now is not None else time.time()).isoformat(timespec="seconds"),
-        "source": {"rel": source_rel, "baseline": baseline or None},
+        "source": {"rel": source_rel, "frozen": baseline is not None, "baseline": baseline or None},
         "abc": {"before_sha256": sha256_text(before_text) if before_text else None,
                 "after_sha256": sha256_text(after_text)},
         "request": {"cot": cot, "seed": int(seed), "cfg_scale": cfg_scale},

@@ -158,6 +158,7 @@ def test_build_edit_manifest_records_hashes_and_permissions() -> None:
         cot="full", seed=5, cfg_scale=None, invariants=invariants, voices="Vocal",
         allow_tempo_change=True, allow_changes=False, now=0)
     assert manifest["schema"] == "yue2-groove-edit-v1"
+    assert manifest["source"]["frozen"] is False and manifest["source"]["baseline"] is None
     assert manifest["abc"]["before_sha256"] != manifest["abc"]["after_sha256"]
     assert manifest["request"] == {"cot": "full", "seed": 5, "cfg_scale": None}
     assert manifest["permitted"] == {"compared_voices": ["Vocal"], "tempo_change": True,
@@ -165,3 +166,11 @@ def test_build_edit_manifest_records_hashes_and_permissions() -> None:
     assert manifest["invariants"]["match"] is True
     from datetime import datetime
     assert manifest["created"] == datetime.fromtimestamp(0).isoformat(timespec="seconds")
+
+    frozen = edit_flow.build_edit_manifest(
+        source_rel="20260901-120000-source", before_abc=BASE_ABC, after_abc=CHORD_EDIT,
+        cot="full", seed=5, cfg_scale=None, invariants=invariants, voices="both",
+        allow_tempo_change=False, allow_changes=False,
+        baseline={"schema": "yue2-groove-baseline-v1", "baseline": {"path": "/tmp/b"}}, now=0)
+    assert frozen["source"]["frozen"] is True
+    assert frozen["source"]["baseline"]["baseline"]["path"] == "/tmp/b"

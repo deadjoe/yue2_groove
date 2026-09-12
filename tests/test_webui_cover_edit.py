@@ -103,10 +103,11 @@ def test_cover_transcribe_yields_result_and_frees_the_lock(monkeypatch, tmp_path
     monkeypatch.setattr(webui.sheetsage_adapter, "transcribe", fake_transcribe)
     yields = list(webui.cover_transcribe(str(audio), "melody-full", 0, "m-a-p/SheetSage2",
                                          "auto", "auto", "", "/mert-snapshot", False))
-    assert all(len(chunk) == 4 for chunk in yields)          # matches the 4 wired outputs
-    abc, files, status, button = yields[-1]
+    assert all(len(chunk) == 8 for chunk in yields)          # matches the 8 wired outputs
+    abc, files, status, *buttons = yields[-1]
     assert abc == CHORD_FREE and files and str(transcript / "score.abc") in files
-    assert "low confidence" in status and button["interactive"] is True
+    assert "low confidence" in status and len(buttons) == 5
+    assert all(button["interactive"] is True for button in buttons)   # all actions re-enabled
     assert seen["cancelled"] is not None and seen["base_model"] == "/mert-snapshot"
     assert seen["output_dir"].parent == webui.RUNS / "transcriptions"
     # the lock was released: a second transcription can start
@@ -166,12 +167,14 @@ def test_edit_freeze_and_check_guards(isolated_runs: Path) -> None:
     with pytest.raises(gr.Error, match="Load a source work"):
         webui.edit_freeze("")
 
-    output, state = webui.edit_check(BASE_ABC, BASE_ABC, "both", False)
+    with pytest.raises(gr.Error, match="Freeze the baseline"):
+        webui.edit_check(BASE_ABC, BASE_ABC, "both", False, None)
+    output, state = webui.edit_check(BASE_ABC, BASE_ABC, "both", False, record)
     assert json.loads(output)["match"] is True and state["sha256"]
-    output, state = webui.edit_check(BASE_ABC, CHORD_FREE, "both", False)
+    output, state = webui.edit_check(BASE_ABC, CHORD_FREE, "both", False, record)
     assert json.loads(output)["match"] is True  # chord-only edits pass
     with pytest.raises(gr.Error, match="Load a source work"):
-        webui.edit_check("", BASE_ABC, "both", False)
+        webui.edit_check("", BASE_ABC, "both", False, record)
 
 
 class FakeSong:
@@ -195,7 +198,9 @@ def edit_generate_args(**overrides):
                 check_state={"sha256": edit_flow.sha256_text(edit_flow.clean_abc(BASE_ABC)),
                              "match": True, "result": {"match": True}, "voices": "both",
                              "allow_tempo_change": False},
-                allow_changes=False, baseline_state=None,
+                allow_changes=False,
+                baseline_state={"schema": "yue2-groove-baseline-v1",
+                                "baseline": {"path": "/tmp/baseline"}},
                 abc_temp=.7, abc_p=.9, abc_k=30, abc_rep=1.005, abc_win=100, abc_min=32,
                 abc_max=4096, sem_temp=1.0, sem_p=.95, sem_k=100, sem_rep=1.2, sem_win=50,
                 sem_min=200, sem_max=9000, device="cpu", dtype="float32", backend="torch",
@@ -223,16 +228,20 @@ def test_edit_generate_guards(isolated_runs: Path, monkeypatch) -> None:
             check_state={"sha256": edit_flow.sha256_text(edit_flow.clean_abc(BASE_ABC)),
                          "match": False, "result": {"differences": ["Vocal: sounding notes differ"]},
                          "voices": "both", "allow_tempo_change": False})))
+    with pytest.raises(gr.Error, match="Freeze the baseline"):
+        next(webui.edit_generate(*edit_generate_args(baseline_state=None)))
     with pytest.raises(gr.Error, match="Load a source work"):
-        next(webui.edit_generate(*edit_generate_args(baseline_abc="", check_state={})))
+        next(webui.edit_generate(*edit_generate_args(baseline_abc="", baseline_state=None)))
     # the override skips the gate instead of blocking the intentional edit
     monkeypatch.setattr(webui, "_get_pipe", lambda *a, **k: (object(), "note"))
     monkeypatch.setattr(webui, "_run_generation", fake_run_generation)
     yields = list(webui.edit_generate(*edit_generate_args(
-        baseline_abc="", check_state={}, allow_changes=True)))
-    assert all(len(chunk) == 6 for chunk in yields)          # matches the 6 wired outputs
-    audio, abc, files, status, button, last_run = yields[-1]
-    assert audio.endswith("audio.flac") and button["interactive"] is True
+        baseline_abc="", check_state={}, baseline_state=None, allow_changes=True)))
+    assert all(len(chunk) == 11 for chunk in yields)          # matches the 11 wired outputs
+    audio, abc, files, status, *rest = yields[-1]
+    assert len(rest) == 7                                      # 6 idle buttons + last run
+    assert audio.endswith("audio.flac") and rest[0]["interactive"] is True
+    last_run = rest[-1]
     assert Path(last_run, "edit_manifest.json").is_file()
     manifest = json.loads(Path(last_run, "edit_manifest.json").read_text(encoding="utf-8"))
     assert manifest["permitted"]["changes_override"] is True
@@ -243,11 +252,13 @@ def test_edit_generate_happy_path_writes_a_manifest(isolated_runs: Path, monkeyp
     monkeypatch.setattr(webui, "_get_pipe", lambda *a, **k: (object(), "note"))
     monkeypatch.setattr(webui, "_run_generation", fake_run_generation)
     yields = list(webui.edit_generate(*edit_generate_args()))
-    assert all(len(chunk) == 6 for chunk in yields)
-    audio, result_abc, files, status, button, last_run = yields[-1]
+    assert all(len(chunk) == 11 for chunk in yields)
+    audio, result_abc, files, status, *rest = yields[-1]
     # the editor is not an output: only the separate RESULT ABC box receives song.abc
     assert audio.endswith("audio.flac") and result_abc == FakeSong.abc
-    assert button["interactive"] is True and "edit_manifest.json" in status
+    assert all(button["interactive"] is True for button in rest[:-1])   # 6 idle buttons
+    assert "edit_manifest.json" in status
+    last_run = rest[-1]
     manifest = json.loads(Path(last_run, "edit_manifest.json").read_text(encoding="utf-8"))
     assert manifest["source"]["rel"] == "20260901-120000-source"
     assert manifest["invariants"]["match"] is True
@@ -285,3 +296,109 @@ def test_edit_source_choices_skip_non_works(isolated_runs: Path) -> None:
     assert "transcriptions" not in scanned and "baselines" not in scanned
     choices = webui.edit_choices()["choices"]
     assert any(rel == "20260901-120000-source" for _label, rel in choices)
+
+
+# ── helpers / layout ─────────────────────────────────────────────────────
+
+def test_score_panel_escapes_data_attributes() -> None:
+    html_text = webui._score_panel('OP"EN', 'quote " and <tag> & more', elem_id="bb-x")
+    assert 'data-bb-abc="OP&quot;EN"' in html_text
+    assert 'data-bb-empty="quote &quot; and &lt;tag&gt; &amp; more"' in html_text
+    assert "<tag>" not in html_text
+
+
+def test_sampling_summary_mirrors_the_shared_sliders() -> None:
+    text = webui._sampling_summary(.7, .9, 30, 1.005, 100, 32, 4096,
+                                   1.0, .95, 100, 1.2, 50, 200, 9000)
+    assert text.splitlines()[0].startswith("ABC")
+    assert "max=4096" in text and text.splitlines()[1].startswith("SEM") and "max=9000" in text
+
+
+# ── direct cover generation ──────────────────────────────────────────────
+
+def cover_generate_args(**overrides):
+    args = dict(style="English jazz", lyrics="[Verse]\nla", abc_text=BASE_ABC,
+                task="melody-full", seed=831001, cfg_scale=0,
+                abc_temp=.7, abc_p=.9, abc_k=30, abc_rep=1.005, abc_win=100, abc_min=32,
+                abc_max=4096, sem_temp=1.0, sem_p=.95, sem_k=100, sem_rep=1.2, sem_win=50,
+                sem_min=200, sem_max=9000, device="cpu", dtype="float32", backend="torch",
+                quantization="none", offload_ar=False, budget=24, ode_steps=32,
+                vae_core_frames="auto", model="m-a-p/YuE2-3B", vae_choice="standard",
+                vae_custom="", revision="", vae_revision="", offline=False)
+    args.update(overrides)
+    return [args[name] for name in (
+        "style", "lyrics", "abc_text", "task", "seed", "cfg_scale",
+        "abc_temp", "abc_p", "abc_k", "abc_rep", "abc_win", "abc_min", "abc_max",
+        "sem_temp", "sem_p", "sem_k", "sem_rep", "sem_win", "sem_min", "sem_max",
+        "device", "dtype", "backend", "quantization", "offload_ar", "budget", "ode_steps",
+        "vae_core_frames", "model", "vae_choice", "vae_custom", "revision", "vae_revision",
+        "offline")]
+
+
+def test_cover_generate_runs_directly_from_the_cover_tab(isolated_runs: Path,
+                                                         monkeypatch) -> None:
+    captured = {}
+
+    def fake_run_generation(pipe, request, outdir, **kwargs):
+        captured["cot"] = request.cot
+        captured["abc"] = request.abc
+        Path(outdir).mkdir(parents=True, exist_ok=True)
+        (Path(outdir) / "audio.flac").write_bytes(b"fLaC")
+        return FakeSong(), {"audio_seconds": 12.5, "truncated": False}, 1.0
+
+    monkeypatch.setattr(webui, "_get_pipe", lambda *a, **k: (object(), "note"))
+    monkeypatch.setattr(webui, "_run_generation", fake_run_generation)
+
+    yields = list(webui.cover_generate(*cover_generate_args()))
+    assert all(len(chunk) == 9 for chunk in yields)   # status + audio + result abc + files + 5 buttons
+    status, audio, result_abc, files, *buttons = yields[-1]
+    assert captured["cot"] == "melody" and '"C"' not in captured["abc"]
+    assert audio.endswith("audio.flac") and result_abc == FakeSong.abc
+    assert len(buttons) == 5 and all(b["interactive"] is True for b in buttons)
+    assert "run directory" in status
+
+    # a full-score transcription keeps its chord symbols and uses cot=full
+    list(webui.cover_generate(*cover_generate_args(task="full")))
+    assert captured["cot"] == "full" and '"C"' in captured["abc"]
+
+    with pytest.raises(gr.Error, match="score-conditioned"):
+        next(webui.cover_generate(*cover_generate_args(abc_text="   ")))
+
+
+# ── comparison builders ──────────────────────────────────────────────────
+
+def test_edit_compare_feeds_the_source_and_last_run_to_the_builder(isolated_runs: Path,
+                                                                   monkeypatch) -> None:
+    make_work(isolated_runs)
+    captured = {}
+
+    def fake_make_comparison(paths_text, progress=None):
+        captured["paths"] = paths_text
+        return "/tmp/index.html", "<a>link</a>", "page: /tmp/index.html"
+
+    monkeypatch.setattr(webui, "make_comparison", fake_make_comparison)
+    result = webui.edit_compare("20260901-120000-source", "/tmp/runs/edit-1")
+    source = str((isolated_runs / "20260901-120000-source").resolve())
+    assert captured["paths"] == f"{source}\n/tmp/runs/edit-1"
+    assert result == ("/tmp/index.html", "<a>link</a>", "page: /tmp/index.html")
+
+
+def test_make_comparison_builds_a_real_listening_bundle(isolated_runs: Path) -> None:
+    sources = []
+    for name in ("20260901-120000-a", "20260901-120001-b"):
+        d = isolated_runs / name
+        d.mkdir()
+        (d / "result.json").write_text(json.dumps({
+            "status": "complete", "truncated": False, "sample_rate": 48000,
+            "audio_seconds": 1.0}), encoding="utf-8")
+        (d / "request.json").write_text(json.dumps({
+            "id": name, "style": "test", "lyrics": "la", "cot": "full", "seed": 1}),
+            encoding="utf-8")
+        (d / "audio.flac").write_bytes(b"fLaC" + b"\x00" * 64)
+        sources.append(str(d))
+
+    html_path, link, status = webui.make_comparison("\n".join(sources))
+    outdir = Path(html_path).parent
+    assert (outdir / "index.html").is_file() and (outdir / "manifest.json").is_file()
+    assert (outdir / "case-001").is_dir() and (outdir / "case-002").is_dir()
+    assert "gradio_api/file=" in link and "cases" in status

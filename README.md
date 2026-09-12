@@ -205,7 +205,8 @@ More on the Apple Silicon story, with measurements: [docs/MACOS_MPS.md](docs/MAC
 
 **06 // COVER** turns a recording into a cover: upload audio → SheetSage2 transcribes it to ABC
 (melody-only or full score) → review/edit the score, strip chords → **SEND TO GENERATE** fills
-the ABC and the right plan mode → the normal YuE2 generation path runs unchanged.
+the ABC and the right plan mode, or **GENERATE COVER** generates right on the COVER tab with its
+own style/lyrics → the normal YuE2 generation path runs unchanged.
 
 SheetSage2 pins different torch/transformers versions than YuE2, so it runs in its **own
 virtual environment** and the UI talks to it over a subprocess boundary: nothing in the groove
@@ -244,9 +245,11 @@ voice, with an explicit allow-tempo flag) → **GENERATE EDITED**.
 
 Generation refuses to run unless the check passed on exactly the current ABC: the edited score
 is always submitted, so an edit can never silently fall back to a fresh plan. `ALLOW
-MELODY/RHYTHM CHANGES` exists for intentional adaptations. Each attempt is a new run directory
-with `edit_manifest.json` (source/edit hashes, invariant result, permitted changes), and
-**BUILD COMPARISON // baseline vs edit** creates a local listening page from both runs.
+MELODY/RHYTHM CHANGES` exists for intentional adaptations — it is also the only way past the
+FREEZE BASELINE requirement that ties the check to an immutable record. Sampling parameters are
+shared with 01 GENERATE (the EDIT tab mirrors them read-only). Each attempt is a new run directory
+with `edit_manifest.json` (source/edit hashes, frozen flag, invariant result, permitted changes),
+and **BUILD COMPARISON // baseline vs edit** creates a local listening page from both runs.
 
 Manual walkthrough (`E1`) and the failure cases (`X`):
 [docs/COVER_EDIT.md](docs/COVER_EDIT.md).

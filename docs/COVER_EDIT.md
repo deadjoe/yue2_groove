@@ -73,9 +73,17 @@ tab reports a configuration error and every other tab keeps working.
    (chord-free input) or `FULL` (full-score input), then switches to that tab. Add the target
    STYLE and LYRICS there and press GENERATE. The existing `adapter.generate`/`YuE2Pipeline`
    path is used unchanged; artifacts land in `runs/<stamp>-<id>/`.
+6. **GENERATE COVER** (optional, in the `GENERATE COVER // direct from this score` accordion) —
+   the same score-conditioned request without leaving 06 COVER: type the target STYLE/LYRICS
+   there, press the button, and the result appears with its own RESULT audio, RESULT ABC (the
+   score actually submitted — chord-stripped for melody tasks) and GENERATED FILES. Both routes
+   run the identical `cover.build_cover_request` + generation core.
 
-`cot="melody"` does not remove chords by itself — SEND TO GENERATE strips them for you. A cover
-supplies a symbolic melody condition; it does not preserve the source singer's identity or
+While a transcription runs, every action button on the tab (including STRIP CHORDS and the two
+GENERATE buttons) is disabled; CANCEL stays active and terminates the subprocess.
+
+`cot="melody"` does not remove chords by itself — both generation routes strip them for you. A
+cover supplies a symbolic melody condition; it does not preserve the source singer's identity or
 waveform.
 
 ## 3. 07 EDIT — iterate on a score
@@ -89,7 +97,9 @@ symbolic invariant check, regeneration from the edited score, and a listening co
 2. **FREEZE BASELINE** — writes `runs/baselines/<stamp>-<name>-baseline/` with `baseline.json`
    (SHA-256 of the source artifacts) and copies of `score.abc` / `request.json`. The original run
    directory is never touched; audio and latents stay where they are and remain the listening
-   baseline.
+   baseline. **CHECK INVARIANTS and GENERATE EDITED require the frozen record** — this is what
+   ties a verification result to an immutable source. `ALLOW MELODY/RHYTHM CHANGES` is the only
+   override and skips both the freeze gate and the check.
 3. **Edit** the ABC (and style/lyrics if the arrangement changes). Keep the native dialect:
    the checker rejects unsupported notation rather than guessing.
 4. **CHECK INVARIANTS** — compares baseline and edit per voice. Chord-only edits pass; pitch,
@@ -98,9 +108,13 @@ symbolic invariant check, regeneration from the edited score, and a listening co
    edited score is always submitted (an edit can never silently turn into a fresh plan). For
    intentional melody/rhythm changes, tick `ALLOW MELODY/RHYTHM CHANGES`. Every attempt is a new
    run directory with `edit_manifest.json`: source and edit hashes, the invariant result,
-   permitted changes, request fields. The score that was actually generated appears in a
-   separate **RESULT ABC** box (with its own score view) — the `EDITED ABC` editor is never
-   overwritten, so the next CHECK INVARIANTS still compares what you wrote.
+   permitted changes, request fields, and whether the baseline was frozen. The score that was
+   actually generated appears in a separate **RESULT ABC** box (with its own score view) — the
+   `EDITED ABC` editor is never overwritten, so the next CHECK INVARIANTS still compares what you
+   wrote. Sampling parameters are the shared sliders of `01 GENERATE → ADVANCED // SAMPLING`; the
+   EDIT tab shows a read-only mirror and never keeps a second copy. While a generation runs, the
+   tab's action buttons (FREEZE / LOAD / CHECK / COMPARISON / GENERATE) are disabled; CANCEL
+   remains active.
 6. **BUILD COMPARISON // baseline vs edit** — builds a local listening page from the original
    run and the new one (same player as 04 TOOLS → LISTENING COMPARISON). Listen to the whole
    song and to the changed passage.
@@ -183,6 +197,13 @@ C2 differs from C1 only in the transcription task and plan mode; the commands ab
 sufficient. SheetSage2 is CUDA-validated upstream; the MPS numbers here are this machine's, not
 a support guarantee.
 
+- SheetSage2 runs in **one subprocess per transcription**: interpreter, remote code and the
+  MERT-v2-FullSong parent are loaded fresh and all memory is returned when the process exits.
+  This is deliberate — it keeps the conflicting dependency sets isolated and guarantees that no
+  SheetSage2 memory is still reserved when YuE2 loads (the upstream skill also requires the
+  stages to run sequentially). With the weights warm in the OS/HF cache, a reload measured about
+  10 s for a 30 s excerpt here; a long-lived warm worker would trade that for permanently
+  reserved GPU/unified memory and a staler model, so it is not offered.
 - YuE2 generation: the upstream baseline (24 GB NVIDIA, BF16) or Apple Silicon with the
   documented overrides (see the main README and `docs/MACOS_MPS.md`). One model at a time is
   the supported configuration; each transcription is a fresh process, so SheetSage2's weights
