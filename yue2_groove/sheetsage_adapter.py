@@ -16,10 +16,13 @@ Kept deliberately narrow — the adapter counterpart of ``adapter.py``:
   cooperative cancel; returns the driver's ``result.json`` (``abc``, ``warnings``,
   ``abc_error``, ``output_dir``, ...).
 
-The model *load* is part of the subprocess lifecycle: every transcription starts a
-fresh interpreter, loads the model (weights stay in the shared Hugging Face cache)
-and frees it on exit.  A long-lived server process is a later optimization; it
-would change this module only.
+The model *load* is part of the subprocess lifecycle by default: every transcription
+starts a fresh interpreter, loads the model (weights stay in the shared Hugging Face
+cache) and frees it on exit.  Setting ``YUE2_GROOVE_SHEETSAGE_KEEP_WARM=1`` (or
+``keep_warm=True`` per call) instead keeps one resident driver process (``--serve``)
+whose model is reused until ``stop_worker()`` / the UI's UNLOAD button or the idle
+timeout (``YUE2_GROOVE_SHEETSAGE_IDLE_SECONDS``); a cancel or crash terminates it and
+the next call starts a fresh one.
 """
 from __future__ import annotations
 
@@ -38,6 +41,8 @@ from . import config
 
 DRIVER = Path(__file__).resolve().parent / "sheetsage_driver.py"
 PROGRESS_PREFIX = "@@PROGRESS "
+READY_PREFIX = "@@READY "
+RESULT_PREFIX = "@@RESULT "
 
 TASKS = ("melody-vocal", "melody-full", "full")
 
@@ -146,6 +151,25 @@ def build_command(audio_path, output_dir, *, python=None, task: str = "melody-fu
     return cmd
 
 
+def build_serve_command(*, python=None, model: str | None = None, revision: str | None = None,
+                        base_model: str | None = None, offline: bool = False,
+                        device: str = "auto", dtype: str = "auto", preset: str = "default",
+                        threads: int = 4) -> list[str]:
+    """argv for the resident worker (``--serve``); requests carry audio/task."""
+    cmd = [resolve_python(python), str(DRIVER), "--serve",
+           "--model", model or config.default_sheetsage_model(),
+           "--device", device, "--dtype", dtype, "--preset", preset]
+    if revision:
+        cmd += ["--revision", revision]
+    if base_model:
+        cmd += ["--base-model", base_model]
+    if offline:
+        cmd += ["--offline"]
+    if threads:
+        cmd += ["--threads", str(int(threads))]
+    return cmd
+
+
 def _unique_dir(directory: Path) -> Path:
     if not directory.exists():
         return directory
@@ -200,12 +224,196 @@ def _read_failure(output_dir: Path, stderr_tail: str) -> str:
     return message
 
 
+class _Worker:
+    """One resident SheetSage2 driver process (``sheetsage_driver.py --serve``).
+
+    The model is loaded once at ``start``; each ``transcribe`` writes one JSON
+    request to its stdin and waits for the matching ``@@RESULT`` line.  A crash or
+    a cancel terminates the process; the next transcription starts a fresh one.
+    """
+
+    def __init__(self, cmd: list[str], key: tuple):
+        self.cmd = cmd
+        self.key = key
+        self.process: subprocess.Popen | None = None
+        self.last_used = 0.0
+        self._lines: queue.Queue[str | None] = queue.Queue()
+        self._stderr: list[str] = []
+        self._lock = threading.Lock()
+
+    # ── lifecycle ───────────────────────────────────────────────────────────
+    def _pump(self, stream, sink) -> None:
+        try:
+            for line in stream:
+                if sink is None:
+                    self._stderr.append(line)
+                else:
+                    sink.put(line)
+        except (OSError, ValueError):
+            pass
+        finally:
+            if sink is not None:
+                sink.put(None)
+
+    def start(self, timeout: float = 900.0) -> dict:
+        self.process = subprocess.Popen(
+            self.cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, bufsize=1, start_new_session=(os.name == "posix"))
+        threading.Thread(target=self._pump, args=(self.process.stdout, self._lines),
+                         daemon=True).start()
+        threading.Thread(target=self._pump, args=(self.process.stderr, None),
+                         daemon=True).start()
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                line = self._lines.get(timeout=0.5)
+            except queue.Empty:
+                if not self.alive():
+                    raise SheetsageFailed(
+                        "SheetSage2 worker exited while loading: " + self.stderr_tail())
+                continue
+            if line is None:
+                raise SheetsageFailed("SheetSage2 worker exited while loading: " + self.stderr_tail())
+            if line.startswith(READY_PREFIX):
+                try:
+                    return json.loads(line[len(READY_PREFIX):])
+                except ValueError as exc:
+                    raise SheetsageFailed(f"Unreadable worker ready line: {line[:200]!r}") from exc
+        self.stop()
+        raise SheetsageFailed(
+            f"SheetSage2 worker did not report ready within {timeout:.0f}s")
+
+    def alive(self) -> bool:
+        return self.process is not None and self.process.poll() is None
+
+    def stderr_tail(self, limit: int = 800) -> str:
+        return "".join(self._stderr).strip()[-limit:]
+
+    def stop(self, timeout: float = 15.0) -> None:
+        process, self.process = self.process, None
+        if process is None:
+            return
+        try:
+            if process.poll() is None:
+                try:
+                    process.stdin.write(json.dumps({"op": "stop"}) + "\n")
+                    process.stdin.flush()
+                    process.wait(timeout=timeout)
+                except (OSError, ValueError, subprocess.TimeoutExpired):
+                    _terminate(process)
+        finally:
+            for stream in (process.stdin, process.stdout, process.stderr):
+                try:
+                    if stream is not None:
+                        stream.close()
+                except (OSError, ValueError):
+                    pass
+
+    # ── one request ─────────────────────────────────────────────────────────
+    def transcribe(self, request: dict, *, cancelled: Cancelled | None = None,
+                   progress: Progress | None = None, timeout: float | None = None) -> dict:
+        if not self.alive():
+            raise SheetsageFailed("SheetSage2 worker is not running")
+        with self._lock:
+            self.last_used = time.monotonic()
+            try:
+                assert self.process is not None and self.process.stdin is not None
+                self.process.stdin.write(json.dumps({"op": "transcribe", **request}) + "\n")
+                self.process.stdin.flush()
+            except (OSError, ValueError) as exc:
+                raise SheetsageFailed(
+                    "SheetSage2 worker closed its input: " + self.stderr_tail()) from exc
+            deadline = time.monotonic() + timeout if timeout else None
+            while True:
+                try:
+                    line = self._lines.get(timeout=0.25)
+                except queue.Empty:
+                    line = ""
+                if line is None:
+                    self.process = None
+                    raise SheetsageFailed("SheetSage2 worker stopped unexpectedly: "
+                                          + self.stderr_tail())
+                if line.startswith(PROGRESS_PREFIX):
+                    try:
+                        event = json.loads(line[len(PROGRESS_PREFIX):])
+                    except ValueError:
+                        event = {}
+                    done, total = event.get("done"), event.get("total")
+                    fraction = (done / total) if (isinstance(done, (int, float)) and total) else None
+                    if progress is not None:
+                        try:
+                            progress(fraction, "Transcribing…" + (f" {done}/{total}" if total else ""))
+                        except Exception:  # noqa: BLE001 — a UI callback must never kill the job
+                            pass
+                elif line.startswith(RESULT_PREFIX):
+                    try:
+                        reply = json.loads(line[len(RESULT_PREFIX):])
+                    except ValueError as exc:
+                        raise SheetsageFailed(f"Unreadable worker reply: {line[:200]!r}") from exc
+                    if reply.get("ok"):
+                        return reply
+                    raise SheetsageFailed(str(reply.get("error") or "SheetSage2 worker failed"))
+                if cancelled is not None and self.alive() and cancelled():
+                    _terminate(self.process)
+                    self.process = None
+                    raise InterruptedError("Transcription cancelled")
+                if deadline is not None and time.monotonic() > deadline:
+                    _terminate(self.process)
+                    self.process = None
+                    raise SheetsageFailed(
+                        f"Transcription timed out after {timeout:.0f}s")
+                if not self.alive() and self._lines.empty():
+                    raise SheetsageFailed("SheetSage2 worker exited: " + self.stderr_tail())
+
+
+_WORKER: _Worker | None = None
+_WORKER_LOCK = threading.Lock()
+
+
+def _ensure_worker(cmd: list[str], idle_seconds: float) -> _Worker:
+    """Return the resident worker for *cmd*, starting/replacing it when needed."""
+    global _WORKER
+    key = tuple(cmd)
+    with _WORKER_LOCK:
+        if _WORKER is not None:
+            expired = bool(idle_seconds) and (time.monotonic() - _WORKER.last_used) > idle_seconds
+            if not _WORKER.alive() or _WORKER.key != key or expired:
+                _WORKER.stop()
+                _WORKER = None
+        if _WORKER is None:
+            worker = _Worker(cmd, key)
+            worker.start()
+            _WORKER = worker
+        return _WORKER
+
+
+def worker_status() -> dict | None:
+    """The resident worker's state, or ``None`` when nothing is loaded."""
+    with _WORKER_LOCK:
+        if _WORKER is None or not _WORKER.alive():
+            return None
+        return {"pid": _WORKER.process.pid if _WORKER.process else None,
+                "idle_seconds": round(time.monotonic() - _WORKER.last_used, 1),
+                "command": list(_WORKER.cmd)}
+
+
+def stop_worker() -> bool:
+    """Stop the resident worker if there is one; returns whether it existed."""
+    global _WORKER
+    with _WORKER_LOCK:
+        worker, _WORKER = _WORKER, None
+    if worker is None:
+        return False
+    worker.stop()
+    return True
+
+
 def transcribe(audio_path, *, output_dir=None, task: str = "melody-full",
                melody_only: bool | None = None, model: str | None = None,
                revision: str | None = None, base_model: str | None = None,
                offline: bool = False, device: str = "auto", dtype: str = "auto",
                preset: str = "default", max_seconds: float | None = None,
-               threads: int = 4, python: str | None = None,
+               threads: int = 4, python: str | None = None, keep_warm: bool | None = None,
                cancelled: Cancelled | None = None, progress: Progress | None = None,
                timeout: float | None = None) -> dict:
     """Transcribe one audio file and return the driver's result record.
@@ -227,12 +435,6 @@ def transcribe(audio_path, *, output_dir=None, task: str = "melody-full",
 
     output = Path(output_dir).expanduser() if output_dir else _default_output_dir(audio)
     output = _unique_dir(output)
-    cmd = build_command(audio, output, python=python, task=task, model=model,
-                        revision=revision, base_model=base_model, offline=offline,
-                        device=device, dtype=dtype, preset=preset,
-                        max_seconds=max_seconds, threads=threads)
-    # Only touch the filesystem after the environment checks above passed.
-    output.parent.mkdir(parents=True, exist_ok=True)
 
     def report(fraction, description):
         if progress is not None:
@@ -241,6 +443,38 @@ def transcribe(audio_path, *, output_dir=None, task: str = "melody-full",
             except Exception:  # noqa: BLE001 — a UI callback must never kill the job
                 pass
 
+    warm = config.sheetsage_keep_warm() if keep_warm is None else bool(keep_warm)
+    if warm:
+        serve_cmd = build_serve_command(python=python, model=model, revision=revision,
+                                        base_model=base_model, offline=offline, device=device,
+                                        dtype=dtype, preset=preset, threads=threads)
+        report(None, "Loading the SheetSage2 worker…")
+        worker = _ensure_worker(serve_cmd, config.sheetsage_idle_seconds())
+        reply = worker.transcribe({"audio": str(audio), "output_dir": str(output), "task": task,
+                                   "max_seconds": max_seconds},
+                                  cancelled=cancelled, progress=progress, timeout=timeout)
+        try:
+            record = json.loads((output / "result.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise SheetsageFailed(
+                f"SheetSage2 worker replied but wrote no readable result.json in {output}"
+            ) from exc
+        record.setdefault("output_dir", str(output))
+        record["task"] = task
+        record["melody_only"] = bool(record.get("melody_only", task != "full"))
+        record["command"] = serve_cmd
+        record["worker"] = {"pid": worker.process.pid if worker.process else None,
+                            "resident": True}
+        if not reply.get("abc") and not record.get("abc"):
+            raise SheetsageFailed(str(reply.get("error") or "SheetSage2 worker returned no ABC"))
+        return record
+
+    # One-shot: build the command first so a configuration error touches nothing.
+    cmd = build_command(audio, output, python=python, task=task, model=model,
+                        revision=revision, base_model=base_model, offline=offline,
+                        device=device, dtype=dtype, preset=preset,
+                        max_seconds=max_seconds, threads=threads)
+    output.parent.mkdir(parents=True, exist_ok=True)
     report(None, "Starting the SheetSage2 environment…")
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                text=True, bufsize=1, stdin=subprocess.DEVNULL,

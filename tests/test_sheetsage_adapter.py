@@ -12,6 +12,7 @@ import json
 import os
 import stat
 import sys
+import time
 import textwrap
 from pathlib import Path
 
@@ -319,3 +320,203 @@ def test_transcriptions_dir_follows_the_runs_override_and_the_env(monkeypatch, t
     assert config.transcriptions_dir(tmp_path / "runs") == tmp_path / "runs" / "transcriptions"
     monkeypatch.setenv("YUE2_GROOVE_TRANSCRIPTIONS", str(tmp_path / "custom"))
     assert config.transcriptions_dir(tmp_path / "runs") == (tmp_path / "custom").resolve()
+
+
+# ── resident worker (--serve) ────────────────────────────────────────────
+
+SERVE_STUB = """
+    import json, os, pathlib, sys, time
+    pid_file = os.environ.get("STUB_PID_FILE")
+    if pid_file:
+        pathlib.Path(pid_file).write_text(str(os.getpid()))
+    print("@@READY " + json.dumps({"model": "stub", "device": "cpu", "dtype": "fp32"}), flush=True)
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        request = json.loads(line)
+        op = request.get("op")
+        if op == "stop":
+            break
+        if op == "ping":
+            print("@@RESULT " + json.dumps({"ok": True, "pong": True}), flush=True)
+            continue
+        if os.environ.get("STUB_CRASH") == "1":
+            print("boom", file=sys.stderr)
+            sys.exit(3)
+        if os.environ.get("STUB_SLEEP") == "1":
+            time.sleep(60)
+        out = pathlib.Path(request["output_dir"])
+        out.mkdir(parents=True, exist_ok=True)
+        print("@@PROGRESS " + json.dumps({"done": 1, "total": 2}), flush=True)
+        (out / "result.json").write_text(json.dumps({
+            "status": "complete", "task": request.get("task", "melody-full"),
+            "melody_only": request.get("task") != "full", "abc": "X:1",
+            "warnings": [], "output_dir": str(out)}))
+        print("@@RESULT " + json.dumps({"ok": True, "output_dir": str(out), "abc": "X:1"}),
+              flush=True)
+    sys.exit(0)
+"""
+
+
+@pytest.fixture(autouse=True)
+def _no_resident_worker():
+    yield
+    adapter.stop_worker()
+
+
+def enable_warm(monkeypatch, tmp_path: Path, stub_body: str = SERVE_STUB) -> Path:
+    stub = write_stub(tmp_path, stub_body)
+
+    def fake_serve_command(*, python=None, **kwargs):
+        return [sys.executable, str(stub)]
+    monkeypatch.setattr(adapter, "build_serve_command", fake_serve_command)
+    monkeypatch.setenv("YUE2_GROOVE_SHEETSAGE_KEEP_WARM", "1")
+    return stub
+
+
+def test_build_serve_command_shape(monkeypatch, tmp_path: Path) -> None:
+    fake_python = tmp_path / "python"
+    fake_python.write_text("#!/bin/sh\n", encoding="utf-8")
+    fake_python.chmod(fake_python.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("YUE2_GROOVE_SHEETSAGE_PYTHON", str(fake_python))
+    cmd = adapter.build_serve_command(model="m-a-p/SheetSage2", device="cpu", dtype="fp32",
+                                      offline=True)
+    assert cmd[:3] == [str(fake_python), str(adapter.DRIVER), "--serve"]
+    assert "--task" not in cmd                       # tasks travel in each request
+    assert cmd[cmd.index("--model") + 1] == "m-a-p/SheetSage2" and "--offline" in cmd
+
+
+def test_warm_worker_is_reused_and_stoppable(monkeypatch, tmp_path: Path) -> None:
+    audio = tmp_path / "ref.wav"
+    audio.write_bytes(b"RIFF")
+    enable_warm(monkeypatch, tmp_path)
+    pid_file = tmp_path / "worker.pid"
+    monkeypatch.setenv("STUB_PID_FILE", str(pid_file))
+    progress = []
+
+    first = adapter.transcribe(audio, output_dir=tmp_path / "one", task="melody-full",
+                               progress=lambda value, text: progress.append(value))
+    status = adapter.worker_status()
+    assert first["abc"] == "X:1" and first["worker"]["resident"] is True
+    assert status is not None and status["pid"] == int(pid_file.read_text())
+    assert [value for value in progress if value is not None] == [0.5]
+
+    second = adapter.transcribe(audio, output_dir=tmp_path / "two", task="melody-full")
+    assert adapter.worker_status()["pid"] == status["pid"]        # same resident process
+    assert second["task"] == "melody-full" and second["output_dir"].endswith("two")
+
+    assert adapter.stop_worker() is True
+    assert adapter.worker_status() is None
+    assert adapter.stop_worker() is False
+
+
+def test_warm_worker_idle_expiry_restarts(monkeypatch, tmp_path: Path) -> None:
+    audio = tmp_path / "ref.wav"
+    audio.write_bytes(b"RIFF")
+    enable_warm(monkeypatch, tmp_path)
+    pid_file = tmp_path / "worker.pid"
+    monkeypatch.setenv("STUB_PID_FILE", str(pid_file))
+    monkeypatch.setenv("YUE2_GROOVE_SHEETSAGE_IDLE_SECONDS", "0.01")
+
+    adapter.transcribe(audio, output_dir=tmp_path / "one")
+    first_pid = adapter.worker_status()["pid"]
+    time.sleep(0.05)
+    adapter.transcribe(audio, output_dir=tmp_path / "two")
+    assert adapter.worker_status()["pid"] != first_pid
+
+
+def test_warm_worker_cancel_terminates_it(monkeypatch, tmp_path: Path) -> None:
+    audio = tmp_path / "ref.wav"
+    audio.write_bytes(b"RIFF")
+    enable_warm(monkeypatch, tmp_path)
+    monkeypatch.setenv("STUB_SLEEP", "1")
+    checks = {"count": 0}
+
+    def cancelled() -> bool:
+        checks["count"] += 1
+        return checks["count"] > 1
+
+    with pytest.raises(InterruptedError, match="cancelled"):
+        adapter.transcribe(audio, output_dir=tmp_path / "out", cancelled=cancelled)
+    assert adapter.worker_status() is None
+
+
+def test_warm_worker_crash_falls_back_cleanly(monkeypatch, tmp_path: Path) -> None:
+    audio = tmp_path / "ref.wav"
+    audio.write_bytes(b"RIFF")
+    enable_warm(monkeypatch, tmp_path)
+    monkeypatch.setenv("STUB_CRASH", "1")
+    with pytest.raises(adapter.SheetsageFailed, match="worker"):
+        adapter.transcribe(audio, output_dir=tmp_path / "out")
+    assert adapter.worker_status() is None
+
+
+def test_warm_off_uses_the_one_shot_path(monkeypatch, tmp_path: Path) -> None:
+    audio = tmp_path / "ref.wav"
+    audio.write_bytes(b"RIFF")
+    monkeypatch.delenv("YUE2_GROOVE_SHEETSAGE_KEEP_WARM", raising=False)
+    monkeypatch.setattr(adapter, "build_serve_command",
+                        lambda **kwargs: pytest.fail("warm worker must not start"))
+    captured: dict = {}
+    patch_command(monkeypatch, write_stub(tmp_path, SUCCESS_STUB), captured)
+    record = adapter.transcribe(audio, output_dir=tmp_path / "out")
+    assert record["abc"] == "X:1" and adapter.worker_status() is None
+
+
+def test_driver_serve_loop(monkeypatch, tmp_path: Path, capsys) -> None:
+    import io
+    import json as jsonlib
+    from types import SimpleNamespace
+
+    calls = []
+    monkeypatch.setattr(driver, "load_model", lambda args: ("MODEL", "cpu", "fp32"))
+    monkeypatch.setattr(driver, "provenance", lambda args, model, device, dtype: {"model": "m"})
+
+    def fake_transcribe(model, args, device, dtype, provenance, request):
+        calls.append(request)
+        out = Path(request["output_dir"])
+        out.mkdir(parents=True)
+        (out / "result.json").write_text(jsonlib.dumps({
+            "abc": "X:1", "status": "complete", "task": request.get("task"),
+            "melody_only": True, "output_dir": str(out)}), encoding="utf-8")
+        return {"abc": "X:1", "status": "complete", "output_dir": str(out),
+                "task": request.get("task"), "melody_only": True, "warnings": []}
+
+    monkeypatch.setattr(driver, "run_transcription", fake_transcribe)
+    audio = tmp_path / "a.wav"
+    audio.write_bytes(b"RIFF")
+    payload = "\n".join([
+        jsonlib.dumps({"op": "ping"}),
+        jsonlib.dumps({"op": "transcribe", "audio": str(audio),
+                       "output_dir": str(tmp_path / "out"), "task": "melody-vocal"}),
+        jsonlib.dumps({"op": "stop"}),
+    ]) + "\n"
+    monkeypatch.setattr(driver.sys, "stdin", io.StringIO(payload))
+    args = SimpleNamespace(model="m", revision=None, base_model=None, offline=False,
+                           device="cpu", dtype="fp32", preset="default", threads=4,
+                           task="melody-full", max_seconds=None)
+
+    assert driver.serve(args) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert any(line.startswith("@@READY ") for line in lines)
+    replies = [jsonlib.loads(line[len("@@RESULT "):]) for line in lines
+               if line.startswith("@@RESULT ")]
+    assert replies[0]["pong"] is True and replies[1]["ok"] is True
+    assert calls == [{"op": "transcribe", "audio": str(audio),
+                      "output_dir": str(tmp_path / "out"), "task": "melody-vocal"}]
+
+
+def test_warm_config_flags(monkeypatch) -> None:
+    monkeypatch.delenv("YUE2_GROOVE_SHEETSAGE_KEEP_WARM", raising=False)
+    assert config.sheetsage_keep_warm() is False
+    monkeypatch.setenv("YUE2_GROOVE_SHEETSAGE_KEEP_WARM", "true")
+    assert config.sheetsage_keep_warm() is True
+    monkeypatch.setenv("YUE2_GROOVE_SHEETSAGE_KEEP_WARM", "0")
+    assert config.sheetsage_keep_warm() is False
+    monkeypatch.delenv("YUE2_GROOVE_SHEETSAGE_IDLE_SECONDS", raising=False)
+    assert config.sheetsage_idle_seconds() == 900.0
+    monkeypatch.setenv("YUE2_GROOVE_SHEETSAGE_IDLE_SECONDS", "no")
+    assert config.sheetsage_idle_seconds() == 900.0
+    monkeypatch.setenv("YUE2_GROOVE_SHEETSAGE_IDLE_SECONDS", "30")
+    assert config.sheetsage_idle_seconds() == 30.0

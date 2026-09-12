@@ -44,13 +44,20 @@ YUE2_GROOVE_SHEETSAGE_PYTHON=/path/to/YuE/.venv-sheetsage2/bin/python
 YUE2_GROOVE_SHEETSAGE_MODEL=/path/to/YuE/models/SheetSage2   # defaults to m-a-p/SheetSage2
 YUE2_GROOVE_SHEETSAGE_BASE_MODEL=/path/to/MERT-v2-FullSong  # parent encoder snapshot, offline loads
 YUE2_GROOVE_SHEETSAGE_DEVICE=auto                            # auto | cuda | mps | cpu
+YUE2_GROOVE_SHEETSAGE_KEEP_WARM=1                            # reuse one resident worker (faster repeats)
+YUE2_GROOVE_SHEETSAGE_IDLE_SECONDS=900                       # resident worker idle lifetime
 YUE2_GROOVE_TRANSCRIPTIONS=/path/to/transcriptions           # defaults to <runs>/transcriptions
 ```
 
 `YUE2_GROOVE_SHEETSAGE_BASE_MODEL` is passed to the model loader as `base_model_path`, which is
 what makes `OFFLINE` work against a locally downloaded MERT-v2-FullSong snapshot instead of the
 Hub cache. `YUE2_GROOVE_TRANSCRIPTIONS` wins over the default `<runs>/transcriptions` when set;
-the 06 COVER UI writes every transcription into a fresh timestamped directory there.
+the 06 COVER UI writes every transcription into a fresh timestamped directory there. By default
+every transcription is a fresh subprocess (dependencies isolated, all memory returned on exit);
+`KEEP SHEETSAGE2 WARM` keeps one resident worker whose loaded model is reused — much faster
+repeats, at the cost of holding the weights in memory. UNLOAD SHEETSAGE2 frees it immediately;
+the next transcription after the idle timeout also replaces it, and CANCEL terminates a busy
+worker (the following run starts a fresh one).
 
 The **CHECK ENVIRONMENT** button in 06 COVER probes that interpreter (`torch`,
 `transformers`, ffmpeg) without loading weights. If SheetSage2 is not configured, the
@@ -197,13 +204,13 @@ C2 differs from C1 only in the transcription task and plan mode; the commands ab
 sufficient. SheetSage2 is CUDA-validated upstream; the MPS numbers here are this machine's, not
 a support guarantee.
 
-- SheetSage2 runs in **one subprocess per transcription**: interpreter, remote code and the
-  MERT-v2-FullSong parent are loaded fresh and all memory is returned when the process exits.
-  This is deliberate — it keeps the conflicting dependency sets isolated and guarantees that no
-  SheetSage2 memory is still reserved when YuE2 loads (the upstream skill also requires the
-  stages to run sequentially). With the weights warm in the OS/HF cache, a reload measured about
-  10 s for a 30 s excerpt here; a long-lived warm worker would trade that for permanently
-  reserved GPU/unified memory and a staler model, so it is not offered.
+- SheetSage2 runs in its own process. By default **one subprocess per transcription**: the
+  interpreter, remote code and MERT-v2-FullSong parent are loaded fresh and all memory is
+  returned when the process exits (dependency isolation; nothing left reserved when YuE2
+  loads). `KEEP SHEETSAGE2 WARM` switches to **one resident worker** whose model is reused
+  until UNLOAD / the idle timeout; CANCEL or a crash kills it and the next run restarts it.
+  Measured on this machine (MPS fp32, 30 s excerpt, warm OS cache): 9.7 s cold vs 6.0 s warm
+  on the second run — the saving grows when the weights are not in the page cache.
 - YuE2 generation: the upstream baseline (24 GB NVIDIA, BF16) or Apple Silicon with the
   documented overrides (see the main README and `docs/MACOS_MPS.md`). One model at a time is
   the supported configuration; each transcription is a fresh process, so SheetSage2's weights

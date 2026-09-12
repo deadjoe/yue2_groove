@@ -147,6 +147,8 @@ YUE2_GROOVE_SHEETSAGE_PYTHON=/path/to/.venv-sheetsage2/bin/python   # 06 COVER (
 YUE2_GROOVE_SHEETSAGE_MODEL=m-a-p/SheetSage2   # or a local SheetSage2 snapshot
 YUE2_GROOVE_SHEETSAGE_BASE_MODEL=/path/to/MERT-v2-FullSong   # offline parent encoder snapshot
 YUE2_GROOVE_SHEETSAGE_DEVICE=auto              # auto | cuda | mps | cpu
+YUE2_GROOVE_SHEETSAGE_KEEP_WARM=1             # reuse a resident SheetSage2 worker (faster repeats)
+YUE2_GROOVE_SHEETSAGE_IDLE_SECONDS=900        # resident worker idle lifetime
 YUE2_GROOVE_TRANSCRIPTIONS=/path/to/transcriptions   # wins over <runs>/transcriptions
 ```
 
@@ -230,8 +232,10 @@ FFmpeg 6.1+ must be on `PATH`. MERT-v2-FullSong, SheetSage2's parent encoder, do
 automatically — do not install it separately. On macOS use the same commands without the CUDA
 index and `device=mps` (untested) or `device=cpu` (works, slow). The **CHECK ENVIRONMENT**
 button probes the second venv without loading weights; the TRANSCRIBE task picks vocal-only,
-vocal+instrumental, or full-score (with chords) output. Running both models sequentially on
-one GPU is the supported setup.
+vocal+instrumental, or full-score (with chords) output. **KEEP SHEETSAGE2 WARM** reuses one
+resident worker between transcriptions (fast repeats; **UNLOAD SHEETSAGE2** frees it), while the
+default is a fresh process per transcription that returns all memory on exit. Running both models
+sequentially on one GPU is the supported setup.
 
 Manual walkthrough (`C1`/`C2`), failure behavior and hardware expectations:
 [docs/COVER_EDIT.md](docs/COVER_EDIT.md).

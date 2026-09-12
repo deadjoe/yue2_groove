@@ -102,17 +102,18 @@ def test_cover_transcribe_yields_result_and_frees_the_lock(monkeypatch, tmp_path
 
     monkeypatch.setattr(webui.sheetsage_adapter, "transcribe", fake_transcribe)
     yields = list(webui.cover_transcribe(str(audio), "melody-full", 0, "m-a-p/SheetSage2",
-                                         "auto", "auto", "", "/mert-snapshot", False))
-    assert all(len(chunk) == 8 for chunk in yields)          # matches the 8 wired outputs
+                                         "auto", "auto", "", "/mert-snapshot", False, False))
+    assert all(len(chunk) == 9 for chunk in yields)          # matches the 9 wired outputs
     abc, files, status, *buttons = yields[-1]
     assert abc == CHORD_FREE and files and str(transcript / "score.abc") in files
-    assert "low confidence" in status and len(buttons) == 5
+    assert "low confidence" in status and len(buttons) == 6
     assert all(button["interactive"] is True for button in buttons)   # all actions re-enabled
     assert seen["cancelled"] is not None and seen["base_model"] == "/mert-snapshot"
+    assert seen["keep_warm"] is False
     assert seen["output_dir"].parent == webui.RUNS / "transcriptions"
     # the lock was released: a second transcription can start
     assert list(webui.cover_transcribe(str(audio), "melody-full", 0, "m", "auto", "auto", "",
-                                       "", False))
+                                       "", False, False))
 
 
 def test_cover_transcribe_honours_the_transcriptions_override(monkeypatch, tmp_path: Path) -> None:
@@ -129,17 +130,18 @@ def test_cover_transcribe_honours_the_transcriptions_override(monkeypatch, tmp_p
                 "output_dir": str(transcript), "device": "cpu", "dtype": "fp32"}
 
     monkeypatch.setattr(webui.sheetsage_adapter, "transcribe", fake_transcribe)
-    list(webui.cover_transcribe(str(audio), "melody-full", 0, "m", "auto", "auto", "", "", False))
+    list(webui.cover_transcribe(str(audio), "melody-full", 0, "m", "auto", "auto", "", "", False,
+                                    False))
     assert Path(seen["output_dir"]).parent == tmp_path / "custom-place"
 
 
 def test_cover_transcribe_refuses_without_audio_and_when_busy() -> None:
     with pytest.raises(gr.Error, match="Upload a source audio"):
-        next(webui.cover_transcribe("", "melody-full", 0, "", "auto", "auto", "", "", False))
+        next(webui.cover_transcribe("", "melody-full", 0, "", "auto", "auto", "", "", False, False))
     webui._RUNNING.acquire()
     try:
         yields = list(webui.cover_transcribe("/tmp/x.wav", "melody-full", 0, "", "auto",
-                                             "auto", "", "", False))
+                                             "auto", "", "", False, False))
         assert "already running" in yields[0][2]
     finally:
         webui._RUNNING.release()
@@ -232,11 +234,21 @@ def test_edit_generate_guards(isolated_runs: Path, monkeypatch) -> None:
         next(webui.edit_generate(*edit_generate_args(baseline_state=None)))
     with pytest.raises(gr.Error, match="Load a source work"):
         next(webui.edit_generate(*edit_generate_args(baseline_abc="", baseline_state=None)))
-    # the override skips the gate instead of blocking the intentional edit
+    # the override only lets a *failing* check through; freeze and the check stay mandatory
+    with pytest.raises(gr.Error, match="Load a source work"):
+        next(webui.edit_generate(*edit_generate_args(baseline_abc="", baseline_state=None,
+                                                     allow_changes=True)))
+    with pytest.raises(gr.Error, match="Freeze the baseline"):
+        next(webui.edit_generate(*edit_generate_args(baseline_state=None, allow_changes=True)))
+    with pytest.raises(gr.Error, match="Run CHECK INVARIANTS"):
+        next(webui.edit_generate(*edit_generate_args(check_state={}, allow_changes=True)))
     monkeypatch.setattr(webui, "_get_pipe", lambda *a, **k: (object(), "note"))
     monkeypatch.setattr(webui, "_run_generation", fake_run_generation)
-    yields = list(webui.edit_generate(*edit_generate_args(
-        baseline_abc="", check_state={}, baseline_state=None, allow_changes=True)))
+    failing = {"sha256": edit_flow.sha256_text(edit_flow.clean_abc(BASE_ABC)),
+               "match": False,
+               "result": {"match": False, "differences": ["Vocal: sounding notes differ"]},
+               "voices": "both", "allow_tempo_change": False}
+    yields = list(webui.edit_generate(*edit_generate_args(check_state=failing, allow_changes=True)))
     assert all(len(chunk) == 11 for chunk in yields)          # matches the 11 wired outputs
     audio, abc, files, status, *rest = yields[-1]
     assert len(rest) == 7                                      # 6 idle buttons + last run
@@ -245,6 +257,8 @@ def test_edit_generate_guards(isolated_runs: Path, monkeypatch) -> None:
     assert Path(last_run, "edit_manifest.json").is_file()
     manifest = json.loads(Path(last_run, "edit_manifest.json").read_text(encoding="utf-8"))
     assert manifest["permitted"]["changes_override"] is True
+    assert manifest["source"]["frozen"] is True               # never null on this path
+    assert manifest["invariants"]["match"] is False           # the permitted difference is recorded
     assert manifest["abc"]["after_sha256"]
 
 
@@ -350,11 +364,11 @@ def test_cover_generate_runs_directly_from_the_cover_tab(isolated_runs: Path,
     monkeypatch.setattr(webui, "_run_generation", fake_run_generation)
 
     yields = list(webui.cover_generate(*cover_generate_args()))
-    assert all(len(chunk) == 9 for chunk in yields)   # status + audio + result abc + files + 5 buttons
+    assert all(len(chunk) == 10 for chunk in yields)  # status + audio + result abc + files + 6 buttons
     status, audio, result_abc, files, *buttons = yields[-1]
     assert captured["cot"] == "melody" and '"C"' not in captured["abc"]
     assert audio.endswith("audio.flac") and result_abc == FakeSong.abc
-    assert len(buttons) == 5 and all(b["interactive"] is True for b in buttons)
+    assert len(buttons) == 6 and all(b["interactive"] is True for b in buttons)
     assert "run directory" in status
 
     # a full-score transcription keeps its chord symbols and uses cot=full

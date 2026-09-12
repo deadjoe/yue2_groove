@@ -46,6 +46,7 @@ YuE2 authors.
 from __future__ import annotations
 
 import argparse
+import atexit
 import html
 import json
 import os
@@ -825,8 +826,15 @@ def cover_check_environment():
         return f"SheetSage2 environment not ready: {exc}"
 
 
+def cover_unload_worker():
+    """Drop the resident SheetSage2 worker (freeing its memory) if there is one."""
+    stopped = sheetsage_adapter.stop_worker()
+    return ("SheetSage2 worker unloaded; the next transcription loads the model again."
+            if stopped else "No resident SheetSage2 worker.")
+
+
 def cover_transcribe(audio_path, task, max_seconds, model, device, dtype, revision, base_model,
-                     offline, progress=gr.Progress()):
+                     keep_warm, offline, progress=gr.Progress()):
     """Generator: transcription disables the TRANSCRIBE button while running."""
     if not (audio_path or "").strip():
         raise gr.Error("Upload a source audio file first")
@@ -836,10 +844,10 @@ def cover_transcribe(audio_path, task, max_seconds, model, device, dtype, revisi
     if not _RUNNING.acquire(blocking=False):
         yield (gr.update(), gr.update(),
                "Another job is already running — wait for it to finish",
-               gr.update(), gr.update(), gr.update(), gr.update(), gr.update())
+               *((gr.update(),) * 6))
         return
-    busy = (gr.update(interactive=False),) * 5
-    idle = (gr.update(interactive=True),) * 5
+    busy = (gr.update(interactive=False),) * 6
+    idle = (gr.update(interactive=True),) * 6
     try:
         yield gr.update(), gr.update(), "Starting SheetSage2 transcription…", *busy
         outdir = config.transcriptions_dir(RUNS) / \
@@ -851,7 +859,7 @@ def cover_transcribe(audio_path, task, max_seconds, model, device, dtype, revisi
         record = sheetsage_adapter.transcribe(
             audio_path, output_dir=outdir, task=task,
             model=(model or "").strip() or None, revision=(revision or "").strip() or None,
-            base_model=(base_model or "").strip() or None,
+            base_model=(base_model or "").strip() or None, keep_warm=bool(keep_warm),
             offline=bool(offline), device=device, dtype=dtype,
             max_seconds=float(max_seconds) if max_seconds else None,
             cancelled=_CANCEL.is_set, progress=on_progress)
@@ -863,6 +871,10 @@ def cover_transcribe(audio_path, task, max_seconds, model, device, dtype, revisi
                  "Review the ABC before covering; transcription can contain musical errors."]
         if warnings:
             lines.append("warnings: " + "; ".join(str(w) for w in warnings))
+        worker = sheetsage_adapter.worker_status()
+        if worker:
+            lines.append(f"SheetSage2 worker resident (pid {worker['pid']}) — reused by the next "
+                         f"transcription until UNLOAD or the idle timeout.")
         yield abc, _transcription_files(record["output_dir"]), "\n".join(lines), *idle
     except InterruptedError as exc:
         yield gr.update(), gr.update(), f"Cancelled: {exc}", *idle
@@ -901,11 +913,10 @@ def cover_generate(style, lyrics, abc_text, task, seed, cfg_scale,
     _CANCEL.clear()
     if not _RUNNING.acquire(blocking=False):
         yield ("Another job is already running — wait for it to finish",
-               gr.update(), gr.update(), gr.update(),
-               gr.update(), gr.update(), gr.update(), gr.update(), gr.update())
+               gr.update(), gr.update(), gr.update(), *((gr.update(),) * 6))
         return
-    busy = (gr.update(interactive=False),) * 5
-    idle = (gr.update(interactive=True),) * 5
+    busy = (gr.update(interactive=False),) * 6
+    idle = (gr.update(interactive=True),) * 6
     try:
         yield "Starting cover generation…", gr.update(), gr.update(), gr.update(), *busy
         pipe, note = _get_pipe(device, dtype, backend, quantization, offload_ar, budget,
@@ -1025,19 +1036,18 @@ def edit_generate(style, lyrics, cot, seed, cfg_scale, abc_text, baseline_abc, s
         abc = edit_flow.validate_edited_abc(abc_text)
     except ValueError as exc:
         raise gr.Error(f"The edited ABC cannot be used: {exc}") from exc
-    if not allow_changes:
-        if not (baseline_abc or "").strip():
-            raise gr.Error("Load a source work first, or enable ALLOW MELODY/RHYTHM CHANGES "
-                           "to generate from this score without a baseline")
-        if not baseline_state:
-            raise gr.Error("Freeze the baseline first (FREEZE BASELINE) before generating, or "
-                           "enable ALLOW MELODY/RHYTHM CHANGES")
-        if not check_state or check_state.get("sha256") != edit_flow.sha256_text(abc):
-            raise gr.Error("Run CHECK INVARIANTS on the current edited ABC before generating")
-        if not check_state.get("match"):
-            differences = "; ".join((check_state.get("result") or {}).get("differences", [])[:3])
-            raise gr.Error("CHECK INVARIANTS did not pass: " + (differences or "scores differ") +
-                           " — enable ALLOW MELODY/RHYTHM CHANGES if the change is intentional")
+    if not (baseline_abc or "").strip():
+        raise gr.Error("Load a source work first — 07 EDIT regenerates a saved work from its "
+                       "edited score; use 01 GENERATE for a fresh song")
+    if not baseline_state:
+        raise gr.Error("Freeze the baseline first (FREEZE BASELINE) — the edit manifest must "
+                       "point at the frozen source")
+    if not check_state or check_state.get("sha256") != edit_flow.sha256_text(abc):
+        raise gr.Error("Run CHECK INVARIANTS on the current edited ABC before generating")
+    if not check_state.get("match") and not allow_changes:
+        differences = "; ".join((check_state.get("result") or {}).get("differences", [])[:3])
+        raise gr.Error("CHECK INVARIANTS did not pass: " + (differences or "scores differ") +
+                       " — enable ALLOW MELODY/RHYTHM CHANGES if the change is intentional")
     style, lyrics = _request_texts(style, lyrics)
     abc_sampling = _sampling(abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max, "ABC phase")
     sem_sampling = _sampling(sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max,
@@ -1779,13 +1789,14 @@ TIPS = {
     "MAX SECONDS (0 = WHOLE FILE)": "Deliberately crop the transcript to the first N seconds; 0 processes the whole file. Long files take longer and use more GPU memory.",
     "SHEETSAGE2 MODEL / DIR": "Hugging Face id (m-a-p/SheetSage2) or the path of a downloaded snapshot. MERT-v2-FullSong loads automatically as its parent encoder.",
     "BASE MODEL / MERT SNAPSHOT": "Optional local path of the MERT-v2-FullSong snapshot; passed as base_model_path so a fully offline adapter load does not need the Hub cache.",
+    "KEEP SHEETSAGE2 WARM": "Keep one SheetSage2 process resident and reuse its loaded model between transcriptions (faster repeats) until UNLOAD SHEETSAGE2 or the idle timeout. Off: every transcription starts a fresh process and frees all memory on exit.",
     "COVER ABC": "The transcription, editable. Fix wrong notes/meter before covering; STRIP CHORDS removes harmony for cot=melody, SEND TO GENERATE fills 01 GENERATE and sets the plan mode.",
     "SOURCE WORK": "A saved work with a score.abc (generated plan or an earlier edit); its ABC becomes the frozen baseline.",
     "BASELINE": "Record of the frozen source: hashes plus copies of score.abc/request.json. The original run directory is never modified.",
     "EDITED ABC": "Your edit of the baseline score. It is validated and submitted explicitly — generation never falls back to a fresh plan.",
     "RESULT ABC": "The score actually submitted for the last generation (chord-stripped when the plan mode requires it). The editor above stays untouched.",
     "SAMPLING // FROM 01 GENERATE": "Read-only mirror of 01 GENERATE → ADVANCED // SAMPLING. Both flows share those sliders; change them there.",
-    "ALLOW MELODY/RHYTHM CHANGES": "Override the invariant gate: without it, GENERATE EDITED only runs when CHECK INVARIANTS passed on exactly this ABC.",
+    "ALLOW MELODY/RHYTHM CHANGES": "Permit generating even when CHECK INVARIANTS reports differences (intentional adaptations). It does not skip FREEZE BASELINE or the check itself.",
     "CHECK RESULT": "Exact sounding-note / meter comparison of baseline vs edit. Chord-only edits pass; pitch or rhythm changes are reported by voice.",
     "COMPARISON": "Baseline vs edited render: a local listening page built from both run directories.",
 }
@@ -2450,7 +2461,7 @@ def build_ui(defaults):
                                         '</div></div>', elem_id="bb-lib-score-panel")
 
                     # ───── 06 COVER ─────
-                    with gr.Tab("06 // COVER", id="cover"):
+                    with gr.Tab("06 // COVER", id="cover") as cover_tab:
                         gr.Markdown(
                             "**Audio → ABC → cover.** Transcribe a recording with SheetSage2, "
                             "polish the score, then generate it in a new style — right here or in "
@@ -2486,11 +2497,16 @@ def build_ui(defaults):
                                 cover_revision = gr.Textbox(label="MODEL REVISION", max_lines=1,
                                                             scale=1)
                                 cover_offline = gr.Checkbox(value=False, label="OFFLINE", scale=1)
+                            cover_keep_warm = gr.Checkbox(
+                                value=config.sheetsage_keep_warm(), label="KEEP SHEETSAGE2 WARM",
+                                info="Reuse one resident model process between transcriptions until "
+                                     "UNLOAD or the idle timeout")
                         with gr.Row():
                             cover_btn = gr.Button("TRANSCRIBE", variant="primary", size="lg",
                                                   scale=3, elem_id="bb-cover-run")
                             cover_cancel_btn = gr.Button("CANCEL", variant="stop", size="lg", scale=1)
                             cover_env_btn = gr.Button("CHECK ENVIRONMENT", size="lg", scale=2)
+                            cover_unload_btn = gr.Button("UNLOAD SHEETSAGE2", size="lg", scale=2)
                         cover_abc = gr.Textbox(label="COVER ABC", lines=10, max_lines=24,
                                                elem_id="bb-cover-abc")
                         gr.HTML('<div class="bb-score-title">SCORE VIEW</div>'
@@ -2520,10 +2536,19 @@ def build_ui(defaults):
                                 cover_generate_btn = gr.Button("GENERATE COVER", variant="primary",
                                                                size="lg", scale=2,
                                                                elem_id="bb-cover-generate")
+                            cover_sampling_note = gr.Textbox(
+                                label="SAMPLING // FROM 01 GENERATE", lines=2,
+                                interactive=False, elem_id="bb-cover-sampling")
+                            gr.Markdown("Sampling parameters are shared with **01 GENERATE → "
+                                        "ADVANCED // SAMPLING**; change them there.",
+                                        elem_classes=["bb-note"])
                             cover_result_audio = gr.Audio(label="RESULT", type="filepath")
                             cover_result_abc = gr.Textbox(label="RESULT ABC", lines=6, max_lines=18,
                                                           interactive=False,
                                                           elem_classes=["bb-output"])
+                            gr.HTML('<div class="bb-score-title">SCORE VIEW // RESULT</div>'
+                                    + _score_panel("RESULT ABC", "No cover generated yet."),
+                                    elem_id="bb-cover-result-score-panel")
                             with gr.Accordion("GENERATED FILES", open=False):
                                 cover_gen_files = gr.File(label="FILES", file_count="multiple",
                                                           height=120)
@@ -2538,9 +2563,9 @@ def build_ui(defaults):
                             "**Load → FREEZE BASELINE → edit → CHECK INVARIANTS → GENERATE EDITED "
                             "→ compare.** The edited ABC is always submitted explicitly, so an edit "
                             "can never silently degrade into a fresh plan; chord-only edits pass the "
-                            "exact note/meter check, pitch or rhythm changes need "
-                            "ALLOW MELODY/RHYTHM CHANGES. CHECK and GENERATE EDITED require the "
-                            "frozen baseline (the override drops that gate too).",
+                            "exact note/meter check. FREEZE and CHECK are always required — "
+                            "ALLOW MELODY/RHYTHM CHANGES only lets a *failing* check through for "
+                            "intentional adaptations.",
                             elem_classes=["bb-note"])
                         with gr.Row():
                             edit_source = gr.Dropdown(
@@ -2735,11 +2760,11 @@ def build_ui(defaults):
 
         # ───── cover wiring (SheetSage2 lives in sheetsage_adapter.py) ─────
         cover_buttons = [cover_btn, cover_strip_btn, cover_send_btn, cover_generate_btn,
-                         cover_env_btn]
+                         cover_env_btn, cover_unload_btn]
         cover_btn.click(cover_transcribe,
                         inputs=[cover_audio, cover_task, cover_max_seconds, cover_model,
                                 cover_device, cover_dtype, cover_revision, cover_base_model,
-                                cover_offline],
+                                cover_keep_warm, cover_offline],
                         outputs=[cover_abc, cover_files, cover_status, *cover_buttons])
         cover_generate_btn.click(
             cover_generate,
@@ -2750,6 +2775,7 @@ def build_ui(defaults):
                      *cover_buttons])
         cover_cancel_btn.click(cancel_run, outputs=cover_status)
         cover_env_btn.click(cover_check_environment, outputs=cover_status)
+        cover_unload_btn.click(cover_unload_worker, outputs=cover_status)
         cover_strip_btn.click(cover_strip, inputs=[cover_abc, cover_keep],
                               outputs=[cover_abc, cover_status])
         cover_send_btn.click(cover_send_to_generate, inputs=[cover_abc, cover_task],
@@ -2762,6 +2788,10 @@ def build_ui(defaults):
                         inputs=[abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
                                 sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max],
                         outputs=edit_sampling_note)
+        cover_tab.select(_sampling_summary,
+                         inputs=[abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
+                                 sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max],
+                         outputs=cover_sampling_note)
         edit_load_btn.click(
             edit_load, inputs=[edit_source],
             outputs=[edit_style, edit_lyrics, edit_abc, edit_baseline_abc, edit_source_rel,
@@ -2828,7 +2858,7 @@ def build_ui(defaults):
         demo.load(_sampling_summary,
                   inputs=[abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
                           sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max],
-                  outputs=edit_sampling_note)
+                  outputs=[edit_sampling_note, cover_sampling_note])
 
         gr.HTML(footer)
 
@@ -2875,6 +2905,7 @@ def main():
     if dtype == "auto":
         dtype = "bfloat16" if device in ("cuda", "mps") else "float32"
     RUNS.mkdir(parents=True, exist_ok=True)
+    atexit.register(sheetsage_adapter.stop_worker)   # no resident SheetSage2 after exit
     defaults = {"device": device, "dtype": dtype, "model": args.model, "vae": args.vae,
                 "tab": args.tab,
                 "status": ("Model not loaded yet — it loads automatically on the first generation."
