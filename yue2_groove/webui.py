@@ -1,0 +1,2161 @@
+"""YUE2 // GROOVE — unofficial Gradio web UI for YuE2 song generation.
+
+Built on top of the official ``yue2`` CLI/Python API; every human-operable control of
+the CLI/API is reachable from the browser so you never have to fall back to a terminal
+for one parameter.
+
+  01 GENERATE   style + lyrics (+ optional ABC) → editable score plan → 48 kHz stereo song;
+                all sampling parameters of both the ABC and the semantic phase; plan mode
+                full/melody/off, seed, cfg_scale, custom id, cancel, live progress
+  02 DECODE     re-decode a saved latent.npy (source / standard / legacy / custom VAE,
+                full or tiled) without generating again; single .npy upload supported
+  03 BATCH      one JSON request per line (the equivalent of ``yue2 batch``), run in order
+  04 TOOLS      ABC validation / event export, chord stripping (cover melodies), edit
+                invariant check, environment doctor, listening-comparison page
+  05 LIBRARY    every generated work: sort, select, rename, confirmed delete; details with a
+                player (spectrum + transport), style / lyrics / ABC / score and run tables
+  Settings rail model & runtime: device / dtype / backend / quantization / offload_ar /
+                memory budget / ODE steps / VAE core frames / revisions / offline; load & unload
+
+Apple Silicon (MPS): bfloat16 works with torch >= 2.11.  The upstream pin (torch 2.10.0)
+hits pytorch/pytorch#174861 — the single-query SDPA kernel corrupts once the KV cache
+passes 1024 tokens — so install with the override file in ``overrides/`` (see README) and
+run ``scripts/mps_sdpa_check.py`` to verify.  vLLM / FP8 need NVIDIA CUDA.
+
+Usage:
+  python -m yue2_groove --port 7860             # opens the browser
+  python -m yue2_groove --tab 1                 # start on a given tab 0..4
+  python -m yue2_groove --host 0.0.0.0 --auth user:pass   # LAN access (set a password)
+  bash scripts/serve.sh start|stop|restart|status|log     # background service
+
+Visual language: Bearbone Design System v0.2 (warm near-black + ivory, 1px strokes, no
+shadows/gradients, monospace), with a dark and a bright scene.
+
+Model weights are CC BY-NC 4.0 (non-commercial); this UI is not affiliated with the
+YuE2 authors.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import textwrap
+import threading
+import time
+from pathlib import Path
+
+import gradio as gr
+import numpy as np
+import soundfile as sf
+import torch
+
+from . import adapter, config, library
+from .vendor import abc_tools
+
+# Where generated works are stored; main() may override it with --runs.
+RUNS = config.runs_dir()
+
+_PIPE = None
+_PIPE_KEY = None
+_LOCK = threading.Lock()
+_RUNNING = threading.Lock()
+_CANCEL = threading.Event()
+
+DTYPE_CHOICES = [
+    ("bfloat16 (checkpoint dtype; default on CUDA/MPS)", "bfloat16"),
+    ("float32 (cast at load; slower, 2x memory)", "float32"),
+]
+
+ABC_DEFAULTS = dict(temperature=.7, top_p=.9, top_k=30, repetition_penalty=1.005,
+                    penalty_window=100, min_tokens=32, max_tokens=4096)
+SEM_DEFAULTS = dict(temperature=1.0, top_p=.95, top_k=100, repetition_penalty=1.2,
+                    penalty_window=50, min_tokens=200, max_tokens=9000)
+
+
+# ─────────────────────────── helpers ───────────────────────────
+
+def _pick_device(device: str) -> str:
+    if device != "auto":
+        return device
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+def resolve_vae(choice: str, custom: str) -> tuple[str, str]:
+    """Return (path_or_hub_id, display_name)."""
+    if choice == "standard":
+        return config.default_vae(), "standard (YuE2-Vae)"
+    if choice == "legacy":
+        return config.default_vae_legacy(), "legacy (benchmark)"
+    if not (custom or "").strip():
+        raise gr.Error("Custom VAE requires a path or Hugging Face ID")
+    return custom.strip(), "custom"
+
+
+def _sampling(temp, top_p, top_k, rep, window, min_tokens, max_tokens, label):
+    try:
+        return adapter.sampling(temperature=float(temp), top_p=float(top_p), top_k=int(top_k),
+                                repetition_penalty=float(rep), penalty_window=int(window),
+                                min_tokens=int(min_tokens), max_tokens=int(max_tokens))
+    except (ValueError, TypeError) as exc:
+        raise gr.Error(f"{label} sampling parameters invalid: {exc}") from exc
+
+
+def _pipe_key(device, dtype, backend, quantization, offload_ar, budget, ode_steps,
+              vae_core_frames, model, vae_path, revision, vae_revision, offline):
+    return (_pick_device(device), dtype, backend, quantization, bool(offload_ar),
+            float(budget), int(ode_steps), vae_core_frames, model, vae_path,
+            revision or "", vae_revision or "", bool(offline))
+
+
+def load_pipeline(device, dtype, backend, quantization, offload_ar, budget, ode_steps,
+                  vae_core_frames, model, vae_choice, vae_custom, revision, vae_revision,
+                  offline, progress=gr.Progress()):
+    """(Re)load the pipeline. Reuses the existing one when settings are unchanged."""
+    global _PIPE, _PIPE_KEY
+    device = _pick_device(device)
+    vae_path, vae_name = resolve_vae(vae_choice, vae_custom)
+    cores = None if vae_core_frames == "auto" else int(vae_core_frames)
+    key = _pipe_key(device, dtype, backend, quantization, offload_ar, budget, ode_steps,
+                    cores, model, vae_path, revision, vae_revision, offline)
+    if _PIPE is not None and _PIPE_KEY == key:
+        return _PIPE, f"Model ready: device={device} dtype={dtype} backend={backend} vae={vae_name}"
+    if backend == "vllm" and device != "cuda":
+        raise gr.Error("vLLM backend requires NVIDIA CUDA; use torch here (MPS falls back to eager)")
+    if quantization == "fp8" and device != "cuda":
+        raise gr.Error("FP8 quantization requires NVIDIA CUDA (sm89+)")
+
+    unload_pipeline()
+    if progress is not None:
+        progress(0.05, desc="Loading model (first run downloads ~7.3 GB)…")
+    with _LOCK:
+        pipe, used_dtype = adapter.load_pipeline(
+            model, vae=vae_path, device=device, dtype=dtype, backend=backend,
+            quantization=quantization, offload_ar=offload_ar, memory_budget_gib=budget,
+            ode_steps=ode_steps, vae_core_frames=cores, revision=revision,
+            vae_revision=vae_revision, local_files_only=offline)
+        _PIPE, _PIPE_KEY = pipe, key
+    note = (f"Loaded: device={device} dtype={used_dtype} backend={backend} "
+            f"vae={vae_name} ode_steps={ode_steps} cores={cores or 'auto'}")
+    return _PIPE, note
+
+
+def unload_pipeline():
+    global _PIPE, _PIPE_KEY
+    with _LOCK:
+        if _PIPE is not None:
+            try:
+                adapter.close_pipeline(_PIPE)
+            except Exception:  # noqa: BLE001
+                pass
+        _PIPE, _PIPE_KEY = None, None
+    if torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+
+
+def _get_pipe(device, dtype, backend, quantization, offload_ar, budget, ode_steps,
+              vae_core_frames, model, vae_choice, vae_custom, revision, vae_revision,
+              offline, progress):
+    vae_path, _ = resolve_vae(vae_choice, vae_custom)
+    cores = None if vae_core_frames == "auto" else int(vae_core_frames)
+    key = _pipe_key(_pick_device(device), dtype, backend, quantization, offload_ar, budget,
+                    ode_steps, cores, model, vae_path, revision, vae_revision, offline)
+    if _PIPE is None or _PIPE_KEY != key:
+        return load_pipeline(device, dtype, backend, quantization, offload_ar, budget,
+                             ode_steps, vae_core_frames, model, vae_choice, vae_custom,
+                             revision, vae_revision, offline, progress)
+    return _PIPE, "Model ready"
+
+
+def _write_local_env(directory: Path, pipe, note: str = "") -> None:
+    """Record what actually ran in this run directory (``local_env.json``).
+
+    Upstream's ``config.json`` hardcodes ``"model_dtype": "bfloat16"``, so an
+    explicit float32 cast from this UI (or any future override) would otherwise
+    be misreported.  Best-effort only: a sidecar, never a rewrite of upstream
+    artifacts.  The Library shows it when it disagrees with ``config.json``.
+    """
+    try:
+        payload = {
+            "tool": "yue2_groove",
+            "dtype": adapter.model_dtype(pipe),
+            "device": str(getattr(pipe, "device", "")),
+            "torch": torch.__version__,
+            "yue2": adapter.yue2_version(),
+            "note": note or None,
+        }
+        (Path(directory) / "local_env.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except Exception:  # noqa: BLE001 — provenance must never fail a run
+        pass
+
+
+def _slug(text: str) -> str:
+    out = "".join(c if c.isalnum() or c in "-_" else "-" for c in (text or "")[:40].strip())
+    return out.strip("-") or "song"
+
+
+def _artifact_files(directory: Path, score: bool):
+    names = ["audio.flac", "request.json", "config.json", "result.json",
+             "latent.npy", "semantic.npy"] + (["score.abc"] if score else [])
+    return [str(directory / n) for n in names if (directory / n).exists()]
+
+
+def _scan_runs():
+    if not RUNS.is_dir():
+        return []
+    return [str(p) for p in sorted(RUNS.iterdir(), reverse=True) if p.is_dir()]
+
+
+def _update_run_choices():
+    return gr.update(choices=_scan_runs())
+
+
+def _scan_batches():
+    """[(label, batch_dir)] for batch runs that contain saved songs with result.json."""
+    out = []
+    if not RUNS.is_dir():
+        return out
+    for d in sorted(RUNS.iterdir(), reverse=True):
+        if not d.is_dir() or "batch" not in d.name:
+            continue
+        songs = [p for p in sorted(d.iterdir()) if p.is_dir() and (p / "result.json").is_file()]
+        if songs:
+            out.append((f"{d.name}  ({len(songs)} songs)", str(d)))
+    return out
+
+
+def _update_batch_choices():
+    return gr.update(choices=[c for c, _ in _scan_batches()])
+
+
+def _fill_from_batch(label):
+    """Fill the comparison input with every saved song of the chosen batch run."""
+    if not label:
+        raise gr.Error("Pick a batch run first")
+    for choice, path in _scan_batches():
+        if choice == label:
+            songs = [str(p) for p in sorted(Path(path).iterdir())
+                     if p.is_dir() and (p / "result.json").is_file()]
+            return "\n".join(songs)
+    raise gr.Error("That batch directory is gone; press REFRESH LIST")
+
+
+def cancel_run():
+    _CANCEL.set()
+    return "Cancel requested — will stop after the current token / ODE step"
+
+
+def _reset_sampling_values():
+    a, s = ABC_DEFAULTS, SEM_DEFAULTS
+    return (a["temperature"], a["top_p"], a["top_k"], a["repetition_penalty"],
+            a["penalty_window"], a["min_tokens"], a["max_tokens"],
+            s["temperature"], s["top_p"], s["top_k"], s["repetition_penalty"],
+            s["penalty_window"], s["min_tokens"], s["max_tokens"],
+            "Protocol defaults (full)")
+
+
+def duration_text(tokens):
+    seconds = max(0, int(tokens)) / 25.0
+    minutes = seconds / 60.0
+    return (f"**Estimated audio length:** ≈ {seconds:.0f} s "
+            f"({minutes:.1f} min) at {int(tokens)} semantic tokens")
+
+
+def generate(style, lyrics, cot, seed, cfg_scale, abc_text, out_id, preset,
+             abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
+             sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max,
+             device, dtype, backend, quantization, offload_ar, budget, ode_steps,
+             vae_core_frames, model, vae_choice, vae_custom, revision, vae_revision, offline,
+             progress=gr.Progress()):
+    """Generator: disables the action buttons until the run finishes."""
+    style, lyrics = _request_texts(style, lyrics)   # empty fields use the example
+    abc_sampling = _sampling(abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max, "ABC phase")
+    sem_sampling = _sampling(sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max, "semantic phase")
+    kwargs = {}
+    if (out_id or "").strip():
+        kwargs["id"] = out_id.strip()
+    if cfg_scale:
+        kwargs["cfg_scale"] = float(cfg_scale)
+    if (abc_text or "").strip():
+        if cot == "off":
+            raise gr.Error("An ABC score requires cot=full or cot=melody")
+        # Pasted scores often carry the chat/TUI code-block indentation; the model
+        # expects clean ABC lines ("X:1", "V: Vocal", ...). Strip the common indent.
+        kwargs["abc"] = textwrap.dedent(abc_text).strip()
+    try:
+        request = adapter.song_request(style=style, lyrics=lyrics, cot=cot, seed=int(seed), **kwargs)
+    except (ValueError, TypeError) as exc:
+        raise gr.Error(f"Invalid request: {exc}") from exc
+
+    _CANCEL.clear()
+    if not _RUNNING.acquire(blocking=False):
+        # A fast double-click can queue a second run before the button disables.
+        # Keep the buttons as they are (the running job owns them).
+        yield gr.update(), gr.update(), "Another job is already running — wait for it to finish", \
+            gr.update(), gr.update(), gr.update()
+        return
+    busy = (gr.update(interactive=False), gr.update(interactive=False))
+    idle = (gr.update(interactive=True), gr.update(interactive=True))
+    try:
+        yield gr.update(), gr.update(), "Starting generation…", gr.update(), *busy
+        pipe, note = _get_pipe(device, dtype, backend, quantization, offload_ar, budget,
+                               ode_steps, vae_core_frames, model, vae_choice, vae_custom,
+                               revision, vae_revision, offline, progress)
+        counts = {"abc": 0, "semantic": 0}
+        abc_budget = abc_sampling.max_tokens if cot != "off" else 0
+        sem_budget = sem_sampling.max_tokens
+
+        def on_token(phase, token):
+            counts[phase] = counts.get(phase, 0) + 1
+            if cot == "off":
+                frac = 0.55 * min(1.0, counts["semantic"] / max(1, sem_budget))
+            else:
+                frac = (0.15 * min(1.0, counts["abc"] / max(1, abc_budget))
+                        + 0.40 * min(1.0, counts["semantic"] / max(1, sem_budget)))
+            progress(min(0.55, frac), desc=f"Generating {phase}: {counts[phase]} tokens")
+
+        def on_progress(stage, done, total):
+            if stage == "nar":
+                progress(0.55 + 0.40 * min(1.0, done / max(1, total)),
+                         desc=f"Synthesizing audio: step {done}/{total}")
+            elif stage == "vae":
+                progress(0.95 + 0.05 * min(1.0, done / max(1, total)),
+                         desc=f"Decoding audio: chunk {done}/{total}")
+
+        progress(0.02, desc="Starting generation…")
+        t0 = time.perf_counter()
+        song = adapter.generate(pipe, request, abc_sampling=abc_sampling,
+                                semantic_sampling=sem_sampling, cancelled=_CANCEL.is_set,
+                                on_token=on_token, on_progress=on_progress)
+        progress(1.0, desc="Saving artifacts…")
+        outdir = RUNS / (f"{time.strftime('%Y%m%d-%H%M%S')}-"
+                         f"{request.id if request.id != 'song' else _slug(style)}")
+        result = song.save_artifacts(outdir)
+        _write_local_env(outdir, pipe, note)
+        elapsed = time.perf_counter() - t0
+        status = (f"Done: {result['audio_seconds']:.1f}s audio in {elapsed:.0f}s\n"
+                  f"truncated={result['truncated']}  seed={request.seed}  cfg={request.guidance}\n"
+                  f"NAR={song.timing['nar_seconds']:.0f}s  VAE={song.timing['vae_seconds']:.0f}s  "
+                  f"semantic={song.timing['semantic'].get('output_tps', 0):.1f} tok/s  "
+                  f"ABC={song.timing['abc'].get('output_tokens', 0)} tokens\n"
+                  f"run directory: {outdir}\n{note}")
+        yield str(outdir / "audio.flac"), (song.abc or ""), status, \
+            _artifact_files(outdir, bool(song.abc)), *idle
+    except InterruptedError as exc:
+        yield gr.update(), gr.update(), f"Cancelled: {exc}", gr.update(), *idle
+    except Exception as exc:  # noqa: BLE001
+        yield gr.update(), gr.update(), \
+            f"Generation failed: {type(exc).__name__}: {exc}", gr.update(), *idle
+    finally:
+        _RUNNING.release()
+
+
+def plan_only(style, lyrics, cot, seed, cfg_scale, out_id,
+              abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
+              device, dtype, backend, quantization, offload_ar, budget, ode_steps,
+              vae_core_frames, model, vae_choice, vae_custom, revision, vae_revision, offline,
+              progress=gr.Progress()):
+    """Generator: disables the action buttons until planning finishes."""
+    style, lyrics = _request_texts(style, lyrics)   # empty fields use the example
+    abc_sampling = _sampling(abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max, "ABC phase")
+    kwargs = {}
+    if (out_id or "").strip():
+        kwargs["id"] = out_id.strip()
+    if cfg_scale:
+        kwargs["cfg_scale"] = float(cfg_scale)
+    try:
+        request = adapter.song_request(style=style, lyrics=lyrics, cot=cot, seed=int(seed), **kwargs)
+    except (ValueError, TypeError) as exc:
+        raise gr.Error(f"Invalid request: {exc}") from exc
+
+    _CANCEL.clear()
+    if not _RUNNING.acquire(blocking=False):
+        yield gr.update(), "Another job is already running — wait for it to finish", \
+            gr.update(), gr.update(), gr.update()
+        return
+    busy = (gr.update(interactive=False), gr.update(interactive=False))
+    idle = (gr.update(interactive=True), gr.update(interactive=True))
+    try:
+        yield gr.update(), "Planning score…", gr.update(), *busy
+        pipe, note = _get_pipe(device, dtype, backend, quantization, offload_ar, budget,
+                               ode_steps, vae_core_frames, model, vae_choice, vae_custom,
+                               revision, vae_revision, offline, progress)
+        progress(0.05, desc="Planning score…")
+        plan = adapter.plan(pipe, request, abc_sampling=abc_sampling, cancelled=_CANCEL.is_set)
+        outdir = RUNS / (f"{time.strftime('%Y%m%d-%H%M%S')}-"
+                         f"{request.id if request.id != 'song' else _slug(style)}-plan")
+        plan.save(outdir)
+        files = [str(outdir / n) for n in ("score.abc", "plan.json", "abc_tokens.npy", "prefix.npy")
+                 if (outdir / n).exists()]
+        yield (plan.abc or ""), f"Plan saved: {outdir}\n{note}", files, *idle
+    except InterruptedError as exc:
+        yield gr.update(), f"Cancelled: {exc}", gr.update(), *idle
+    except Exception as exc:  # noqa: BLE001
+        yield gr.update(), f"Planning failed: {type(exc).__name__}: {exc}", gr.update(), *idle
+    finally:
+        _RUNNING.release()
+
+
+def decode_run(source_dir, latent_file, dec_vae_choice, dec_vae_custom, dec_vae_revision,
+               full_decode, device, dtype, backend, quantization, offload_ar,
+               budget, ode_steps, vae_core_frames, model, gen_vae_choice, gen_vae_custom,
+               revision, gen_vae_revision, offline, progress=gr.Progress()):
+    """Generator: re-decodes saved latents; disables the decode button while running."""
+    path = None
+    if (latent_file or "").strip():
+        path = Path(latent_file.strip())
+    elif (source_dir or "").strip():
+        path = Path(source_dir.strip()) / "latent.npy"
+    if path is None or not path.is_file():
+        raise gr.Error("Provide latent.npy (upload a file or point at a saved run directory)")
+    latents = np.load(path, allow_pickle=False)
+    if latents.ndim != 2 or latents.shape[1] != 64:
+        raise gr.Error(f"Latent shape must be [T,64], got {latents.shape}")
+
+    if not _RUNNING.acquire(blocking=False):
+        yield gr.update(), "Another job is already running — wait for it to finish", gr.update()
+        return
+    try:
+        yield gr.update(), "Decoding…", gr.update(interactive=False)
+        pipe, note = _get_pipe(device, dtype, backend, quantization, offload_ar, budget,
+                               ode_steps, vae_core_frames, model, gen_vae_choice, gen_vae_custom,
+                               revision, gen_vae_revision, offline, progress)
+        override = None
+        if dec_vae_choice != "keep":
+            override, vae_name = resolve_vae(dec_vae_choice, dec_vae_custom)
+        else:
+            vae_name = "source-generation VAE"
+        if dec_vae_choice != "keep" and dec_vae_revision:
+            override = str(adapter.resolve_model(override, revision=dec_vae_revision,
+                                                 local_files_only=bool(offline)))
+        progress(0.1, desc=f"Decoding {latents.shape[0]} frames ({vae_name})…")
+        t0 = time.perf_counter()
+
+        def on_progress(done, total):
+            progress(0.1 + 0.85 * min(1.0, done / max(1, total)),
+                     desc=f"Decoding audio: chunk {done}/{total}")
+
+        audio = adapter.decode(pipe, latents, full=bool(full_decode), vae=override,
+                               on_progress=on_progress)
+        seconds = time.perf_counter() - t0
+        outdir = RUNS / f"{time.strftime('%Y%m%d-%H%M%S')}-decode-{_slug(vae_name)}"
+        outdir.mkdir(parents=True, exist_ok=True)
+        sf.write(outdir / "audio.flac", audio, 48000, subtype="PCM_24")
+        np.save(outdir / "latent.npy", latents.astype(np.float32))
+        (outdir / "decode.json").write_text(json.dumps({
+            "operation": "decode_cached_latents", "source_latent": str(path),
+            "vae": override or str(pipe.vae_dir), "full_decode": bool(full_decode),
+            "core_frames": None if full_decode else pipe.vae_core_frames,
+            "seconds": seconds, "device": str(pipe.device),
+        }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        _write_local_env(outdir, pipe, note)
+        status = (f"Decoded {len(audio) / 48000:.1f}s audio in {seconds:.0f}s\n"
+                  f"VAE={vae_name}  mode={'full' if full_decode else 'tiled'}  "
+                  f"source={path}\nrun directory: {outdir}\n{note}")
+        yield str(outdir / "audio.flac"), status, gr.update(interactive=True)
+    except Exception as exc:  # noqa: BLE001
+        yield gr.update(), f"Decode failed: {type(exc).__name__}: {exc}", gr.update(interactive=True)
+    finally:
+        _RUNNING.release()
+
+
+def batch_generate(jsonl_text, jsonl_file, out_id,
+                   abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
+                   sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max,
+                   device, dtype, backend, quantization, offload_ar, budget, ode_steps,
+                   vae_core_frames, model, vae_choice, vae_custom, revision, vae_revision,
+                   offline, progress=gr.Progress()):
+    """Generator: runs a JSONL queue; disables the batch button while running."""
+    text = ""
+    base = Path.cwd()
+    if jsonl_file:
+        base = Path(jsonl_file).parent
+        text = Path(jsonl_file).read_text(encoding="utf-8")
+    elif jsonl_text.strip():
+        text = jsonl_text
+    rows = [json.loads(line) for line in text.splitlines() if line.strip()]
+    if not rows:
+        raise gr.Error("Provide JSONL (one request per line) or upload a .jsonl file")
+    ids = [r.get("id") for r in rows]
+    if any(x is None for x in ids) or len(set(ids)) != len(ids):
+        raise gr.Error("Every line needs a unique id")
+    abc_sampling = _sampling(abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max, "ABC phase")
+    sem_sampling = _sampling(sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max, "semantic phase")
+
+    _CANCEL.clear()
+    if not _RUNNING.acquire(blocking=False):
+        yield gr.update(), "Another job is already running — wait for it to finish", gr.update()
+        return
+    yield gr.update(), "Starting batch…", gr.update(interactive=False)
+    try:
+        pipe, note = _get_pipe(device, dtype, backend, quantization, offload_ar, budget,
+                               ode_steps, vae_core_frames, model, vae_choice, vae_custom,
+                               revision, vae_revision, offline, progress)
+        outdir = RUNS / f"{time.strftime('%Y%m%d-%H%M%S')}-batch-{_slug(out_id or 'batch')}"
+        outdir.mkdir(parents=True, exist_ok=True)
+        allowed = {"style", "tags", "lyrics", "cot", "seed", "abc", "cfg_scale", "id"}
+        results, failures = [], 0
+        batch_start = time.perf_counter()
+        for index, row in enumerate(rows, 1):
+            if _CANCEL.is_set():
+                results.append([row.get("id"), "cancelled", "", "", ""])
+                break
+            row_start = time.perf_counter()
+            kwargs = {k: v for k, v in row.items() if k in allowed and k != "id"}
+            if "abc_path" in row:
+                kwargs["abc"] = (base / row["abc_path"]).read_text(encoding="utf-8")
+            try:
+                request = adapter.song_request(id=row["id"], **kwargs)
+            except (ValueError, TypeError) as exc:
+                results.append([row["id"], f"invalid: {exc}", "", "", ""])
+                failures += 1
+                continue
+            a_s = _sampling(*((row.get("abc_sampling") or {}).get(k, getattr(abc_sampling, k))
+                              for k in adapter.sampling_fields(abc_sampling)), "ABC phase")
+            s_s = _sampling(*((row.get("semantic_sampling") or {}).get(k, getattr(sem_sampling, k))
+                              for k in adapter.sampling_fields(sem_sampling)), "semantic phase")
+
+            def on_token(phase, token, index=index):
+                progress((index - 1 + 0.5) / len(rows), desc=f"Song {index}/{len(rows)}: {phase}")
+
+            def on_progress(stage, done, total, index=index):
+                span = 1.0 / len(rows)
+                if stage == "nar":
+                    inner = 0.55 + 0.40 * min(1.0, done / max(1, total))
+                    desc = f"Song {index}/{len(rows)}: synthesizing {done}/{total}"
+                else:
+                    inner = 0.95 + 0.05 * min(1.0, done / max(1, total))
+                    desc = f"Song {index}/{len(rows)}: decoding {done}/{total}"
+                progress(min(1.0, (index - 1) * span + span * inner), desc=desc)
+
+            try:
+                song = adapter.generate(pipe, request, abc_sampling=a_s, semantic_sampling=s_s,
+                                        cancelled=_CANCEL.is_set, on_token=on_token,
+                                        on_progress=on_progress)
+                receipt = song.save_artifacts(outdir / row["id"])
+                _write_local_env(outdir / row["id"], pipe, note)
+                results.append([row["id"], "complete", f"{receipt['audio_seconds']:.1f}s",
+                                f"{time.perf_counter() - row_start:.0f}s", str(outdir / row["id"])])
+            except InterruptedError:
+                results.append([row["id"], "cancelled", "",
+                                f"{time.perf_counter() - row_start:.0f}s", ""])
+                break
+            except Exception as exc:  # noqa: BLE001
+                failures += 1
+                results.append([row["id"], f"failed: {type(exc).__name__}: {exc}", "",
+                                f"{time.perf_counter() - row_start:.0f}s", ""])
+            progress(index / len(rows), desc=f"Completed {index}/{len(rows)}")
+        total = time.perf_counter() - batch_start
+        status = (f"Batch finished: {len(results)} rows, {failures} failed in {total:.0f}s "
+                  f"({total / max(1, len(results)):.0f}s per song)\n"
+                  f"run directory: {outdir}\n{note}")
+        yield results, status, gr.update(interactive=True)
+    except Exception as exc:  # noqa: BLE001
+        yield gr.update(), f"Batch failed: {type(exc).__name__}: {exc}", gr.update(interactive=True)
+    finally:
+        _RUNNING.release()
+
+
+# ─────────────────────────── tools ───────────────────────────
+
+def abc_inspect(text):
+    if not (text or "").strip():
+        raise gr.Error("Paste an ABC score first")
+    try:
+        tools = abc_tools
+        report = tools.report(tools.parse_abc(text))
+    except ValueError as exc:
+        raise gr.Error(f"Invalid ABC: {exc}") from exc
+    return json.dumps(report, ensure_ascii=False, indent=2, default=tools.json_value)
+
+
+def abc_strip_chords(text, keep_voice):
+    if not (text or "").strip():
+        raise gr.Error("Paste an ABC score first")
+    try:
+        return abc_tools.strip_chords(text, keep_voice=keep_voice)
+    except ValueError as exc:
+        raise gr.Error(f"Processing failed: {exc}") from exc
+
+
+def abc_compare(before, after, voices, allow_tempo):
+    tools = abc_tools
+    if not (before or "").strip() or not (after or "").strip():
+        raise gr.Error("Provide both the original and edited ABC")
+    try:
+        result = tools.compare(tools.parse_abc(before), tools.parse_abc(after),
+                               names=tools.VOICES if voices == "both" else (voices,),
+                               allow_tempo_change=bool(allow_tempo))
+    except ValueError as exc:
+        raise gr.Error(f"Comparison failed: {exc}") from exc
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+def run_doctor(model, vae_choice, vae_custom, revision, vae_revision, offline, verify):
+    vae_path, _ = resolve_vae(vae_choice, vae_custom)
+    cmd = adapter.doctor_command(model, vae_path, revision=revision, vae_revision=vae_revision,
+                                 offline=bool(offline), verify=bool(verify))
+    res = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+    return res.stdout.strip() or res.stderr.strip()
+
+
+def make_comparison(paths_text, progress=gr.Progress()):
+    sources = [p.strip() for p in (paths_text or "").splitlines() if p.strip()]
+    if not sources:
+        raise gr.Error("List one saved run directory per line")
+    for src in sources:
+        if not (Path(src) / "result.json").is_file():
+            raise gr.Error(f"Not a valid YuE2 run directory (result.json missing): {src}")
+    outdir = RUNS / f"{time.strftime('%Y%m%d-%H%M%S')}-comparison"
+    progress(0.2, desc="Building listening comparison…")
+    cmd = [sys.executable, "-m", "yue2_groove.vendor.listen", *sources, "--output", str(outdir)]
+    res = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+    if res.returncode not in (0, 1):
+        raise gr.Error(f"Build failed: {res.stderr.strip()}")
+    html_path = outdir / "index.html"
+    served = f"/gradio_api/file={html_path}"
+    link = (f'<a href="{served}" target="_blank" rel="noopener">'
+            f'OPEN COMPARISON PAGE ↗</a>')
+    status = (f"{res.stdout.strip()}\n"
+              f"Click the link above to open it in a new tab, or paste one of:\n"
+              f"  {served}\n"
+              f"  file://{html_path}")
+    return str(html_path), link, status
+
+
+# ───────────────── library tab (see library.py) ─────────
+def _library_mode(sort_key, sort_dir):
+    key = "name" if str(sort_key) == "name" else "time"
+    direction = "asc" if str(sort_dir) == "asc" else "desc"
+    return f"{key}_{direction}"
+
+
+def _library_choices(sort_mode):
+    items = library.sort_items(library.scan(RUNS), sort_mode)
+    return items, [(library.label(item), item["rel"]) for item in items]
+
+
+def _library_details(selected):
+    """(info html, style, lyrics, abc, rename box, rename button, status)."""
+    selected = list(selected or [])
+    if not selected:
+        return (library.render_empty_html("Select one work to see its details."), "", "", "",
+                gr.update(value="", interactive=False), gr.update(interactive=False), "")
+    if len(selected) > 1:
+        return (library.render_multi_html(selected), "", "", "",
+                gr.update(value="", interactive=False), gr.update(interactive=False),
+                f"{len(selected)} selected — pick one to view details, or delete the selection.")
+    item, det = library.load(RUNS, selected[0])
+    if item is None:
+        return (library.render_empty_html("That work no longer exists — refresh the list."), "", "", "",
+                gr.update(value="", interactive=False), gr.update(interactive=False), "Not found.")
+    request = det.get("request") or {}
+    return (library.render_info_html(item, det), request.get("style", "") or "",
+            request.get("lyrics", "") or "", det.get("abc", "") or "",
+            gr.update(value=item["name"], interactive=True), gr.update(interactive=True),
+            f"{item['name']} · {library.format_seconds(item.get('duration'))}")
+
+
+def library_refresh(sort_key, sort_dir, selected=(), active=""):
+    items, choices = _library_choices(_library_mode(sort_key, sort_dir))
+    rels = {item["rel"] for item in items}
+    keep = [rel for rel in (selected or ()) if rel in rels]
+    keep_active = active if active in rels else ""
+    info, style, lyrics, abc, rename_box, rename_btn, _ = _library_details(
+        [keep_active] if keep_active else [])
+    summary = (f"{len(items)} work(s) · {library.summarize(items)}" if items
+               else "No works yet — generate something, then refresh.")
+    return (gr.update(choices=choices, value=keep), info, style, lyrics, abc,
+            rename_box, rename_btn, summary)
+
+
+def library_view(active):
+    """Row click: show details only. Selection (checkboxes) is a separate state."""
+    info, style, lyrics, abc, rename_box, rename_btn, _ = _library_details(
+        [active] if active else [])
+    return info, style, lyrics, abc, rename_box, rename_btn
+
+
+def library_rename(active, new_name, sort_key, sort_dir, selected=()):
+    if not active:
+        info, style, lyrics, abc, rename_box, rename_btn, _ = _library_details([])
+        return (gr.update(), info, style, lyrics, abc, rename_box, rename_btn,
+                "Click a work first, then rename it.", gr.update())
+    ok, message, new_rel = library.rename(RUNS, active, new_name)
+    items, choices = _library_choices(_library_mode(sort_key, sort_dir))
+    existing = {item["rel"] for item in items}
+    target = new_rel if (ok and new_rel) else active
+    # renaming must not disturb the checkboxes: keep the other selections,
+    # and follow the renamed work if it was checked
+    keep = []
+    for rel in (selected or ()):
+        if rel == active:
+            if target in existing and target not in keep:
+                keep.append(target)
+        elif rel in existing and rel not in keep:
+            keep.append(rel)
+    info, style, lyrics, abc, rename_box, rename_btn, _ = _library_details([target])
+    return (gr.update(choices=choices, value=keep), info, style, lyrics, abc,
+            rename_box, rename_btn, message, gr.update(value=target))
+
+
+def library_delete_prepare(selected, sort_key, sort_dir):
+    items, _ = _library_choices(_library_mode(sort_key, sort_dir))
+    by_rel = {item["rel"]: item for item in items}
+    chosen = [by_rel[rel] for rel in (selected or []) if rel in by_rel]
+    if not chosen:
+        return library.render_confirm_html([]), [], gr.update(interactive=False), "Nothing selected."
+    return (library.render_confirm_html(chosen), [item["rel"] for item in chosen],
+            gr.update(interactive=True), f"{len(chosen)} item(s) ready to delete — confirm below.")
+
+
+def library_delete_confirm(pending, sort_key, sort_dir, active=""):
+    _, message = library.delete(RUNS, pending or [])
+    items, choices = _library_choices(_library_mode(sort_key, sort_dir))
+    rels = {item["rel"] for item in items}
+    keep_active = active if (active and active in rels) else ""
+    if keep_active:
+        info, style, lyrics, abc, rename_box, rename_btn, _ = _library_details([keep_active])
+    else:
+        empty = ("Select one work to see its details." if items
+                 else "No works yet — generate something, then refresh.")
+        info, style, lyrics, abc = library.render_empty_html(empty), "", "", ""
+        rename_box, rename_btn = gr.update(value="", interactive=False), gr.update(interactive=False)
+    return (gr.update(choices=choices, value=[]), info, style, lyrics, abc,
+            rename_box, rename_btn,
+            library.render_confirm_html([]), [], gr.update(interactive=False), message,
+            gr.update(value=keep_active))
+
+
+def library_delete_cancel():
+    return library.render_confirm_html([]), [], gr.update(interactive=False), "Delete cancelled."
+
+
+
+def apply_preset(name):
+    presets = {
+        "Protocol defaults (full)": (32, 4096, 200, 9000),
+        "Preview (~1–1.5 min song)": (32, 700, 64, 2200),
+        "Quick test (~20 s)": (16, 256, 32, 512),
+    }
+    a_min, a_max, s_min, s_max = presets[name]
+    return (gr.update(value=a_min), gr.update(value=a_max),
+            gr.update(value=s_min), gr.update(value=s_max))
+
+
+def _load_project_example():
+    """Example request that feeds the placeholders and the "fill example" buttons."""
+    return ("English, warm piano pop, expressive female voice, acoustic piano, "
+            "rounded bass and light drums, 88 BPM",
+            "[Verse]\nNeon fades along the lane\nFootsteps keep the time of rain\n\n"
+            "[Chorus]\nLet the day come into view\nEvery road begins with you")
+
+
+EXAMPLE_STYLE, EXAMPLE_LYRICS = _load_project_example()
+
+
+def _request_texts(style, lyrics):
+    """The text boxes show the repository example as a placeholder; an empty
+    field falls back to it so Generate still works without typing anything."""
+    return ((style or "").strip() or EXAMPLE_STYLE, (lyrics or "").strip() or EXAMPLE_LYRICS)
+
+
+# ─────────────────────── Bearbone DS v0.2, two scenes ───────────────────────
+# dark scene:   warm near-black #0B0A09 ground + ivory #F1ECE2 ink (never pure black/white).
+# bright scene: ivory #F1ECE2 ground + warm near-black #16140F ink (the v0.2 bright token).
+# Shared grammar: 1px strokes, 10px panels, no shadows / gradients / glow, monospace, ops footer.
+
+FONT_STACK = ["Berkeley Mono", "Sarasa Mono SC", "JetBrains Mono", "SF Mono",
+              "Noto Sans Mono CJK SC", "ui-monospace", "Menlo", "monospace"]
+
+DARK = {
+    "bg": "#0B0A09", "bg_panel": "#12110F", "bg_input": "#171512", "bg_lift": "#1C1916",
+    "fg": "#F1ECE2", "fg2": "#B5AEA2", "fg3": "#7A746A", "fg4": "#57524A",
+    "stroke": "#2E2B27", "stroke2": "#8C8477",
+    "primary_fill": "#F1ECE2", "primary_hover": "#FBF8F2", "primary_text": "#16140F",
+}
+
+BRIGHT = {
+    "bg": "#F1ECE2", "bg_panel": "#F7F3EB", "bg_input": "#F7F3EB", "bg_lift": "#EAE4D8",
+    "fg": "#16140F", "fg2": "#4A463F", "fg3": "#7A746A", "fg4": "#A69D8D",
+    "stroke": "#C4BBA8", "stroke2": "#7E7462",
+    "primary_fill": "#16140F", "primary_hover": "#332E26", "primary_text": "#F1ECE2",
+}
+
+
+def _theme_values(p):
+    """Gradio theme variables (snake_case); both scenes share this mapping."""
+    return {
+        "body_background_fill": p["bg"],
+        "body_text_color": p["fg"],
+        "body_text_color_subdued": p["fg3"],
+        "body_text_size": "13px",
+        "background_fill_primary": p["bg"],
+        "background_fill_secondary": p["bg_panel"],
+        "block_background_fill": p["bg_panel"],
+        "block_border_color": "transparent",
+        "block_border_width": "0px",
+        "block_radius": "10px",
+        "block_padding": "12px",
+        "block_label_background_fill": "transparent",
+        "block_label_border_width": "0px",
+        "block_label_text_color": p["fg3"],
+        "block_label_text_size": "11px",
+        "block_label_text_weight": "500",
+        "block_label_padding": "0 0 6px 0",
+        "block_label_margin": "0",
+        "block_title_text_color": p["fg2"],
+        "block_title_text_weight": "500",
+        "container_radius": "12px",
+        "panel_background_fill": p["bg"],
+        "panel_border_color": p["stroke"],
+        "panel_border_width": "1px",
+        "border_color_primary": p["stroke"],
+        "border_color_accent": p["stroke2"],
+        "border_color_accent_subdued": p["stroke"],
+        "color_accent": p["primary_fill"],
+        "color_accent_soft": p["stroke"],
+        "link_text_color": p["fg"],
+        "link_text_color_hover": p["fg2"],
+        "link_text_color_active": p["fg"],
+        "link_text_color_visited": p["fg2"],
+        "code_background_fill": p["bg_input"],
+        "input_background_fill": p["bg_input"],
+        "input_background_fill_focus": p["bg_input"],
+        "input_background_fill_hover": p["bg_input"],
+        "input_border_color": p["stroke"],
+        "input_border_color_focus": p["stroke2"],
+        "input_border_color_hover": p["stroke2"],
+        "input_border_width": "1px",
+        "input_radius": "8px",
+        "input_placeholder_color": p["fg4"],
+        "input_text_size": "13px",
+        "input_shadow": "none",
+        "input_shadow_focus": "none",
+        "button_border_width": "1px",
+        "button_large_radius": "9px",
+        "button_medium_radius": "9px",
+        "button_small_radius": "8px",
+        "button_large_text_weight": "600",
+        "button_primary_background_fill": p["primary_fill"],
+        "button_primary_background_fill_hover": p["primary_hover"],
+        "button_primary_border_color": p["primary_fill"],
+        "button_primary_border_color_hover": p["primary_hover"],
+        "button_primary_text_color": p["primary_text"],
+        "button_primary_text_color_hover": p["primary_text"],
+        "button_primary_shadow": "none",
+        "button_primary_shadow_hover": "none",
+        "button_primary_shadow_active": "none",
+        "button_secondary_background_fill": "transparent",
+        "button_secondary_background_fill_hover": p["bg_input"],
+        "button_secondary_border_color": p["stroke"],
+        "button_secondary_border_color_hover": p["stroke2"],
+        "button_secondary_text_color": p["fg2"],
+        "button_secondary_text_color_hover": p["fg"],
+        "button_secondary_shadow": "none",
+        "button_secondary_shadow_hover": "none",
+        "button_secondary_shadow_active": "none",
+        "button_cancel_background_fill": "transparent",
+        "button_cancel_background_fill_hover": p["bg_input"],
+        "button_cancel_border_color": p["stroke"],
+        "button_cancel_border_color_hover": p["stroke2"],
+        "button_cancel_text_color": p["fg3"],
+        "button_cancel_text_color_hover": p["fg"],
+        "button_cancel_shadow": "none",
+        "button_cancel_shadow_hover": "none",
+        "button_cancel_shadow_active": "none",
+        "shadow_drop": "none",
+        "shadow_drop_lg": "none",
+        "shadow_inset": "none",
+        "checkbox_background_color": p["bg_input"],
+        "checkbox_background_color_selected": p["fg"],
+        "checkbox_background_color_hover": p["bg_lift"],
+        "checkbox_border_color": p["fg4"],
+        "checkbox_border_color_selected": p["fg"],
+        "checkbox_border_width": "1px",
+        "checkbox_border_radius": "3px",
+        "checkbox_check": p["primary_text"],
+        "checkbox_shadow": "none",
+        "checkbox_label_background_fill": p["bg_input"],
+        "checkbox_label_background_fill_hover": p["bg_lift"],
+        "checkbox_label_background_fill_selected": p["primary_fill"] if p is BRIGHT else p["stroke"],
+        "checkbox_label_border_color": p["stroke"],
+        "checkbox_label_border_color_selected": p["primary_fill"] if p is BRIGHT else p["stroke2"],
+        "checkbox_label_text_color": p["fg2"],
+        "checkbox_label_text_color_selected": p["primary_text"] if p is BRIGHT else p["fg"],
+        "checkbox_label_shadow": "none",
+        "checkbox_label_shadow_hover": "none",
+        "checkbox_label_shadow_active": "none",
+        "slider_color": p["fg"],
+        "loader_color": p["fg"],
+        "stat_background_fill": p["bg_input"],
+        "table_border_color": p["stroke"],
+        "table_even_background_fill": p["bg_panel"],
+        "table_odd_background_fill": p["bg"],
+        "table_text_color": p["fg2"],
+        "table_radius": "8px",
+        "error_background_fill": p["bg_input"],
+        "error_border_color": p["stroke2"],
+        "error_text_color": p["fg"],
+        "error_icon_color": p["fg2"],
+        "accordion_text_color": p["fg2"],
+        "section_header_text_size": "13px",
+        "section_header_text_weight": "500",
+        "embed_radius": "10px",
+        "layout_gap": "10px",
+        "form_gap_width": "10px",
+    }
+
+
+def _bb_vars(p):
+    """Scene palette → --bb-* variables for the custom CSS."""
+    return {
+        "--bb-field": p["bg"], "--bb-panel": p["bg_panel"],
+        "--bb-well": p["bg_input"], "--bb-lift": p["bg_lift"],
+        "--bb-ink": p["fg"], "--bb-ink2": p["fg2"],
+        "--bb-ink3": p["fg3"], "--bb-ink4": p["fg4"],
+        "--bb-line": p["stroke"], "--bb-line2": p["stroke2"],
+        "--bb-primary-bg": p["primary_fill"],
+        "--bb-primary-bg-hover": p["primary_hover"],
+        "--bb-primary-fg": p["primary_text"],
+        "--bb-chip-bg": p["stroke"] if p is not BRIGHT else p["primary_fill"],
+        "--bb-chip-fg": p["fg"] if p is not BRIGHT else p["primary_text"],
+    }
+
+
+def _palette_css(selector, p):
+    """Write the scene palette as --bb-* variables for the custom CSS."""
+    scheme = "dark" if p is DARK else "light"
+    lines = [f"{selector} {{"]
+    for key, value in _bb_vars(p).items():
+        lines.append(f"  {key}: {value};")
+    lines.append(f"  color-scheme: {scheme};")
+    lines.append("}")
+    return "\n".join(lines)
+
+
+def _scene_css(selector, values, palette=None):
+    """Override the Gradio theme variables (runtime switch to the bright scene).
+
+    Gradio merges custom CSS per selector, so the --bb-* variables must live in the
+    same rule as the theme variables or the two overwrite each other.
+    """
+    lines = [f"{selector} {{"]
+    if palette is not None:
+        for key, value in _bb_vars(palette).items():
+            lines.append(f"  {key}: {value} !important;")
+        lines.append(f"  color-scheme: {'dark' if palette is DARK else 'light'} !important;")
+    for key, value in values.items():
+        lines.append(f"  --{key.replace('_', '-')}: {value} !important;")
+    lines.append("}")
+    return "\n".join(lines)
+
+
+BASE_CSS = """
+.gradio-container {
+  width: 100% !important;   /* keep the frame stable when the settings rail is hidden */
+  max-width: 1400px !important;
+  margin: 0 auto !important;
+  padding: 26px 22px 8px !important;
+  position: relative !important;
+  font-family: "Berkeley Mono", "Sarasa Mono SC", "JetBrains Mono", "SF Mono",
+               ui-monospace, Menlo, monospace !important;
+}
+html, body, .gradio-container, gradio-app {
+  background: var(--bb-field) !important;
+  color: var(--bb-ink) !important;
+}
+/* hide Gradio's own footer / API link */
+footer, #footer, .built-with, .show-api, .api-links { display: none !important; }
+/* header top-right controls: settings-rail toggle + scene switch */
+#bb-topbtns {
+  position: absolute !important; top: 46px; right: 42px;
+  width: auto !important; display: flex !important; align-items: center;
+  gap: 8px; z-index: 60;
+}
+#bb-topbtns > * { width: auto !important; flex: 0 0 auto !important; }
+#bb-theme-btn { width: auto !important; min-width: 156px; }
+/* settings-rail toggle: a CSS-drawn sidebar icon */
+#bb-rail-btn {
+  position: relative; width: 28px !important; height: 28px; min-width: 28px !important;
+  padding: 0 !important; color: var(--bb-ink3) !important; line-height: 1;
+}
+#bb-rail-btn:hover { color: var(--bb-ink) !important; }
+#bb-rail-btn.bb-on { color: var(--bb-ink) !important; }
+#bb-rail-btn::before {
+  content: ""; position: absolute; left: 8px; top: 8px; width: 12px; height: 12px;
+  border: 1px solid currentColor; border-radius: 2px;
+}
+#bb-rail-btn::after {
+  content: ""; position: absolute; left: 12px; top: 9px; width: 1px; height: 10px;
+  background: currentColor;
+}
+#bb-rail-btn.bb-on::after { left: 13px; width: 6px; }
+/* the settings rail starts collapsed so the workspace gets the width */
+html.bb-rail-hidden #bb-rail { display: none !important; }
+/* header */
+#bb-header {
+  border: 1px solid var(--bb-line); border-radius: 12px; background: var(--bb-panel);
+  padding: 22px 26px 20px; margin-bottom: 16px;
+}
+#bb-header .bb-eyebrow {
+  font-size: 11px; letter-spacing: .2em; color: var(--bb-ink3); text-transform: uppercase;
+}
+#bb-header h1 {
+  margin: 12px 0 10px; font-size: 24px; line-height: 1.25; font-weight: 600;
+  letter-spacing: .05em; color: var(--bb-ink);
+}
+#bb-header h1 .bb-slash { color: var(--bb-ink4); padding: 0 8px; }
+#bb-header .bb-meta { font-size: 11.5px; letter-spacing: .08em; color: var(--bb-ink3); text-transform: uppercase; }
+/* ops footer */
+#bb-footer {
+  border-top: 1px solid var(--bb-line); margin-top: 24px; padding: 12px 2px 4px;
+  display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 18px;
+  font-size: 11px; letter-spacing: .12em; color: var(--bb-ink3); text-transform: uppercase;
+}
+/* tabs (Gradio 6 dropped .tab-nav; target the real markup) */
+.tabs .tab-container[role="tablist"] > button,
+.tabs .overflow-menu > button {
+  font: inherit !important; font-size: 11.5px !important; letter-spacing: .12em !important;
+  text-transform: uppercase !important; color: var(--bb-ink3) !important;
+  background: transparent !important; border: none !important;
+  border-bottom: 1px solid transparent !important; border-radius: 0 !important;
+  padding: 10px 14px !important;
+}
+.tabs .tab-container[role="tablist"] > button:hover,
+.tabs .overflow-menu > button:hover { color: var(--bb-ink2) !important; }
+.tabs .tab-container[role="tablist"] > button.selected {
+  color: var(--bb-ink) !important; border-bottom: 1px solid var(--bb-ink) !important;
+}
+/* panels / accordions */
+.block, .form, .panel, details, .accordion { border-radius: 10px !important; }
+details, .accordion { border: 1px solid var(--bb-line) !important; background: var(--bb-panel) !important; }
+.label-wrap { text-transform: uppercase !important; letter-spacing: .14em !important; font-size: 11px !important; }
+/* component labels (must not match the text span of radio/checkbox chips, which is a different label > span) */
+span[data-testid="block-info"], .block-title, label > span.label-text {
+  text-transform: uppercase; letter-spacing: .12em; font-size: 10.5px !important; color: var(--bb-ink3) !important;
+}
+/* inputs */
+input, textarea, select { font-family: inherit !important; letter-spacing: .01em; }
+input:focus, textarea:focus, select:focus {
+  border-color: var(--bb-line2) !important; box-shadow: none !important; outline: none !important;
+}
+*:focus, *:focus-visible { box-shadow: none !important; outline: none !important; }
+/* buttons */
+button.primary { text-transform: uppercase !important; letter-spacing: .1em !important; }
+button.primary:hover { background: var(--bb-primary-bg-hover) !important; }
+button.stop { text-transform: uppercase !important; letter-spacing: .1em !important; }
+/* scrollbar / selection */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--bb-line); border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: var(--bb-line2); }
+::-webkit-scrollbar-track { background: transparent; }
+::selection { background: var(--bb-ink); color: var(--bb-field); }
+/* flatten upload widgets into button-like controls */
+button.upload-button { text-transform: uppercase !important; letter-spacing: .08em !important; }
+/* tables */
+table { border-color: var(--bb-line) !important; }
+/* selected radio/checkbox chips: the inner span must not inherit muted meta ink */
+.gradio-container label.selected {
+  background: var(--bb-chip-bg) !important;
+  border-color: var(--bb-chip-bg) !important;
+}
+.gradio-container label.selected,
+.gradio-container label.selected span { color: var(--bb-chip-fg) !important; }
+/* choice chips (radio/checkbox options): match the label scale of the UI */
+.gradio-container label[data-testid$="-radio-label"],
+.gradio-container label[data-testid$="-checkbox-label"] { padding: 5px 10px !important; }
+.gradio-container label[data-testid$="-radio-label"] span,
+.gradio-container label[data-testid$="-checkbox-label"] span {
+  font-size: 11.5px !important; letter-spacing: .04em !important; text-transform: uppercase;
+}
+/* SCORE VIEW (abcjs) */
+.bb-score-title {
+  font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--bb-ink3); margin: 2px 0 6px;
+}
+#bb-score-view {
+  display: block !important;
+  margin-top: 2px; border: 1px solid var(--bb-line); border-radius: 8px;
+  background: var(--bb-panel); padding: 14px 10px; min-height: 96px;
+  max-height: 460px !important; overflow: auto !important;
+}
+#bb-score-inner { display: block; }
+#bb-score-inner svg { max-width: 100%; }
+#bb-score-view svg { max-width: 100%; height: auto; }
+.bb-score-empty, .bb-score-error {
+  color: var(--bb-ink3); font-size: 11px; letter-spacing: .1em;
+  text-transform: uppercase; padding: 8px 4px;
+}
+.bb-score-error { color: var(--bb-ink2); }
+/* remove Gradio's glow / shadows */
+.gradio-container * { box-shadow: none !important; }
+/* inline code / pre: dark ground with a thin stroke, never a light block */
+.prose code, .md code, code {
+  background: var(--bb-well) !important; color: var(--bb-ink) !important;
+  border: 1px solid var(--bb-line) !important; border-radius: 4px;
+  padding: 1px 5px; font-size: .92em;
+}
+.prose pre, pre {
+  background: var(--bb-well) !important; border: 1px solid var(--bb-line) !important;
+  border-radius: 8px; color: var(--bb-ink2) !important;
+}
+/* Gradio paints .form with --border-color-primary to fake a 1px frame; make it
+   transparent so the 10px layout gaps do not show a solid colour band */
+.form { background: transparent !important; }
+.bb-group { border: 1px solid var(--bb-line) !important; border-radius: 10px !important; }
+#bb-files { max-height: 200px; overflow: auto; }
+/* “E” button: drops the repository example into STYLE / LYRICS */
+.bb-eg-host { position: relative !important; }
+.bb-eg-host textarea { padding-right: 36px !important; }
+.bb-eg { position: absolute; top: 6px; right: 6px; z-index: 5; width: 20px; height: 20px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--bb-ink3); border-radius: 4px; background: var(--bb-panel);
+  color: var(--bb-ink3); font: inherit; font-size: 10px; letter-spacing: 0;
+  line-height: 1; cursor: pointer; padding: 0; }
+.bb-eg:hover { color: var(--bb-ink); border-color: var(--bb-ink); }
+@media (hover: none) and (pointer: coarse) {
+  .bb-eg { width: 24px; height: 24px; font-size: 11px; }
+  .bb-pback, .bb-pbtn, .bb-pend { width: 26px; height: 26px; }
+  .bb-pjump { width: 40px; height: 26px; font-size: 10.5px; }
+}
+/* static footnote-style notes (matches the sub-label / footer scale, not body text) */
+.bb-note p { font-size: 11px !important; line-height: 1.55; letter-spacing: .04em;
+  color: var(--bb-ink3) !important; margin: 0 0 4px; }
+.bb-note code { font-size: 10.5px !important; }
+.bb-note { margin-top: 2px; }
+/* the environment status is a hint, not content: same scale as the note below it */
+#bb-env-status textarea { font-size: 11.5px !important; line-height: 1.55 !important;
+  letter-spacing: .04em; color: var(--bb-ink3) !important; }
+/* listening comparison link */
+#bb-compare-link a {
+  display: inline-block; margin-top: 4px; color: var(--bb-ink) !important;
+  font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+  text-decoration: underline; text-underline-offset: 3px;
+}
+/* collapsible ABC source (component stays in the DOM so SCORE VIEW can read it) */
+.bb-fold {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 14px; height: 14px; margin-left: 6px;
+  border: 1px solid var(--bb-ink3); border-radius: 3px;
+  font-size: 9px; line-height: 1; color: var(--bb-ink3);
+  cursor: pointer; user-select: none;
+}
+.bb-fold:hover { color: var(--bb-ink); border-color: var(--bb-ink); }
+.bb-folded .input-container {
+  max-height: 0 !important; overflow: hidden !important; min-height: 0 !important;
+}
+/* the ABC source keeps a scrollable body even if Gradio measured it while folded */
+#bb-abc-source textarea { overflow-y: auto !important; max-height: 420px !important; }
+/* disabled action buttons while a job is running */
+button:disabled, button[disabled] { opacity: .4 !important; cursor: not-allowed !important; }
+/* ⓘ parameter tips: icon + one global floating layer (immune to component overflow/stacking) */
+.bb-i {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 13px; height: 13px; margin-left: 6px; vertical-align: middle;
+  border: 1px solid var(--bb-ink3); border-radius: 50%;
+  font-size: 9px; line-height: 1; color: var(--bb-ink3); font-style: normal;
+  letter-spacing: 0; text-transform: none; cursor: help; user-select: none;
+}
+.bb-i:hover, .bb-i:focus-visible { color: var(--bb-ink); border-color: var(--bb-ink); outline: none; }
+#bb-tip {
+  position: fixed; left: 0; top: 0; z-index: 2147483000; display: none;
+  max-width: min(320px, calc(100vw - 16px)); padding: 10px 12px; pointer-events: none;
+  border: 1px solid var(--bb-line); border-radius: 8px;
+  background: var(--bb-panel); color: var(--bb-ink2);
+  font-size: 11px; line-height: 1.55; letter-spacing: .02em;
+  text-transform: none; white-space: normal;
+}
+#bb-tip.bb-tip-show { display: block; }
+
+/* ── phones ──────────────────────────────────────────────────────────────
+   Gradio 6 hides overflowing tabs behind a tiny ⋯ menu and the theme button
+   is absolutely positioned over the title. Below 700px: tighter frame, theme
+   button parked in the header corner with reserved room, and the four tabs
+   wrap 2×2 (the overflow containers become display:contents so every tab is
+   always visible instead of hidden in the dropdown). */
+@media (max-width: 700px) {
+  .gradio-container { padding: 14px 10px 6px !important; }
+  #bb-header { padding: 16px 12px 12px; contain: inline-size; }
+  #bb-header h1 { font-size: 18px; margin: 8px 0 6px; overflow-wrap: anywhere; }
+  /* phones: rail toggle + theme button share one row */
+  #bb-topbtns { position: static !important; inset: auto !important;
+                width: 100% !important; margin: 0 0 10px 0 !important; }
+  #bb-topbtns > * { flex: 0 0 auto !important; }
+  #bb-rail-btn { width: 46px !important; min-width: 46px !important; height: 32px; }
+  #bb-theme-btn { flex: 1 1 auto !important; width: auto !important; min-width: 0 !important;
+                  margin: 0 !important; }
+  .tabs .tab-wrapper { display: flex !important; flex-wrap: wrap !important; height: auto !important; min-height: 32px; }
+  .tabs .tab-container[role="tablist"],
+  .tabs .overflow-menu,
+  .tabs .overflow-dropdown { display: contents !important; }
+  .tabs .overflow-menu > button { display: none !important; }
+  .tabs .tab-container[role="tablist"] > button,
+  .tabs .overflow-dropdown > button {
+    flex: 1 1 44% !important; min-height: 40px; padding: 10px 6px !important;
+    font-size: 10.5px !important; letter-spacing: .08em !important;
+  }
+  #bb-score-view { max-height: 60vh !important; }
+}
+@media (max-width: 360px) { #bb-header h1 { font-size: 16px; } }
+
+/* ── touch devices ────────────────────────────────────────────────────────
+   16px inputs stop iOS Safari from zooming the page on focus; the ⓘ and the
+   ABC fold control get real touch targets. */
+@media (hover: none) and (pointer: coarse) {
+  input, textarea, select { font-size: 16px !important; }
+  .bb-i { width: 20px !important; height: 20px !important; }
+  .bb-fold { width: 22px !important; height: 22px !important; font-size: 12px !important; }
+}
+"""
+
+# Gradio adds `.dark` to <body> when the OS is in dark appearance and re-declares its
+# theme variables there; an html-level override would lose to that local declaration.
+# So the bright scene must be applied on every element that can carry the theme scope.
+BRIGHT_SELECTOR = (
+    "html.bb-bright, html.bb-bright body, html.bb-bright body.dark, "
+    "html.bb-bright .dark, html.bb-bright gradio-app, html.bb-bright .gradio-container"
+)
+
+BEARBONE_CSS = "\n".join([
+    _palette_css(":root", DARK),
+    BASE_CSS,
+    _scene_css(BRIGHT_SELECTOR, _theme_values(BRIGHT), palette=BRIGHT),
+    library.LIBRARY_CSS,
+])
+
+THEME_TOGGLE_JS = """() => {
+  const r = document.documentElement;
+  const on = r.classList.toggle('bb-bright');
+  try { localStorage.setItem('bb-theme', on ? 'bright' : 'dark'); } catch (e) {}
+  const wrap = document.getElementById('bb-theme-btn');
+  const btn = wrap && (wrap.tagName === 'BUTTON' ? wrap : wrap.querySelector('button'));
+  if (btn) btn.textContent = on ? 'THEME // BRIGHT' : 'THEME // DARK';
+  return on ? 'THEME // BRIGHT' : 'THEME // DARK';
+}"""
+
+RAIL_TOGGLE_JS = """() => {
+  const r = document.documentElement;
+  const hidden = r.classList.toggle('bb-rail-hidden');
+  try { localStorage.setItem('bb-rail', hidden ? 'off' : 'on'); } catch (e) {}
+  const wrap = document.getElementById('bb-rail-btn');
+  const btn = wrap && (wrap.tagName === 'BUTTON' ? wrap : wrap.querySelector('button'));
+  if (btn) {
+    btn.classList.toggle('bb-on', !hidden);
+    const label = hidden ? 'Show the settings rail' : 'Hide the settings rail';
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+  }
+  return '';
+}"""
+
+TIPS = {
+    "STYLE": "Genre, instruments, vocal character, language and BPM. The grey text is the repository example; click E to drop it in, or paste your own.",
+    "LYRICS": "Words to sing. Use section tags like [Verse] / [Chorus]; line breaks shape the phrasing. Click E to drop in the repository example.",
+    "PLAN MODE": "FULL = melody plus a chord plan (editable ABC); MELODY = melody only, no chord symbols, freer arrangement (best for covers); OFF = no symbolic plan at all.",
+    "SEED": "Random seed. Same seed + same settings reproduces a take; change it for a different one.",
+    "CFG SCALE": "Prompt guidance strength. 0 = default (1.0, or 1.01 for off); higher follows the prompt harder, too high can sound harsh.",
+    "OUTPUT ID": "Optional filename-safe name used for the run directory and the request id.",
+    "ABC SCORE": "Optional ABC score used as the composition input. Leave empty to let the model plan.",
+    "ABC": "Paste an ABC score to validate it, strip chords, or compare before/after edits.",
+    "BUDGET PRESET": "Defaults to the upstream protocol caps (full length). The preview and quick presets are opt-in: they only lower the token caps to finish faster.",
+    "temperature": "Sampling randomness. Lower = safer, more repetitive; higher = more varied but can drift.",
+    "top_p": "Nucleus sampling: keep the smallest token set whose probability sums to p. Lower = tighter.",
+    "top_k": "Sample only from the k most likely tokens. Smaller = safer, larger = more varied.",
+    "repetition_penalty": "Penalises recently used tokens. Above 1 discourages repeats; too high hurts musicality.",
+    "penalty_window": "How many recent tokens count for the repetition penalty.",
+    "min_tokens": "Do not emit the end token before this many tokens (guarantees a minimum length).",
+    "max_tokens": "Hard cap for this phase. Semantic tokens ≈ 25 per second of audio; the model may end earlier.",
+    "RUN DIRECTORY": "A previously saved run that contains latent.npy. Re-decodes it without generating again.",
+    "DECODER VAE": "SOURCE = the decoder recorded in the source run; STANDARD = normal listening decoder (YuE2-Vae); LEGACY = benchmark decoder; CUSTOM = the path or HF id below.",
+    "CUSTOM VAE PATH / HF ID": "Path or Hugging Face repo id of a custom decoder.",
+    "FULL DECODE": "Decode the whole latent at once (faster, more memory). Tiled chunks are safer for long songs.",
+    "JSONL REQUESTS": "One JSON request per line: id, style/tags, lyrics, cot, seed, cfg_scale, abc or abc_path, optional abc_sampling / semantic_sampling overrides.",
+    "OUTPUT NAME": "Folder name for this batch.",
+    "KEEP VOICES": "Which voices survive the chord strip.",
+    "EDITED ABC": "The edited score; compared against the original above.",
+    "COMPARE VOICES": "Which voices the invariant check compares.",
+    "ALLOW TEMPO CHANGE": "Allow the quarter-note tempo to change without reporting it as a violation.",
+    "RUN DIRECTORIES": "One saved run directory per line; each must contain result.json.",
+    "VERIFY WEIGHT HASHES": "Re-hash the checkpoint files (about 7 GB, a few seconds) to confirm integrity.",
+    "DEVICE": "auto picks CUDA → MPS → CPU.",
+    "DTYPE": "bfloat16 is the checkpoint dtype and the default on CUDA/MPS; float32 casts the weights at load (slower, twice the memory). MPS bf16 needs torch >= 2.11 (the 2.10 SDPA defect is fixed there); see overrides/ in the repository.",
+    "MODEL ID / LOCAL DIR": "Hugging Face repo id or a local model directory.",
+    "DEFAULT VAE": "Decoder for new generations: STANDARD = YuE2-Vae (listening), LEGACY = benchmark decoder, CUSTOM = the path used for CUSTOM VAE below.",
+    "CUSTOM VAE": "Used when the default VAE is set to custom.",
+    "MODEL REVISION": "Pin a git revision of the model repository (optional).",
+    "VAE REVISION": "Pin a revision of the VAE repository (optional).",
+    "OFFLINE": "Never touch the network; use only the local Hugging Face cache.",
+    "BACKEND": "torch uses CUDA graphs when available and eager elsewhere; vLLM is a CUDA-only fast path.",
+    "QUANTIZATION": "fp8 shrinks the AR weights on CUDA sm89+; none everywhere else.",
+    "OFFLOAD AR WEIGHTS": "Move AR weights to CPU during synthesis to save VRAM (single request only).",
+    "MEMORY BUDGET": "CUDA-only memory cap in GiB; also selects VAE chunking (≤12 GiB → 512 frames).",
+    "ODE STEPS": "Flow-matching steps for audio synthesis. More = higher quality but slower; 32 is the protocol default.",
+    "VAE CORE FRAMES": "Chunk size for tiled VAE decode; auto = 512 at ≤12 GiB budget, otherwise 1024.",
+    "WORKS": "Click a work to view and play it; tick the checkbox to select it for deletion. Both are independent.",
+    "SORT": "Sort key: TIME = creation time, NAME = work name.",
+    "ORDER": "Sort order: DESC = newest / Z→A first, ASC = oldest / A→Z first.",
+    "RENAME TO": "New name for the work being viewed; the timestamp prefix is kept.",
+    "LIBRARY STATUS": "Result of the last library action.",
+}
+
+TIP_JS = """(function () {
+  var SELECTOR = 'span[data-testid=\"block-info\"], span.label-text, .block-title';
+  var tip = null;
+  function ensureTip() {
+    if (tip && tip.isConnected) return tip;
+    tip = document.createElement('div');
+    tip.id = 'bb-tip';
+    document.body.appendChild(tip);
+    return tip;
+  }
+  function hide() { if (tip) { tip.className = ''; tip.removeAttribute('data-src'); } }
+  function show(icon) {
+    var text = icon.getAttribute('data-tip');
+    if (!text) return;
+    var el = ensureTip();
+    el.textContent = text;
+    el.className = 'bb-tip-show';
+    el.setAttribute('data-src', text);
+    var r = icon.getBoundingClientRect();
+    var w = el.offsetWidth, h = el.offsetHeight;
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var left = r.left;
+    if (left + w > vw - 8) left = vw - w - 8;
+    if (left < 8) left = 8;
+    var top = r.bottom + 8;
+    if (top + h > vh - 8) top = r.top - h - 8;
+    if (top < 8) top = 8;
+    el.style.left = left + 'px';
+    el.style.top = top + 'px';
+  }
+  function inject() {
+    var tips = window.__BB_TIPS__ || {};
+    var nodes = document.querySelectorAll(SELECTOR);
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      if (el.getAttribute('data-bb-tip') === '1') continue;
+      var key = (el.textContent || '').trim();
+      if (!tips[key]) continue;
+      el.setAttribute('data-bb-tip', '1');
+      var mark = document.createElement('span');
+      mark.className = 'bb-i';
+      mark.setAttribute('data-tip', tips[key]);
+      mark.setAttribute('tabindex', '0');
+      mark.setAttribute('role', 'img');
+      mark.setAttribute('aria-label', tips[key]);
+      mark.textContent = 'i';
+      el.appendChild(mark);
+    }
+  }
+  document.addEventListener('mouseover', function (e) {
+    var i = e.target && e.target.closest ? e.target.closest('.bb-i') : null;
+    if (i) show(i);
+  });
+  document.addEventListener('mouseout', function (e) {
+    var i = e.target && e.target.closest ? e.target.closest('.bb-i') : null;
+    if (i) hide();
+  });
+  document.addEventListener('focusin', function (e) {
+    if (e.target && e.target.classList && e.target.classList.contains('bb-i')) show(e.target);
+  });
+  document.addEventListener('focusout', function (e) {
+    if (e.target && e.target.classList && e.target.classList.contains('bb-i')) hide();
+  });
+  // clicking the icon must not activate the surrounding radio/checkbox label,
+  // and must *show* the tip (never toggle it away: hover already showed it)
+  document.addEventListener('click', function (e) {
+    var i = e.target && e.target.closest ? e.target.closest('.bb-i') : null;
+    if (i) {
+      e.preventDefault();
+      e.stopPropagation();
+      show(i);
+      return;
+    }
+    if (tip && tip.className === 'bb-tip-show') hide();
+  }, true);
+  document.addEventListener('scroll', hide, true);
+  window.addEventListener('resize', hide);
+  setInterval(inject, 600);
+})();"""
+
+HEAD_HTML = """<meta name="color-scheme" content="dark light">
+<script>
+(function () {
+  try {
+    var q = new URLSearchParams(location.search).get('theme');
+    var saved = localStorage.getItem('bb-theme');
+    var bright = q ? (q === 'bright') : (saved === 'bright');
+    if (bright) document.documentElement.classList.add('bb-bright');
+  } catch (e) {}
+  try {
+    // the settings rail starts hidden; "on" is the only value that shows it
+    if (localStorage.getItem('bb-rail') !== 'on') {
+      document.documentElement.classList.add('bb-rail-hidden');
+    }
+  } catch (e) {}
+  function sync() {
+    var on = document.documentElement.classList.contains('bb-bright');
+    var wrap = document.getElementById('bb-theme-btn');
+    var btn = wrap && (wrap.tagName === 'BUTTON' ? wrap : wrap.querySelector('button'));
+    if (btn) btn.textContent = on ? 'THEME // BRIGHT' : 'THEME // DARK';
+    var railWrap = document.getElementById('bb-rail-btn');
+    var railBtn = railWrap && (railWrap.tagName === 'BUTTON' ? railWrap : railWrap.querySelector('button'));
+    if (railBtn) {
+      var hidden = document.documentElement.classList.contains('bb-rail-hidden');
+      railBtn.classList.toggle('bb-on', !hidden);
+      var label = hidden ? 'Show the settings rail' : 'Hide the settings rail';
+      railBtn.title = label;
+      railBtn.setAttribute('aria-label', label);
+    }
+  }
+  [300, 1000, 2500, 5000].forEach(function (t) { setTimeout(sync, t); });
+})();
+</script>"""
+
+HEAD_HTML += ("<script>window.__BB_TIPS__ = " + json.dumps(TIPS, ensure_ascii=False)
+              + ";</script><script>" + TIP_JS + "</script>")
+
+# ── abcjs score rendering (bundled under yue2_groove/static, served via allowed_paths) ──
+ABCJS_FILE = config.STATIC_DIR / "abcjs-basic-min.js"
+SCORE_JS = """(function () {
+  function scoreArea() {
+    var labels = document.querySelectorAll('span[data-testid=\"block-info\"]');
+    for (var i = 0; i < labels.length; i++) {
+      if ((labels[i].textContent || '').trim().indexOf('ABC SCORE') === 0) {
+        var block = labels[i].closest('.block') || labels[i].parentElement;
+        var ta = block && block.querySelector('textarea');
+        if (ta) return ta;
+      }
+    }
+    return null;
+  }
+  function render() {
+    var box = document.getElementById('bb-score-inner');
+    if (!box) return;
+    var ta = scoreArea();
+    var abc = ta ? (ta.value || '') : '';
+    var ink = getComputedStyle(document.documentElement).getPropertyValue('--bb-ink').trim() || '#F1ECE2';
+    var key = ink + '|' + abc;
+    // The key lives on the element, not in a JS cache: if Gradio re-creates the
+    // tab DOM (which drops the rendered SVG), the fresh node has no key and the
+    // score is drawn again instead of being skipped as "already rendered".
+    var hasSvg = !!box.querySelector('svg');
+    if (box.getAttribute('data-bb-key') === key && (hasSvg || !abc.trim())) return;
+    box.setAttribute('data-bb-key', key);
+    if (!abc.trim()) {
+      box.innerHTML = '<div class=\"bb-score-empty\">No score yet — generate with PLAN MODE = FULL / MELODY, or run PLAN ONLY.</div>';
+      return;
+    }
+    box.innerHTML = '';
+    try {
+      if (window.ABCJS && ABCJS.renderAbc) {
+        // fit the staff to the panel: a fixed 900px staffwidth overflows the
+        // score box on phones and gets clipped / needs sideways scrolling
+        var avail = Math.max(240, Math.min(900, (box.clientWidth || 340) - 18));
+        ABCJS.renderAbc(box, abc, {
+          responsive: 'resize', foregroundColor: ink,
+          scale: avail < 520 ? 0.95 : 1.1,
+          staffwidth: avail, paddingtop: 4, paddingbottom: 4,
+        });
+      } else {
+        box.innerHTML = '<div class=\"bb-score-error\">Score renderer not loaded.</div>';
+      }
+    } catch (e) {
+      box.innerHTML = '<div class=\"bb-score-error\">Could not render this ABC: '
+        + String(e && e.message ? e.message : e).slice(0, 180) + '</div>';
+    }
+  }
+  // re-render on rotation/resize so the staff width follows the new panel width
+  var bbResizeTimer = null;
+  function bbRelayout() {
+    if (bbResizeTimer) clearTimeout(bbResizeTimer);
+    bbResizeTimer = setTimeout(function () {
+      var box = document.getElementById('bb-score-inner');
+      if (box) box.removeAttribute('data-bb-key');
+    }, 250);
+  }
+  window.addEventListener('resize', bbRelayout);
+  window.addEventListener('orientationchange', bbRelayout);
+  setInterval(render, 700);
+})();"""
+
+HEAD_HTML += (f'<script src="/gradio_api/file={ABCJS_FILE}"></script>'
+              + "<script>" + SCORE_JS + "</script>")
+
+ABC_FOLD_JS = """(function () {
+  function init() {
+    var box = document.getElementById('bb-abc-source');
+    if (!box || box.getAttribute('data-bb-fold') === '1') return;
+    var info = box.querySelector('span[data-testid=\"block-info\"]') || box.querySelector('.block-title');
+    if (!info) return;
+    box.setAttribute('data-bb-fold', '1');
+    var chev = document.createElement('span');
+    chev.className = 'bb-fold';
+    chev.setAttribute('role', 'button');
+    chev.setAttribute('tabindex', '0');
+    chev.setAttribute('aria-label', 'Collapse or expand the ABC source');
+    chev.textContent = '+';
+    info.appendChild(chev);
+    function toggle(e) {
+      if (e) { e.preventDefault(); e.stopPropagation(); }
+      var folded = box.classList.toggle('bb-folded');
+      chev.textContent = folded ? '+' : '-';
+      var ta = box.querySelector('textarea');
+      if (ta && !folded) {
+        // re-measure: Gradio may have sized it while the box was folded/hidden
+        ta.style.height = 'auto';
+        var target = Math.min(Math.max(ta.scrollHeight + 4, 120), 420);
+        ta.style.height = target + 'px';
+        ta.style.overflowY = ta.scrollHeight > target ? 'auto' : 'hidden';
+      }
+    }
+    chev.addEventListener('click', toggle, true);
+    chev.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') toggle(e);
+    });
+    toggle();  // start folded: the rendered score below is the main view
+  }
+  setInterval(init, 600);
+})();"""
+
+HEAD_HTML += "<script>" + ABC_FOLD_JS + "</script>"
+
+# Gradio's frontend re-applies a component's initial value when its tab is re-activated,
+# which drops typed text and radio choices. Keep a small client-side store and restore
+# the user's values (dispatching events so Gradio's own state follows).
+PERSIST_JS = """(function () {
+  var store = {};
+  var restoreUntil = 0;
+  function tabIdx(el) {
+    var t = el.closest('.tabitem'); if (!t) return -1;
+    return Array.prototype.indexOf.call(document.querySelectorAll('.tabitem'), t);
+  }
+  function blockIdx(el) {
+    var t = el.closest('.tabitem'), b = el.closest('.block');
+    if (!t || !b) return -1;
+    return Array.prototype.indexOf.call(t.querySelectorAll('.block'), b);
+  }
+  function labelOf(el) {
+    var b = el.closest('.block') || el.parentElement;
+    var info = b && b.querySelector('span[data-testid=\"block-info\"]');
+    if (!info) return '';
+    return (info.textContent || '').replace(/[i+\\-]+$/, '').trim();
+  }
+  function keyOf(el) { return labelOf(el) + '|' + tabIdx(el) + '|' + blockIdx(el); }
+  function optionKey(el) {
+    var l = el.closest('label');
+    return keyOf(el) + '|' + (l ? (l.innerText || '').trim().slice(0, 40) : el.value);
+  }
+  function isOutput(el) { return !!el.closest('.bb-output'); }
+  function setNative(el, value) {
+    var proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype
+                                          : window.HTMLInputElement.prototype;
+    var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+    setter.call(el, value);
+    el.dispatchEvent(new Event('input', {bubbles: true}));
+    el.dispatchEvent(new Event('change', {bubbles: true}));
+  }
+  var EDITABLE = 'textarea, input[type=text], input[type=number], input[type=search], input:not([type])';
+  function snapshot(el) {
+    if (!el || el.disabled || el.readOnly || isOutput(el)) return;
+    if (el.matches('input[type=checkbox], input[type=radio]')) {
+      store[optionKey(el)] = el.checked ? 1 : 0;
+      return;
+    }
+    if (el.matches(EDITABLE)) store[keyOf(el)] = el.value;
+  }
+  function sync() {
+    var inWindow = Date.now() < restoreUntil;
+    var els = document.querySelectorAll('textarea, input');
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      if (el.disabled || el.readOnly || el.type === 'file' || isOutput(el)) continue;
+      if (el.matches('input[type=checkbox], input[type=radio]')) {
+        var ok = optionKey(el);
+        if (!(ok in store)) continue;
+        if (!!el.checked !== !!store[ok]) {
+          if (inWindow && el.offsetParent !== null) el.click();
+          else store[ok] = el.checked ? 1 : 0;  // server-driven update wins
+        }
+        continue;
+      }
+      if (!el.matches(EDITABLE)) continue;
+      var key = keyOf(el);
+      if (!(key in store)) continue;
+      if (el.value !== store[key]) {
+        if (inWindow) setNative(el, store[key]);
+        else store[key] = el.value;  // server-driven update wins
+      }
+    }
+  }
+  document.addEventListener('input', function (e) {
+    if (e.target && e.target.matches && e.target.matches('textarea, input')) snapshot(e.target);
+  }, true);
+  document.addEventListener('change', function (e) {
+    if (e.target && e.target.matches && e.target.matches('textarea, input')) snapshot(e.target);
+  }, true);
+  document.addEventListener('click', function (e) {
+    var el = e.target;
+    if (el && el.matches && el.matches('input[type=checkbox], input[type=radio]')) {
+      setTimeout(function () { snapshot(el); }, 0);
+    }
+    var btn = el && el.closest ? el.closest('button') : null;
+    if (btn && btn.parentElement && btn.parentElement.className.indexOf('tab-container') >= 0 &&
+        btn.parentElement.className.indexOf('visually-hidden') < 0) {
+      restoreUntil = Date.now() + 2500;  // a real tab switch: re-apply user values briefly
+    }
+  }, true);
+  setInterval(sync, 400);
+})();"""
+
+HEAD_HTML += "<script>" + PERSIST_JS + "</script>"
+
+# Small “fill the repository example” buttons inside the STYLE / LYRICS boxes.
+# The example text itself is injected as window.__BB_EXAMPLES__ above.
+EXAMPLE_JS = r"""(function () {
+  var FIELDS = { STYLE: 'style', LYRICS: 'lyrics' };
+  function setNative(area, text) {
+    var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+    setter.call(area, text);
+    area.dispatchEvent(new Event('input', { bubbles: true }));
+    area.dispatchEvent(new Event('change', { bubbles: true }));
+    area.focus();
+  }
+  function bindFocus(area) {
+    if (area.getAttribute('data-bb-ph') === '1') return;
+    area.setAttribute('data-bb-ph', '1');
+    var hint = area.placeholder || '';
+    // clicking in clears the grey example so a paste lands straight away;
+    // leaving the field empty restores it
+    area.addEventListener('focus', function () { if (!area.value) area.placeholder = ''; });
+    area.addEventListener('blur', function () { if (!area.value) area.placeholder = hint; });
+  }
+  function inject() {
+    var examples = window.__BB_EXAMPLES__ || {};
+    var tabs = document.querySelectorAll('.tabitem');
+    if (!tabs.length) return;
+    var first = tabs[0];                       // 01 GENERATE owns the editable fields
+    var nodes = first.querySelectorAll('span[data-testid="block-info"]');
+    for (var i = 0; i < nodes.length; i++) {
+      var info = nodes[i];
+      var text = (info.textContent || '').trim();
+      var key = FIELDS[text.split(/\s+/)[0]];
+      if (!key) continue;
+      var block = info.closest('.block') || first;
+      var host = block.querySelector('.input-container');
+      var area = host ? host.querySelector('textarea') : null;
+      if (!host || !area || host.getAttribute('data-bb-eg') === '1') continue;
+      host.setAttribute('data-bb-eg', '1');
+      host.classList.add('bb-eg-host');
+      bindFocus(area);
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'bb-eg';
+      btn.textContent = 'E';
+      btn.title = 'Fill the repository example (City Lights)';
+      btn.setAttribute('aria-label', btn.title);
+      (function (target, value) {
+        btn.addEventListener('click', function (event) {
+          event.preventDefault();
+          event.stopPropagation();
+          setNative(target, value);
+        });
+      })(area, examples[key] || '');
+      host.appendChild(btn);
+    }
+  }
+  setInterval(inject, 600);
+})();"""
+HEAD_HTML += ("<script>window.__BB_EXAMPLES__ = "
+              + json.dumps({"style": EXAMPLE_STYLE, "lyrics": EXAMPLE_LYRICS}, ensure_ascii=False)
+              + ";</script>")
+HEAD_HTML += "<script>" + EXAMPLE_JS + "</script>"
+HEAD_HTML += "<script>" + library.LIBRARY_JS + "</script>"
+
+
+def bb_theme():
+    """Bearbone dark scene at startup; bright is switched at runtime via CSS variables."""
+    import inspect as _inspect
+
+    theme = gr.themes.Base(font=FONT_STACK, font_mono=FONT_STACK,
+                           radius_size=gr.themes.sizes.radius_sm)
+    values = _theme_values(DARK)
+    valid = set(_inspect.signature(gr.themes.Base.set).parameters)
+    both = {}
+    for key, val in values.items():
+        both[key] = val
+        if f"{key}_dark" in valid:
+            both[f"{key}_dark"] = val
+    return theme.set(**both)
+
+
+def build_ui(defaults):
+    header = """
+<div id="bb-header">
+  <h1>YUE2<span class="bb-slash">//</span>GROOVE</h1>
+</div>"""
+    footer = """
+<div id="bb-footer">
+  <span>YUE2-INFER 0.1.6 · MODEL WEIGHTS CC BY-NC 4.0 (NON-COMMERCIAL)</span>
+</div>"""
+
+    with gr.Blocks(title="YUE2 // GROOVE") as demo:
+        gr.HTML(header)
+        with gr.Row(elem_id="bb-topbtns"):
+            rail_btn = gr.Button("", size="sm", elem_id="bb-rail-btn")
+            theme_btn = gr.Button("THEME // DARK", size="sm", elem_id="bb-theme-btn")
+        with gr.Row(equal_height=False):
+            # ═══════════ main work area ═══════════
+            with gr.Column(scale=5, min_width=640):
+                with gr.Tabs(selected=("gen", "decode", "batch", "tools", "library")[int(defaults.get("tab", 0)) % 5]):
+                    # ───── 01 GENERATE ─────
+                    with gr.Tab("01 // GENERATE", id="gen"):
+                        style = gr.Textbox(label="STYLE", lines=3, placeholder=EXAMPLE_STYLE)
+                        lyrics = gr.Textbox(label="LYRICS", lines=8, placeholder=EXAMPLE_LYRICS)
+                        with gr.Row():
+                            lyrics_file = gr.UploadButton("UPLOAD LYRICS .TXT", size="sm",
+                                                          file_count="single", type="filepath",
+                                                          file_types=[".txt", ".lrc"], scale=0)
+                            abc_file = gr.UploadButton("UPLOAD ABC", size="sm",
+                                                       file_count="single", type="filepath",
+                                                       file_types=[".abc", ".txt"], scale=0)
+                        with gr.Row():
+                            cot = gr.Radio(choices=[("FULL", "full"),
+                                                    ("MELODY", "melody"),
+                                                    ("OFF", "off")],
+                                           value="full", label="PLAN MODE", scale=2)
+                            seed = gr.Number(value=831001, label="SEED", precision=0, scale=1)
+                            cfg = gr.Number(value=0, label="CFG SCALE", scale=1)
+                            out_id = gr.Textbox(value="", label="OUTPUT ID", max_lines=1, scale=1)
+                            request_reset_btn = gr.Button("RESET", size="sm", scale=1,
+                                                          elem_id="bb-reset-request")
+                        with gr.Row():
+                            run_btn = gr.Button("GENERATE", variant="primary", size="lg", scale=3,
+                                                elem_id="bb-run")
+                            plan_btn = gr.Button("PLAN ONLY", size="lg", scale=2, elem_id="bb-plan")
+                            cancel_btn = gr.Button("CANCEL", variant="stop", size="lg", scale=1,
+                                                   elem_id="bb-cancel")
+                        with gr.Accordion("SCORE INPUT (optional)", open=False):
+                            abc = gr.Textbox(label="ABC SCORE", lines=8,
+                                             placeholder="Leave empty to let the model plan")
+                        with gr.Accordion("ADVANCED // SAMPLING", open=False):
+                            with gr.Row():
+                                preset = gr.Dropdown(choices=["Protocol defaults (full)",
+                                                              "Preview (~1–1.5 min song)",
+                                                              "Quick test (~20 s)"],
+                                                     value="Protocol defaults (full)",
+                                                     label="BUDGET PRESET", scale=3)
+                                sampling_reset_btn = gr.Button("RESET DEFAULTS", size="sm", scale=1,
+                                                               elem_id="bb-reset-sampling")
+                            duration_md = gr.Markdown(duration_text(SEM_DEFAULTS["max_tokens"]))
+                            with gr.Row():
+                                with gr.Group(elem_classes=["bb-group"]):
+                                    gr.Markdown("**ABC PHASE · score planning**")
+                                    abc_temp = gr.Slider(0, 5, value=ABC_DEFAULTS["temperature"], step=.05, label="temperature")
+                                    abc_p = gr.Slider(.05, 1, value=ABC_DEFAULTS["top_p"], step=.01, label="top_p")
+                                    abc_k = gr.Slider(1, 1000, value=ABC_DEFAULTS["top_k"], step=1, label="top_k")
+                                    abc_rep = gr.Slider(1, 2, value=ABC_DEFAULTS["repetition_penalty"], step=.005, label="repetition_penalty")
+                                    abc_win = gr.Slider(1, 100, value=ABC_DEFAULTS["penalty_window"], step=1, label="penalty_window")
+                                    abc_min = gr.Slider(0, 4096, value=ABC_DEFAULTS["min_tokens"], step=8, label="min_tokens")
+                                    abc_max = gr.Slider(64, 4096, value=ABC_DEFAULTS["max_tokens"], step=32, label="max_tokens")
+                                with gr.Group(elem_classes=["bb-group"]):
+                                    gr.Markdown("**SEMANTIC PHASE · 25 tokens ≈ 1 s audio**")
+                                    sem_temp = gr.Slider(0, 5, value=SEM_DEFAULTS["temperature"], step=.05, label="temperature")
+                                    sem_p = gr.Slider(.05, 1, value=SEM_DEFAULTS["top_p"], step=.01, label="top_p")
+                                    sem_k = gr.Slider(1, 1000, value=SEM_DEFAULTS["top_k"], step=1, label="top_k")
+                                    sem_rep = gr.Slider(1, 2, value=SEM_DEFAULTS["repetition_penalty"], step=.005, label="repetition_penalty")
+                                    sem_win = gr.Slider(1, 100, value=SEM_DEFAULTS["penalty_window"], step=1, label="penalty_window")
+                                    sem_min = gr.Slider(0, 9000, value=SEM_DEFAULTS["min_tokens"], step=8, label="min_tokens")
+                                    sem_max = gr.Slider(64, 9000, value=SEM_DEFAULTS["max_tokens"], step=64, label="max_tokens")
+                            gr.Markdown("ODE method and context are fixed by the protocol "
+                                        "(midpoint / 24576), same as upstream.",
+                                        elem_classes=["bb-note"])
+                        audio_out = gr.Audio(label="RESULT", type="filepath")
+                        score_out = gr.Textbox(label="ABC SCORE", lines=8, max_lines=24,
+                                               elem_id="bb-abc-source", elem_classes=["bb-output"])
+                        gr.HTML('<div class="bb-score-title">SCORE VIEW</div>'
+                                '<div id="bb-score-view"><div id="bb-score-inner">'
+                                '<div class="bb-score-empty">'
+                                'No score yet — generate with PLAN MODE = FULL / MELODY, '
+                                'or run PLAN ONLY.</div></div></div>',
+                                elem_id="bb-score-panel")
+                        with gr.Accordion("ARTIFACTS", open=False):
+                            files_out = gr.File(label="FILES", file_count="multiple", height=120,
+                                                elem_id="bb-files")
+                        gen_status = gr.Textbox(label="STATUS", lines=6, interactive=False)
+
+                    # ───── 02 DECODE ─────
+                    with gr.Tab("02 // DECODE", id="decode"):
+                        gr.Markdown(
+                            "Re-decode a saved **latent.npy** without generating again "
+                            "(same as upstream `run_yue2.py decode`). "
+                            "Typical use: compare `standard` and `legacy` decoders on the same song.",
+                            elem_classes=["bb-note"],
+                        )
+                        with gr.Row():
+                            source_dir = gr.Dropdown(label="RUN DIRECTORY", choices=_scan_runs(),
+                                                     interactive=True, scale=4)
+                            refresh_btn = gr.Button("RELOAD", size="sm", scale=1)
+                        with gr.Row():
+                            latent_upload = gr.UploadButton("UPLOAD LATENT .NPY", size="sm",
+                                                            file_count="single", type="filepath",
+                                                            file_types=[".npy"], scale=0)
+                            dec_vae_choice = gr.Radio(choices=[("SOURCE", "keep"),
+                                                               ("STANDARD", "standard"),
+                                                               ("LEGACY", "legacy"),
+                                                               ("CUSTOM", "custom")],
+                                                      value="standard", label="DECODER VAE", scale=3)
+                        with gr.Accordion("ADVANCED // DECODE OPTIONS", open=False):
+                            with gr.Row():
+                                dec_vae_custom = gr.Textbox(label="CUSTOM VAE PATH / HF ID", max_lines=1)
+                                dec_vae_revision = gr.Textbox(label="VAE REVISION", max_lines=1)
+                            with gr.Row():
+                                full_decode = gr.Checkbox(value=False, label="FULL DECODE")
+                                decode_reset_btn = gr.Button("RESET", size="sm", scale=0,
+                                                             elem_id="bb-reset-decode")
+                        decode_btn = gr.Button("RE-DECODE", variant="primary", size="lg",
+                                               elem_id="bb-decode")
+                        decode_audio = gr.Audio(label="RESULT", type="filepath")
+                        decode_status = gr.Textbox(label="STATUS", lines=6, interactive=False)
+
+                    # ───── 03 BATCH ─────
+                    with gr.Tab("03 // BATCH", id="batch"):
+                        gr.Markdown(
+                            "One JSON request per line (same as `yue2 batch`): "
+                            "`id` (required, unique), `style`/`tags`, `lyrics`, `cot`, `seed`, "
+                            "`cfg_scale`, `abc`, `abc_path` (relative to the uploaded file), optional "
+                            "`abc_sampling` / `semantic_sampling` overrides. Fields you omit use the "
+                            "sampling settings above. One request runs at a time.",
+                            elem_classes=["bb-note"],
+                        )
+                        batch_file = gr.UploadButton("UPLOAD .JSONL", size="sm", file_count="single",
+                                                     type="filepath", file_types=[".jsonl", ".txt"])
+                        batch_text = gr.Textbox(label="JSONL REQUESTS", lines=8,
+                                                placeholder='{"id":"pop1","style":"English piano pop","lyrics":"...","cot":"full"}\n'
+                                                            '{"id":"jazz1","style":"English jazz","lyrics":"...","cot":"melody","seed":7}')
+                        with gr.Row():
+                            batch_id = gr.Textbox(label="OUTPUT NAME", value="batch", max_lines=1, scale=2)
+                            batch_btn = gr.Button("RUN BATCH", variant="primary", size="lg", scale=1,
+                                                  elem_id="bb-batch")
+                        batch_table = gr.Dataframe(headers=["id", "status", "audio", "seconds", "artifacts"],
+                                                   label="RESULTS", wrap=True)
+                        batch_status = gr.Textbox(label="STATUS", lines=4, interactive=False)
+
+                    # ───── 04 TOOLS ─────
+                    with gr.Tab("04 // TOOLS", id="tools"):
+                        with gr.Accordion("ABC TOOLS", open=True):
+                            abc_tool_text = gr.Textbox(label="ABC", lines=6,
+                                                       value=(config.EXAMPLES_DIR / "melody.abc").read_text(encoding="utf-8")
+                                                       if (config.EXAMPLES_DIR / "melody.abc").exists() else "")
+                            with gr.Row():
+                                inspect_btn = gr.Button("VALIDATE / EXPORT EVENTS", size="sm")
+                                strip_btn = gr.Button("STRIP CHORDS (cover melody)", size="sm")
+                                strip_voice = gr.Dropdown(choices=["both", "Vocal", "Ins"], value="both",
+                                                          label="KEEP VOICES", scale=0)
+                            abc_result = gr.Textbox(label="RESULT", lines=10)
+                            gr.Markdown("**Edit invariant check** — confirm the sounding notes and "
+                                        "meter are unchanged after editing.",
+                                        elem_classes=["bb-note"])
+                            abc_after = gr.Textbox(label="EDITED ABC", lines=6)
+                            with gr.Row():
+                                compare_voice = gr.Dropdown(choices=["both", "Vocal", "Ins"], value="both",
+                                                            label="COMPARE VOICES", scale=1)
+                                allow_tempo = gr.Checkbox(value=False, label="ALLOW TEMPO CHANGE", scale=1)
+                                compare_abc_btn = gr.Button("COMPARE BEFORE/AFTER", size="sm", scale=1)
+                            abc_compare_out = gr.Textbox(label="COMPARE RESULT", lines=6)
+                        with gr.Accordion("LISTENING COMPARISON (static HTML)", open=False):
+                            with gr.Row():
+                                batch_pick = gr.Dropdown(label="FILL FROM BATCH RUN",
+                                                         choices=[c for c, _ in _scan_batches()],
+                                                         interactive=True, scale=4,
+                                                         elem_id="bb-batch-pick")
+                                batch_refresh = gr.Button("REFRESH LIST", size="sm", scale=1,
+                                                          elem_id="bb-refresh-batches")
+                            fill_btn = gr.Button("▾ FILL RUN DIRECTORIES FROM BATCH", size="sm",
+                                                 elem_id="bb-fill-batch")
+                            compare_paths = gr.Textbox(label="RUN DIRECTORIES", lines=3,
+                                                       elem_id="bb-compare-paths")
+                            compare_btn = gr.Button("BUILD COMPARISON", size="sm",
+                                                    elem_id="bb-build-compare")
+                            compare_file = gr.File(label="COMPARISON HTML", file_types=[".html"],
+                                                   type="filepath")
+                            compare_link = gr.HTML(elem_id="bb-compare-link")
+                            compare_status = gr.Textbox(label="STATUS", lines=4, interactive=False,
+                                                        elem_id="bb-compare-status")
+                        with gr.Accordion("DOCTOR // ENVIRONMENT", open=False):
+                            verify_hashes = gr.Checkbox(value=False, label="VERIFY WEIGHT HASHES")
+                            doctor_btn = gr.Button("RUN DOCTOR", size="sm")
+                            doctor_out = gr.Textbox(label="REPORT", lines=14)
+
+                    # ───── 05 LIBRARY ─────
+                    with gr.Tab("05 // LIBRARY", id="library") as library_tab:
+                        with gr.Row():
+                            with gr.Column(scale=2, min_width=260):
+                                lib_sort_key = gr.Radio(
+                                    choices=[("TIME", "time"), ("NAME", "name")],
+                                    value="time", label="SORT", elem_id="bb-lib-sort")
+                                lib_sort_dir = gr.Radio(
+                                    choices=[("DESC", "desc"), ("ASC", "asc")],
+                                    value="desc", label="ORDER", elem_id="bb-lib-order")
+                                lib_refresh_btn = gr.Button("REFRESH", size="sm", elem_id="bb-lib-refresh")
+                                lib_list = gr.CheckboxGroup(choices=[], value=[], label="WORKS",
+                                                            interactive=True, elem_id="bb-lib-list")
+                                with gr.Row():
+                                    lib_rename_box = gr.Textbox(label="RENAME TO", max_lines=1,
+                                                                scale=3, elem_id="bb-lib-rename-box")
+                                    lib_rename_btn = gr.Button("RENAME", size="sm", scale=1,
+                                                               interactive=False, elem_id="bb-lib-rename")
+                                lib_delete_btn = gr.Button("DELETE SELECTED", size="sm",
+                                                           elem_id="bb-lib-delete")
+                                lib_confirm = gr.HTML("", elem_id="bb-lib-confirm")
+                                with gr.Row():
+                                    lib_confirm_btn = gr.Button("CONFIRM DELETE", variant="stop", size="sm",
+                                                                scale=1, interactive=False,
+                                                                elem_id="bb-lib-confirm-delete")
+                                    lib_cancel_btn = gr.Button("CANCEL", size="sm", scale=1,
+                                                               elem_id="bb-lib-cancel-delete")
+                                lib_pending = gr.State([])
+                                # hidden bridge: row clicks set this to the work being viewed
+                                lib_active = gr.Textbox(value="", elem_id="bb-lib-active",
+                                                        elem_classes=["bb-output"])
+                                lib_status = gr.Textbox(label="LIBRARY STATUS", lines=2,
+                                                        interactive=False, elem_id="bb-lib-status")
+                            with gr.Column(scale=3, min_width=320):
+                                lib_info = gr.HTML(library.render_empty_html("Loading…"),
+                                                   elem_id="bb-lib-info")
+                                with gr.Accordion("STYLE", open=True):
+                                    lib_style = gr.Textbox(value="", lines=4, interactive=False,
+                                                           buttons=["copy"], elem_id="bb-lib-style")
+                                with gr.Accordion("LYRICS", open=True):
+                                    lib_lyrics = gr.Textbox(value="", lines=8, interactive=False,
+                                                            buttons=["copy"], elem_id="bb-lib-lyrics")
+                                with gr.Accordion("ABC SCORE (source)", open=False):
+                                    lib_abc = gr.Textbox(value="", lines=8, interactive=False,
+                                                         buttons=["copy"], elem_id="bb-lib-abc")
+                                gr.HTML('<div class="bb-score-title">SCORE VIEW</div>'
+                                        '<div id="bb-lib-score"><div id="bb-lib-score-inner">'
+                                        '<div class="bb-score-empty">Select a work to view its score.</div>'
+                                        '</div></div>', elem_id="bb-lib-score-panel")
+
+            # ═══════════ runtime rail ═══════════
+            with gr.Column(scale=2, min_width=300, elem_id="bb-rail"):
+                with gr.Accordion("RUNTIME", open=False):
+                    device = gr.Dropdown(choices=["auto", "mps", "cpu", "cuda"],
+                                         value=defaults["device"], label="DEVICE")
+                    dtype = gr.Dropdown(choices=DTYPE_CHOICES, value=defaults["dtype"], label="DTYPE")
+                    model = gr.Textbox(value=defaults["model"], label="MODEL ID / LOCAL DIR")
+                    vae_choice = gr.Radio(choices=[("STANDARD", "standard"),
+                                                   ("LEGACY", "legacy"),
+                                                   ("CUSTOM", "custom")],
+                                          value=defaults.get("vae", "standard"),
+                                          label="DEFAULT VAE")
+                    vae_custom = gr.Textbox(label="CUSTOM VAE", max_lines=1)
+                    with gr.Row():
+                        revision = gr.Textbox(label="MODEL REVISION", max_lines=1)
+                        vae_revision = gr.Textbox(label="VAE REVISION", max_lines=1)
+                    offline = gr.Checkbox(value=False, label="OFFLINE")
+                    backend = gr.Dropdown(choices=["torch", "torch-eager", "vllm"], value="torch",
+                                          label="BACKEND")
+                    quantization = gr.Dropdown(choices=["none", "fp8"], value="none",
+                                               label="QUANTIZATION")
+                    offload_ar = gr.Checkbox(value=False, label="OFFLOAD AR WEIGHTS")
+                    budget = gr.Number(value=24, label="MEMORY BUDGET")
+                    ode_steps = gr.Slider(4, 64, value=32, step=4, label="ODE STEPS")
+                    vae_core_frames = gr.Dropdown(choices=["auto", "512", "1024"], value="auto",
+                                                  label="VAE CORE FRAMES")
+                    with gr.Row():
+                        load_btn = gr.Button("LOAD / APPLY", size="sm", scale=1)
+                        unload_btn = gr.Button("UNLOAD MODEL", size="sm", scale=1)
+                    runtime_reset_btn = gr.Button("RESET DEFAULTS", size="sm",
+                                                  elem_id="bb-reset-runtime")
+                env_status = gr.Textbox(value=defaults.get("status", ""), label="STATUS",
+                                        lines=4, interactive=False, elem_id="bb-env-status")
+                gr.Markdown(
+                    "Apple Silicon: MPS runs bfloat16 with torch >= 2.11 (install with the "
+                    "override file; torch 2.10 corrupts MPS attention past 1024 tokens). "
+                    "vLLM and FP8 need NVIDIA CUDA.",
+                    elem_id="bb-runtime-note",
+                    elem_classes=["bb-note"],
+                )
+
+        # ───── event wiring ─────
+        model_args = [device, dtype, backend, quantization, offload_ar, budget, ode_steps,
+                      vae_core_frames, model, vae_choice, vae_custom, revision, vae_revision, offline]
+        gen_common = [style, lyrics, cot, seed, cfg, abc, out_id, preset,
+                      abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
+                      sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max] + model_args
+        run_event = run_btn.click(generate, inputs=gen_common,
+                                  outputs=[audio_out, score_out, gen_status, files_out,
+                                           run_btn, plan_btn])
+        plan_event = plan_btn.click(plan_only,
+                                    inputs=[style, lyrics, cot, seed, cfg, out_id,
+                                            abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max]
+                                           + model_args,
+                                    outputs=[score_out, gen_status, files_out, run_btn, plan_btn])
+        # Cooperative cancel only: do NOT use cancels=[...] here, because Gradio would
+        # tear down the running generator event and drop its final "re-enable buttons" yield.
+        cancel_btn.click(cancel_run, outputs=gen_status)
+        preset.change(apply_preset, inputs=preset,
+                      outputs=[abc_min, abc_max, sem_min, sem_max])
+        sem_max.change(duration_text, inputs=sem_max, outputs=duration_md)
+        sampling_reset_btn.click(_reset_sampling_values,
+                                 outputs=[abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
+                                          sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max,
+                                          preset])
+        request_reset_btn.click(lambda: ("", "", "full", 831001, 0, ""),
+                                outputs=[style, lyrics, cot, seed, cfg, out_id])
+        runtime_reset_btn.click(
+            lambda: ("auto", defaults["dtype"], defaults["model"], defaults.get("vae", "standard"),
+                     "", "", "", False, "torch", "none", False, 24, 32, "auto"),
+            outputs=[device, dtype, model, vae_choice, vae_custom, revision, vae_revision,
+                     offline, backend, quantization, offload_ar, budget, ode_steps, vae_core_frames])
+
+        def _load_text(path):
+            return Path(path).read_text(encoding="utf-8", errors="replace") if path else gr.update()
+
+        lyrics_file.upload(_load_text, lyrics_file, lyrics)
+        abc_file.upload(_load_text, abc_file, abc)
+
+        refresh_btn.click(_update_run_choices, outputs=source_dir)
+        decode_btn.click(decode_run,
+                         inputs=[source_dir, latent_upload, dec_vae_choice, dec_vae_custom,
+                                 dec_vae_revision, full_decode] + model_args,
+                         outputs=[decode_audio, decode_status, decode_btn])
+        decode_reset_btn.click(lambda: ("standard", "", "", False),
+                               outputs=[dec_vae_choice, dec_vae_custom, dec_vae_revision, full_decode])
+
+        batch_btn.click(batch_generate,
+                        inputs=[batch_text, batch_file, batch_id,
+                                abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
+                                sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max]
+                               + model_args,
+                        outputs=[batch_table, batch_status, batch_btn])
+        cancel_btn.click(cancel_run, outputs=batch_status)
+
+        inspect_btn.click(abc_inspect, inputs=abc_tool_text, outputs=abc_result)
+        strip_btn.click(abc_strip_chords, inputs=[abc_tool_text, strip_voice], outputs=abc_result)
+        compare_abc_btn.click(abc_compare, inputs=[abc_tool_text, abc_after, compare_voice, allow_tempo],
+                              outputs=abc_compare_out)
+        compare_btn.click(make_comparison, inputs=compare_paths,
+                          outputs=[compare_file, compare_link, compare_status])
+        fill_btn.click(_fill_from_batch, inputs=batch_pick, outputs=compare_paths)
+        batch_refresh.click(_update_batch_choices, outputs=batch_pick)
+        doctor_btn.click(run_doctor,
+                         inputs=[model, vae_choice, vae_custom, revision, vae_revision, offline,
+                                 verify_hashes],
+                         outputs=doctor_out)
+        load_btn.click(lambda *a: load_pipeline(*a)[1], inputs=model_args, outputs=env_status)
+        unload_btn.click(lambda: (unload_pipeline(), "Model unloaded")[1], outputs=env_status)
+        theme_btn.click(fn=None, js=THEME_TOGGLE_JS, outputs=theme_btn)
+        rail_btn.click(fn=None, js=RAIL_TOGGLE_JS, outputs=rail_btn)
+
+        # ───── library wiring (toolkit in library.py) ─────
+        library_outputs = [lib_list, lib_info, lib_style, lib_lyrics, lib_abc,
+                           lib_rename_box, lib_rename_btn, lib_status]
+        library_tab.select(library_refresh,
+                           inputs=[lib_sort_key, lib_sort_dir, lib_list, lib_active],
+                           outputs=library_outputs)
+        lib_refresh_btn.click(library_refresh,
+                              inputs=[lib_sort_key, lib_sort_dir, lib_list, lib_active],
+                              outputs=library_outputs)
+        lib_sort_key.change(library_refresh,
+                            inputs=[lib_sort_key, lib_sort_dir, lib_list, lib_active],
+                            outputs=library_outputs)
+        lib_sort_dir.change(library_refresh,
+                            inputs=[lib_sort_key, lib_sort_dir, lib_list, lib_active],
+                            outputs=library_outputs)
+        # row click = view/play only (JS sets the hidden bb-lib-active box)
+        lib_active.change(library_view, inputs=[lib_active],
+                          outputs=[lib_info, lib_style, lib_lyrics, lib_abc,
+                                   lib_rename_box, lib_rename_btn])
+        lib_rename_btn.click(library_rename,
+                             inputs=[lib_active, lib_rename_box, lib_sort_key, lib_sort_dir, lib_list],
+                             outputs=[lib_list, lib_info, lib_style, lib_lyrics, lib_abc,
+                                      lib_rename_box, lib_rename_btn, lib_status, lib_active])
+        lib_delete_btn.click(library_delete_prepare,
+                             inputs=[lib_list, lib_sort_key, lib_sort_dir],
+                             outputs=[lib_confirm, lib_pending, lib_confirm_btn, lib_status])
+        # note: delete-confirm returns (…, confirm, pending, button, status, active)
+        lib_confirm_btn.click(library_delete_confirm,
+                              inputs=[lib_pending, lib_sort_key, lib_sort_dir, lib_active],
+                              outputs=[lib_list, lib_info, lib_style, lib_lyrics, lib_abc,
+                                       lib_rename_box, lib_rename_btn,
+                                       lib_confirm, lib_pending, lib_confirm_btn, lib_status,
+                                       lib_active])
+        lib_cancel_btn.click(library_delete_cancel,
+                             outputs=[lib_confirm, lib_pending, lib_confirm_btn, lib_status])
+        demo.load(library_refresh, inputs=[lib_sort_key, lib_sort_dir, lib_list, lib_active],
+                  outputs=library_outputs)
+
+        gr.HTML(footer)
+
+    return demo
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=7860)
+    parser.add_argument("--share", action="store_true", help="Create a public Gradio share link")
+    parser.add_argument("--device", default="auto", choices=["auto", "mps", "cpu", "cuda"])
+    parser.add_argument("--dtype", default="auto", choices=["auto", "float32", "bfloat16"])
+    parser.add_argument("--model", default=config.default_model(),
+                        help="Hugging Face id or local directory of the 3B model")
+    parser.add_argument("--runs", default=None,
+                        help="Directory for generated works (default: $YUE2_GROOVE_RUNS or ./runs)")
+    parser.add_argument("--vae", default="standard", choices=["standard", "legacy"])
+    parser.add_argument("--tab", type=int, default=0, help="Start tab index 0..4")
+    parser.add_argument("--auth", default=os.environ.get("YUE2_GROOVE_AUTH", ""),
+                        help="Login as user:password (or set YUE2_GROOVE_AUTH); recommended on a LAN")
+    parser.add_argument("--no-preload", action="store_true", help="Do not preload the model at startup")
+    args = parser.parse_args()
+    global RUNS
+    if args.runs:
+        RUNS = Path(args.runs).expanduser().resolve()
+
+    auth = None
+    if args.auth:
+        if ":" not in args.auth:
+            parser.error("--auth must be user:password")
+        user, password = args.auth.split(":", 1)
+        if not user or not password:
+            parser.error("--auth user and password must not be empty")
+        auth = (user, password)
+
+    device = _pick_device(args.device)
+    dtype = args.dtype
+    if dtype == "auto":
+        dtype = "bfloat16" if device in ("cuda", "mps") else "float32"
+    RUNS.mkdir(parents=True, exist_ok=True)
+    defaults = {"device": device, "dtype": dtype, "model": args.model, "vae": args.vae,
+                "tab": args.tab,
+                "status": ("Model not loaded yet — it loads automatically on the first generation."
+                           if args.no_preload else "Model is preloading in the background…")}
+    demo = build_ui(defaults)
+    demo.queue(default_concurrency_limit=1)
+    if not args.no_preload:
+        def preload():
+            try:
+                load_pipeline(device, dtype, "torch", "none", False, 24, 32, "auto",
+                              args.model, args.vae, "", "", "", False)
+                print("[yue2_groove] model preload complete", flush=True)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[yue2_groove] preload failed (will retry on first generation): {exc}", flush=True)
+        threading.Thread(target=preload, daemon=True).start()
+    demo.launch(server_name=args.host, server_port=args.port, theme=bb_theme(),
+                css=BEARBONE_CSS,
+                head=HEAD_HTML,
+                allowed_paths=[str(config.STATIC_DIR), str(RUNS)],
+                auth=auth,
+                share=args.share, inbrowser=not args.share)
+
+
+if __name__ == "__main__":
+    main()

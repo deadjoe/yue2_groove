@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yue2-groove"
+version = "0.1.0"
+description = "YUE2 // GROOVE: an unofficial Gradio web UI for YuE2 song generation"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+# The YuE2 runtime itself (`yue2-infer`) is not on PyPI; install it from a clone of
+# https://github.com/multimodal-art-projection/YuE into the same environment (see README),
+# or use the `yue2` extra below to pull a pinned tag straight from GitHub.
+dependencies = [
+    "gradio>=6,<7",
+    "numpy",
+    "soundfile",
+    "torch",
+]
+
+[project.optional-dependencies]
+yue2 = ["yue2-infer @ git+https://github.com/multimodal-art-projection/YuE@yue2-v0.1.6"]
+test = ["pytest>=8"]
+
+[project.urls]
+Repository = "https://github.com/deadjoe/yue2_groove"
+Upstream = "https://github.com/multimodal-art-projection/YuE"
+
+[project.scripts]
+yue2-groove = "yue2_groove.webui:main"
+
+[tool.setuptools.packages.find]
+include = ["yue2_groove*"]
+
+[tool.setuptools.package-data]
+yue2_groove = ["static/*", "examples/*.abc", "vendor/*.py"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

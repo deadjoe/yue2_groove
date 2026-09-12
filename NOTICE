@@ -1,0 +1,17 @@
+YUE2 // GROOVE
+Copyright 2026 DEADJOE
+
+This product is an unofficial front end for YuE2 and is not affiliated with the
+YuE2 authors. Model weights are distributed separately under CC BY-NC 4.0
+(non-commercial) by the YuE2 project; this repository ships no weights.
+
+This product includes software developed by the YuE2 project
+(https://github.com/multimodal-art-projection/YuE), licensed under the
+Apache License, Version 2.0:
+  - yue2_groove/vendor/abc_tools.py   (from skills/yue2-music/scripts/abc_tools.py)
+  - yue2_groove/vendor/listen.py      (from skills/yue2-music/scripts/listen.py)
+  - yue2_groove/examples/melody.abc   (from examples/melody.abc)
+
+This product includes abcjs (https://github.com/paulrosen/abcjs),
+Copyright (c) 2009-2024 Paul Rosen and Gregory Dyke, MIT License;
+see yue2_groove/static/abcjs.LICENSE.

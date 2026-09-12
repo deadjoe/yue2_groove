@@ -1,0 +1,36 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 6 * * 1"   # weekly: catch upstream drift early
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - upstream: yue2-v0.1.6      # the tag this release is validated against
+            required: true
+          - upstream: main             # advisory: upstream's moving head
+            required: false
+    continue-on-error: ${{ !matrix.required }}
+    name: yue2 @ ${{ matrix.upstream }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install (CPU torch from the PyTorch index)
+        run: |
+          uv venv .venv --python 3.12
+          uv pip install --python .venv/bin/python \
+            "yue2-infer @ git+https://github.com/multimodal-art-projection/YuE@${{ matrix.upstream }}" \
+            -e ".[test]" --overrides overrides/linux.txt \
+            --extra-index-url https://download.pytorch.org/whl/cpu
+      - name: Model-free tests (library, adapter, upstream contract)
+        run: .venv/bin/python -m pytest -q
+      - name: Import and build the UI
+        run: .venv/bin/python -c "from yue2_groove import webui, config; webui.build_ui({'device':'cpu','dtype':'float32','model':config.default_model(),'vae':'standard','tab':0,'status':''}); print('ui ok')"

@@ -1,0 +1,20 @@
+# virtual environments and Python cruft
+.venv*/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+build/
+dist/
+*.egg-info/
+
+# local configuration and generated works
+.env
+runs/
+runs*/
+models/
+*.log
+
+# editor / OS
+.DS_Store
+.idea/
+.vscode/
