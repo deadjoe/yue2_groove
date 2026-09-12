@@ -45,6 +45,41 @@ def make_work(root: Path, name: str, kind: str = "song") -> Path:
     return d
 
 
+def test_transcription_result_is_its_own_kind(tmp_path: Path) -> None:
+    """SheetSage2 outputs are result.json + score.abc without weights/audio."""
+    d = tmp_path / "transcriptions" / "20260901-130000-reference"
+    d.mkdir(parents=True)
+    (d / "result.json").write_text(json.dumps({
+        "status": "complete", "task": "melody-vocal", "melody_only": True,
+        "abc": "X:1", "warnings": [], "output_dir": str(d)}), encoding="utf-8")
+    (d / "score.abc").write_text(
+        'X:1\nT:\nM:4/4\nL:1/32\nQ:1/4=120\n'
+        'V: Vocal clef=treble name="Vocal Melody" snm="Vocal"\n'
+        'V: Ins clef=treble name="Ins Melody" snm="Inst."\nK:C\n'
+        'V: Vocal\nz32|\nV: Ins\nZ|\n', encoding="utf-8")
+
+    items = lib.scan(tmp_path)
+    item = next(i for i in items if i["kind"] == "transcription")
+    assert item["rel"] == "transcriptions/20260901-130000-reference"
+    assert "TRANSCRIPTION" in lib.label(item)
+    assert "1 transcription(s)" in lib.summarize(items)
+    _item, det = lib.load(tmp_path, item["rel"])
+    assert det is not None and det["abc"].startswith("X:1")
+
+
+def test_comparison_bundle_is_not_scanned_as_works(tmp_path: Path) -> None:
+    make_work(tmp_path, "20260901-120000-song", "song")
+    bundle = tmp_path / "20260901-130000-comparison"
+    (bundle / "case-001").mkdir(parents=True)
+    (bundle / "case-001" / "audio.flac").write_bytes(b"fLaC")
+    (bundle / "case-001" / "result.json").write_text("{}", encoding="utf-8")
+    (bundle / "index.html").write_text("<html></html>", encoding="utf-8")
+    (bundle / "manifest.json").write_text("{}", encoding="utf-8")
+
+    rels = {item["rel"] for item in lib.scan(tmp_path)}
+    assert rels == {"20260901-120000-song"}
+
+
 def test_scan_kinds_sort_and_label(tmp_path: Path) -> None:
     make_work(tmp_path, "20260901-120000-old", "song")
     make_work(tmp_path, "20260902-130000-plan", "plan")

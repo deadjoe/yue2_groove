@@ -103,6 +103,7 @@ def test_cover_transcribe_yields_result_and_frees_the_lock(monkeypatch, tmp_path
     monkeypatch.setattr(webui.sheetsage_adapter, "transcribe", fake_transcribe)
     yields = list(webui.cover_transcribe(str(audio), "melody-full", 0, "m-a-p/SheetSage2",
                                          "auto", "auto", "", False))
+    assert all(len(chunk) == 4 for chunk in yields)          # matches the 4 wired outputs
     abc, files, status, button = yields[-1]
     assert abc == CHORD_FREE and files and str(transcript / "score.abc") in files
     assert "low confidence" in status and button["interactive"] is True
@@ -209,6 +210,7 @@ def test_edit_generate_guards(isolated_runs: Path, monkeypatch) -> None:
     monkeypatch.setattr(webui, "_run_generation", fake_run_generation)
     yields = list(webui.edit_generate(*edit_generate_args(
         baseline_abc="", check_state={}, allow_changes=True)))
+    assert all(len(chunk) == 6 for chunk in yields)          # matches the 6 wired outputs
     audio, abc, files, status, button, last_run = yields[-1]
     assert audio.endswith("audio.flac") and button["interactive"] is True
     assert Path(last_run, "edit_manifest.json").is_file()
@@ -221,6 +223,7 @@ def test_edit_generate_happy_path_writes_a_manifest(isolated_runs: Path, monkeyp
     monkeypatch.setattr(webui, "_get_pipe", lambda *a, **k: (object(), "note"))
     monkeypatch.setattr(webui, "_run_generation", fake_run_generation)
     yields = list(webui.edit_generate(*edit_generate_args()))
+    assert all(len(chunk) == 6 for chunk in yields)
     audio, abc, files, status, button, last_run = yields[-1]
     assert audio.endswith("audio.flac") and abc == BASE_ABC
     assert button["interactive"] is True and "edit_manifest.json" in status

@@ -422,15 +422,14 @@ def generate_all_modes(style, lyrics, seed, cfg_scale, abc_text, out_id,
 
     _CANCEL.clear()
     if not _RUNNING.acquire(blocking=False):
-        yield gr.update(), gr.update(), gr.update(), \
-            "Another job is already running — wait for it to finish", \
-            gr.update(), gr.update(), gr.update()
+        yield ("Another job is already running — wait for it to finish",
+               gr.update(), gr.update(), gr.update(), gr.update(), gr.update())
         return
     busy = (gr.update(interactive=False),) * 3
     idle = (gr.update(interactive=True),) * 3
     try:
-        yield gr.update(), gr.update(), gr.update(), \
-            "Starting ALL MODES (full → melody → off)…", *busy
+        yield ("Starting ALL MODES (full → melody → off)…",
+               gr.update(), gr.update(), *busy)
         pipe, note = _get_pipe(device, dtype, backend, quantization, offload_ar, budget,
                                ode_steps, vae_core_frames, model, vae_choice, vae_custom,
                                revision, vae_revision, offline, progress)
@@ -509,10 +508,10 @@ def generate_all_modes(style, lyrics, seed, cfg_scale, abc_text, out_id,
             lines.append(comparison)
         if len(done_dirs) < 2:
             lines.append("(the comparison needs at least two completed modes)")
-        yield gr.update(), files, link, "\n".join(lines), *idle
+        yield "\n".join(lines), files, link, *idle
     except Exception as exc:  # noqa: BLE001
-        yield gr.update(), gr.update(), gr.update(), \
-            f"ALL MODES failed: {type(exc).__name__}: {exc}", *idle
+        yield (f"ALL MODES failed: {type(exc).__name__}: {exc}",
+               gr.update(), gr.update(), *idle)
     finally:
         _RUNNING.release()
 

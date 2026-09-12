@@ -73,7 +73,7 @@ def _python_fragment() -> str:
     return (
         "import json, importlib.metadata, importlib.util, sys;"
         "mods={n: importlib.util.find_spec(n) is not None for n in "
-        "('torch','transformers','huggingface_hub','torchaudio')};"
+        "('torch','transformers','huggingface-hub','torchaudio')};"
         "versions={};"
         "[versions.__setitem__(n, importlib.metadata.version(n)) "
         "for n in ('torch','transformers','huggingface-hub') "
@@ -112,8 +112,9 @@ def format_probe(info: dict) -> str:
     versions = info.get("versions") or {}
     packages = info.get("packages") or {}
     for name in ("torch", "transformers", "huggingface_hub", "torchaudio"):
-        mark = "ok" if packages.get(name) else "missing"
-        version = versions.get(name) or versions.get(name.replace("_", "-")) or ""
+        key = name.replace("_", "-")
+        mark = "ok" if packages.get(key) else "missing"
+        version = versions.get(key) or ""
         lines.append(f"  {name}: {mark}{(' ' + version) if version else ''}")
     lines.append(f"ffmpeg: {info.get('ffmpeg') or 'not on PATH (SheetSage2 may need it)'}")
     lines.append("ready" if info.get("ok") else "not ready — install the SheetSage2 requirements first")

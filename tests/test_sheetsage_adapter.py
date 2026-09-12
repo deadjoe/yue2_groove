@@ -193,7 +193,7 @@ def test_probe_and_format(monkeypatch, tmp_path: Path) -> None:
     fake_python.write_text("#!/bin/sh\n", encoding="utf-8")
     fake_python.chmod(fake_python.stat().st_mode | stat.S_IXUSR)
     payload = {"python": "3.11.9", "executable": str(fake_python),
-               "packages": {"torch": True, "transformers": True, "huggingface_hub": True},
+               "packages": {"torch": True, "transformers": True, "huggingface-hub": True},
                "versions": {"torch": "2.8.0", "transformers": "4.45.2", "huggingface-hub": "0.36.0"}}
 
     class Completed:
@@ -206,7 +206,8 @@ def test_probe_and_format(monkeypatch, tmp_path: Path) -> None:
     info = adapter.probe(str(fake_python))
     assert info["ok"] is True and info["ffmpeg"] == "/usr/bin/ffmpeg"
     text = adapter.format_probe(info)
-    assert "transformers: ok 4.45.2" in text and "ffmpeg" in text and text.endswith("ready")
+    assert "transformers: ok 4.45.2" in text and "huggingface_hub: ok 0.36.0" in text
+    assert "ffmpeg" in text and text.endswith("ready")
 
     class Broken:
         returncode = 1

@@ -109,19 +109,26 @@ def _request_of(path: Path):
 
 
 # ──────────────────────────────────────────────────────────────── scan ──
+def _kind(result: dict, has_audio: bool, has_score: bool) -> str:
+    if result and (result.get("weights") or has_audio):
+        return "song"
+    if result and result.get("task"):          # SheetSage2 transcription result.json
+        return "transcription"
+    if result:
+        return "song"
+    if has_audio:
+        return "decode"
+    if has_score:
+        return "plan"
+    return "data"
+
+
 def _item(root: Path, path: Path) -> dict:
     request = _request_of(path) or {}
     result = _read_json(path / "result.json") or {}
     has_audio = (path / "audio.flac").is_file()
     has_score = (path / "score.abc").is_file()
-    if result:
-        kind = "song"
-    elif has_audio:
-        kind = "decode"
-    elif has_score:
-        kind = "plan"
-    else:
-        kind = "data"
+    kind = _kind(result, has_audio, has_score)
     truncated = result.get("truncated")
     if isinstance(truncated, dict):
         truncated = any(bool(v) for v in truncated.values())
@@ -160,6 +167,8 @@ def scan(root) -> list[dict]:
         for path in entries:
             if not path.is_dir() or path.name.startswith("."):
                 continue
+            if (path / "index.html").is_file() and (path / "manifest.json").is_file():
+                continue  # a listening comparison bundle, not a work
             if any((path / name).exists() for name in ARTIFACTS):
                 items.append(_item(root, path))
                 continue  # never descend into a work directory
@@ -186,6 +195,8 @@ def label(item: dict) -> str:
         parts.append("PLAN")
     elif item["kind"] == "decode":
         parts.append("DECODE")
+    elif item["kind"] == "transcription":
+        parts.append("TRANSCRIPTION")
     else:
         parts.append(format_seconds(item.get("duration")))
     if item.get("cot"):
@@ -204,9 +215,11 @@ def summarize(items) -> str:
     songs = sum(1 for i in items if i["kind"] == "song")
     plans = sum(1 for i in items if i["kind"] == "plan")
     decodes = sum(1 for i in items if i["kind"] == "decode")
+    transcriptions = sum(1 for i in items if i["kind"] == "transcription")
     total = sum(int(i.get("size") or 0) for i in items)
     bits = [f"{len(items)} item(s)"]
-    for count, word in ((songs, "song"), (plans, "plan"), (decodes, "decode")):
+    for count, word in ((songs, "song"), (plans, "plan"), (decodes, "decode"),
+                        (transcriptions, "transcription")):
         if count:
             bits.append(f"{count} {word}(s)")
     bits.append(format_bytes(total))

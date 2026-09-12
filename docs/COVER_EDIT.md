@@ -152,13 +152,26 @@ case. `runs/` below means `YUE2_GROOVE_RUNS` (default `./runs`).
 
 ## 5. Hardware and known limits
 
-**Verified during development** (macOS, Apple M4 Pro, 69 GB, torch 2.14.0, MPS bfloat16):
-E1 was exercised with the locally cached YuE2 weights — the chord-only edit passed the invariant
-check, generation from the edited ABC completed in 27 s at 16 ODE steps / 512 semantic tokens
-(20.5 s of 48 kHz stereo `audio.flac`), and the run directory contained every artifact plus
-`edit_manifest.json` with the differing source/edit hashes, the invariant result and the
-baseline pointer. C1/C2 need the SheetSage2 environment and its weights; use the commands in
-section 4 on a machine with them (`SheetSage2` is CUDA-validated; MPS/CPU are untested paths).
+**Verified during development** (macOS, Apple M4 Pro, 69 GB; YuE2 venv torch 2.14.0, MPS
+bfloat16; SheetSage2 venv Python 3.11, torch 2.8.0, transformers 4.45.2):
+
+- **E1** was exercised with the locally cached YuE2 weights — the chord-only edit passed the
+  invariant check, generation from the edited ABC completed in 27 s at 16 ODE steps / 512
+  semantic tokens (20.5 s of 48 kHz stereo `audio.flac`), and the run directory contained every
+  artifact plus `edit_manifest.json` with the differing source/edit hashes, the invariant result
+  and the baseline pointer.
+- **C1** was exercised end-to-end through the running UI: a 30 s vocal excerpt was transcribed
+  by SheetSage2 on MPS (`melody-vocal`, `melody_only=True`) into a chord-free ABC (65 sounding
+  notes, 32 s, Fm / 105 BPM), SEND TO GENERATE set `cot=melody`, and YuE2 produced a complete
+  20.5 s 48 kHz stereo run whose `request.json` carries the transcribed melody. The same setup
+  was probed with CHECK ENVIRONMENT and a second transcription (10 s) confirmed repeatability.
+- **ALL MODES** (see the README section) completed `full` / `melody` / `off` back to back on
+  the same loaded pipeline and produced the three run directories plus the automatic listening
+  bundle (`run.json`, per-mode `input.json`, comparison `index.html` + `manifest.json`).
+
+C2 differs from C1 only in the transcription task and plan mode; the commands above are
+sufficient. SheetSage2 is CUDA-validated upstream; the MPS numbers here are this machine's, not
+a support guarantee.
 
 - YuE2 generation: the upstream baseline (24 GB NVIDIA, BF16) or Apple Silicon with the
   documented overrides (see the main README and `docs/MACOS_MPS.md`). One model at a time is

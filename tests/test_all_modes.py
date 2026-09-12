@@ -77,7 +77,8 @@ def test_all_modes_runs_full_melody_off_and_builds_the_comparison(monkeypatch) -
     install_fakes(monkeypatch, state)
 
     yields = list(webui.generate_all_modes(*all_modes_args()))
-    _update, files, link, status, *_idle = yields[-1]
+    assert all(len(chunk) == 6 for chunk in yields)          # matches the 6 wired outputs
+    status, files, link, *_idle = yields[-1]
 
     assert [call["cot"] for call in state["calls"]] == ["full", "melody", "off"]
     assert [call["id"] for call in state["calls"]] == ["modes_full", "modes_melody", "modes_off"]
@@ -102,7 +103,8 @@ def test_all_modes_retains_a_failed_mode_and_compares_the_rest(monkeypatch) -> N
     install_fakes(monkeypatch, state)
 
     yields = list(webui.generate_all_modes(*all_modes_args()))
-    _update, files, _link, status, *_idle = yields[-1]
+    assert all(len(chunk) == 6 for chunk in yields)
+    status, files, _link, *_idle = yields[-1]
 
     root = Path(state["calls"][0]["dir"]).parent
     summary = json.loads((root / "run.json").read_text(encoding="utf-8"))
@@ -118,7 +120,7 @@ def test_all_modes_cancel_stops_between_modes(monkeypatch) -> None:
     install_fakes(monkeypatch, state)
 
     yields = list(webui.generate_all_modes(*all_modes_args()))
-    _update, _files, _link, status, *_idle = yields[-1]
+    status, *_rest = yields[-1]
 
     assert [call["cot"] for call in state["calls"]] == ["full"]
     root = Path(state["calls"][0]["dir"]).parent
@@ -138,7 +140,8 @@ def test_all_modes_respects_the_running_lock() -> None:
     webui._RUNNING.acquire()
     try:
         yields = list(webui.generate_all_modes(*all_modes_args()))
-        assert "already running" in yields[0][3]
+        assert all(len(chunk) == 6 for chunk in yields)
+        assert "already running" in yields[0][0]
     finally:
         webui._RUNNING.release()
 
