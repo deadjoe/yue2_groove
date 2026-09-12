@@ -705,7 +705,7 @@ def cover_transcribe(audio_path, task, max_seconds, model, device, dtype, revisi
             f"{time.strftime('%Y%m%d-%H%M%S')}-{_slug(Path(audio_path).stem)}"
 
         def on_progress(value, text):
-            progress(value if value is not None else 0.0, desc=text)
+            progress(value, desc=text)
 
         record = sheetsage_adapter.transcribe(
             audio_path, output_dir=outdir, task=task,
@@ -776,10 +776,11 @@ def edit_load(rel):
     if not abc:
         raise gr.Error(f"{item['name']} has no ABC score to edit")
     request = det.get("request") or {}
+    style = request.get("style") or request.get("tags") or ""
     info = (f"{item['name']} · {rel}\n"
             "baseline not frozen yet — press FREEZE BASELINE to record hashes and "
             "small artifacts (the original run directory is never modified).")
-    return (gr.update(value=request.get("style", "") or ""),
+    return (gr.update(value=style),
             gr.update(value=request.get("lyrics", "") or ""),
             gr.update(value=abc), abc, rel, {}, None, info,
             f"Loaded {item['name']} as the edit source.")
@@ -2285,7 +2286,7 @@ def build_ui(defaults):
                                                   elem_id="bb-cover-files")
 
                     # ───── 07 EDIT ─────
-                    with gr.Tab("07 // EDIT", id="edit"):
+                    with gr.Tab("07 // EDIT", id="edit") as edit_tab:
                         gr.Markdown(
                             "**Freeze a baseline → edit the score → check invariants → regenerate "
                             "→ compare.** The edited ABC is always submitted explicitly, so an edit "
@@ -2479,6 +2480,7 @@ def build_ui(defaults):
                              outputs=[abc, cot, tabs, cover_status])
 
         # ───── edit wiring (pure logic in edit_flow.py) ─────
+        edit_tab.select(edit_choices, outputs=edit_source)
         edit_refresh_btn.click(edit_choices, outputs=edit_source)
         edit_load_btn.click(
             edit_load, inputs=[edit_source],

@@ -152,6 +152,14 @@ case. `runs/` below means `YUE2_GROOVE_RUNS` (default `./runs`).
 
 ## 5. Hardware and known limits
 
+**Verified during development** (macOS, Apple M4 Pro, 69 GB, torch 2.14.0, MPS bfloat16):
+E1 was exercised with the locally cached YuE2 weights — the chord-only edit passed the invariant
+check, generation from the edited ABC completed in 27 s at 16 ODE steps / 512 semantic tokens
+(20.5 s of 48 kHz stereo `audio.flac`), and the run directory contained every artifact plus
+`edit_manifest.json` with the differing source/edit hashes, the invariant result and the
+baseline pointer. C1/C2 need the SheetSage2 environment and its weights; use the commands in
+section 4 on a machine with them (`SheetSage2` is CUDA-validated; MPS/CPU are untested paths).
+
 - YuE2 generation: the upstream baseline (24 GB NVIDIA, BF16) or Apple Silicon with the
   documented overrides (see the main README and `docs/MACOS_MPS.md`). One model at a time is
   the supported configuration; each transcription is a fresh process, so SheetSage2's weights

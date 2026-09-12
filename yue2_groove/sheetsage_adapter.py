@@ -285,7 +285,7 @@ def transcribe(audio_path, *, output_dir=None, task: str = "melody-full",
             done, total = event.get("done"), event.get("total")
             fraction = (done / total) if (isinstance(done, (int, float)) and total) else None
             report(fraction, "Transcribing…" + (f" {done}/{total}" if total else ""))
-        if cancelled is not None and cancelled():
+        if cancelled is not None and process.poll() is None and cancelled():
             cancelled_at = time.monotonic()
             _terminate(process)
             break
