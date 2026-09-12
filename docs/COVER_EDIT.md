@@ -1,0 +1,164 @@
+# Cover and edit workflows (06 // COVER, 07 // EDIT)
+
+This is the practical manual for the two tabs added on top of the generation flow:
+**audio → ABC → cover** (SheetSage2) and **freeze → edit → check → regenerate → listen**.
+It also lists the manual end-to-end checks (`C1`, `C2`, `E1`, `X`) and what hardware they need.
+
+The UI runs both models in **separate Python environments** because their dependency pins
+conflict; they exchange files, not imports. Nothing here changes the upstream YuE2 clone.
+
+## 1. Two environments
+
+| Role | Environment | What the UI needs to know |
+|---|---|---|
+| Song generation | the groove venv (`yue2-groove` + `yue2-infer`), see the main README | nothing new |
+| Audio → ABC | a **separate SheetSage2 venv** (Python 3.10/3.11, its own torch/transformers) | `YUE2_GROOVE_SHEETSAGE_PYTHON=/path/to/.venv-sheetsage2/bin/python` |
+
+Set up SheetSage2 next to a YuE checkout (adjust paths). FFmpeg 6.1+ must be on `PATH`:
+
+```bash
+cd /path/to/YuE
+
+# Linux / NVIDIA CUDA (the configuration SheetSage2 validates)
+python3.11 -m venv .venv-sheetsage2
+.venv-sheetsage2/bin/python -m pip install huggingface-hub==0.36.0
+.venv-sheetsage2/bin/hf download m-a-p/SheetSage2 --local-dir models/SheetSage2
+.venv-sheetsage2/bin/python -m pip install torch==2.8.0 torchaudio==2.8.0 \
+  --index-url https://download.pytorch.org/whl/cu126
+.venv-sheetsage2/bin/python -m pip install -r models/SheetSage2/requirements.txt
+```
+
+macOS / Apple Silicon: the same commands without the CUDA index
+(`pip install torch==2.8.0 torchaudio==2.8.0`) and `device=mps`; this path is untested and
+CPU (`device=cpu`) always works but is slow. The model card is the authority on versions.
+
+Loading SheetSage2 automatically downloads/loads its parent encoder
+**MERT-v2-FullSong** — do not install or select it manually.
+
+Point the UI at the environment (`.env` in the groove repository root, so `serve.sh`
+picks it up; env vars and the `--sheetsage-python` flag are equivalent):
+
+```bash
+YUE2_GROOVE_SHEETSAGE_PYTHON=/path/to/YuE/.venv-sheetsage2/bin/python
+# optional:
+YUE2_GROOVE_SHEETSAGE_MODEL=/path/to/YuE/models/SheetSage2   # defaults to m-a-p/SheetSage2
+YUE2_GROOVE_SHEETSAGE_DEVICE=auto                            # auto | cuda | mps | cpu
+YUE2_GROOVE_TRANSCRIPTIONS=/path/to/transcriptions           # defaults to <runs>/transcriptions
+```
+
+The **CHECK ENVIRONMENT** button in 06 COVER probes that interpreter (`torch`,
+`transformers`, ffmpeg) without loading weights. If SheetSage2 is not configured, the
+tab reports a configuration error and every other tab keeps working.
+
+## 2. 06 COVER — audio to a cover song
+
+1. **SOURCE AUDIO** — upload a reference recording (wav/mp3/flac; decoded to mono 24 kHz).
+2. **TRANSCRIPTION TASK**
+   - `MELODY // VOCAL` — only the sung line; best when the cover should keep the vocal melody;
+   - `MELODY // VOCAL+INST` — vocal and instrumental melodies, chord-free (the default);
+   - `FULL SCORE // + CHORDS` — adds chord symbols; use this to regenerate with `cot=full`.
+3. **TRANSCRIBE** — runs the driver in the SheetSage2 venv. The status pane shows the output
+   directory under `runs/transcriptions/…`, the device/dtype, and any model warnings. CANCEL
+   terminates the subprocess. The tab stays usable for a new attempt.
+4. **Review the ABC** in the editor (and the rendered score below it). Transcription can contain
+   musical errors; fix them before covering. `STRIP CHORDS` re-serializes the score without
+   chord symbols and verifies that melody, meter and tempo are unchanged.
+5. **SEND TO GENERATE** — fills `01 GENERATE` with the score and sets PLAN MODE to `MELODY`
+   (chord-free input) or `FULL` (full-score input), then switches to that tab. Add the target
+   STYLE and LYRICS there and press GENERATE. The existing `adapter.generate`/`YuE2Pipeline`
+   path is used unchanged; artifacts land in `runs/<stamp>-<id>/`.
+
+`cot="melody"` does not remove chords by itself — SEND TO GENERATE strips them for you. A cover
+supplies a symbolic melody condition; it does not preserve the source singer's identity or
+waveform.
+
+## 3. 07 EDIT — iterate on a score
+
+The flow follows the upstream skill: a frozen baseline, an explicit edit contract, an exact
+symbolic invariant check, regeneration from the edited score, and a listening comparison.
+
+1. **SOURCE WORK → REFRESH → LOAD** — pick a saved work that contains `score.abc` (a generated
+   plan, a full song, or an earlier edit). Its style/lyrics/ABC load into the editor and the
+   ABC becomes the baseline.
+2. **FREEZE BASELINE** — writes `runs/baselines/<stamp>-<name>-baseline/` with `baseline.json`
+   (SHA-256 of the source artifacts) and copies of `score.abc` / `request.json`. The original run
+   directory is never touched; audio and latents stay where they are and remain the listening
+   baseline.
+3. **Edit** the ABC (and style/lyrics if the arrangement changes). Keep the native dialect:
+   the checker rejects unsupported notation rather than guessing.
+4. **CHECK INVARIANTS** — compares baseline and edit per voice. Chord-only edits pass; pitch,
+   onset or duration changes are reported by voice; tempo changes need `ALLOW TEMPO CHANGE`.
+5. **GENERATE EDITED** — refused unless the check passed on *exactly* the current ABC, and the
+   edited score is always submitted (an edit can never silently turn into a fresh plan). For
+   intentional melody/rhythm changes, tick `ALLOW MELODY/RHYTHM CHANGES`. Every attempt is a new
+   run directory with `edit_manifest.json`: source and edit hashes, the invariant result,
+   permitted changes, request fields.
+6. **BUILD COMPARISON // baseline vs edit** — builds a local listening page from the original
+   run and the new one (same player as 04 TOOLS → LISTENING COMPARISON). Listen to the whole
+   song and to the changed passage.
+
+The check is symbolic: passing it does not guarantee the audio realizes the score. Treat
+transcription, symbolic checks and listening as three separate pieces of evidence.
+
+## 4. Manual end-to-end checks
+
+Use one 30–60 s vocal reference for the cover cases and an existing generated work for the edit
+case. `runs/` below means `YUE2_GROOVE_RUNS` (default `./runs`).
+
+### C1 — cover from a recording
+
+1. `bash scripts/serve.sh start` with `YUE2_GROOVE_SHEETSAGE_PYTHON` set.
+2. 06 COVER → upload the reference → task `MELODY // VOCAL+INST` → TRANSCRIBE.
+   *Expect:* status lists `runs/transcriptions/<stamp>-<name>`; `score.abc`, `events.json`,
+   melody MIDI and `result.json` are written; the ABC editor and score view fill in; no chord
+   symbols in the ABC.
+3. STRIP CHORDS (no-op on an already chord-free score) → SEND TO GENERATE.
+   *Expect:* 01 GENERATE shows the ABC, PLAN MODE=MELODY.
+4. Type target STYLE/LYRICS → GENERATE.
+   *Expect:* `runs/<stamp>-<id>/` contains `audio.flac`, `score.abc`, `request.json`,
+   `config.json`, `result.json`, `latent.npy`, `semantic.npy`, `local_env.json`; 05 LIBRARY plays it.
+
+### C2 — full-score conditioning
+
+1. 06 COVER → task `FULL SCORE // + CHORDS` → TRANSCRIBE → SEND TO GENERATE.
+   *Expect:* PLAN MODE=FULL and the chord symbols still present.
+2. Generate and confirm `request.json` in the run directory records `"cot": "full"`.
+
+### E1 — edit iteration
+
+1. 07 EDIT → REFRESH → pick a work with audio → LOAD → FREEZE BASELINE.
+   *Expect:* `runs/baselines/<stamp>-<name>-baseline/baseline.json` plus copies of `score.abc`
+   and `request.json`; the source directory's files are unchanged.
+2. Reharmonize some chords (keep every melody note) → CHECK INVARIANTS.
+   *Expect:* `"match": true` and unchanged note lists in the JSON report.
+3. Change one melody pitch, press CHECK INVARIANTS, then GENERATE EDITED.
+   *Expect:* match is false and generation is refused with the difference listed; enabling
+   `ALLOW MELODY/RHYTHM CHANGES` and pressing again proceeds.
+4. With the check green, GENERATE EDITED.
+   *Expect:* a new `runs/<stamp>-edit-<name>/` with audio plus `edit_manifest.json` containing
+   the baseline/edit hashes and the invariant result.
+5. BUILD COMPARISON → open the link → listen to baseline vs edit.
+6. Clear the EDITED ABC and press GENERATE EDITED.
+   *Expect:* refusal — an empty edit cannot silently become a fresh plan.
+
+### X — failures stay understandable
+
+- No `YUE2_GROOVE_SHEETSAGE_PYTHON`: 06 COVER reports the missing configuration; the UI does not
+  crash. A bad interpreter path / missing torch or transformers is reported the same way.
+- CANCEL during transcription terminates the SheetSage2 subprocess and re-enables the button;
+  CANCEL during edit generation follows the existing cooperative-cancel path.
+- A transcription that yields no usable ABC shows the driver's error and warnings
+  (`failure.json` is written in the output directory).
+
+## 5. Hardware and known limits
+
+- YuE2 generation: the upstream baseline (24 GB NVIDIA, BF16) or Apple Silicon with the
+  documented overrides (see the main README and `docs/MACOS_MPS.md`). One model at a time is
+  the supported configuration; each transcription is a fresh process, so SheetSage2's weights
+  are loaded per call (the Hugging Face cache is shared, so disk is not duplicated).
+- SheetSage2: CUDA is the validated path; `mps`/`cpu` are offered but untested. Long inputs take
+  longer and use more memory; use MAX SECONDS only when cropping is intended.
+- Model weights (YuE2, SheetSage2, MERT-v2-FullSong) are **CC BY-NC 4.0 (non-commercial)**.
+  This repository ships no weights and is not affiliated with the model authors.
+- Transcription accuracy, symbolic score checks and listening quality are separate claims; do
+  not report a passing check as proof that the generated audio realized the score.

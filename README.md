@@ -16,6 +16,10 @@ browser, adds a library of your generated works, and runs as a small local servi
   edit invariant check, listening-comparison page, environment doctor.
 - **05 // LIBRARY** — every work you generated: sort, select, rename, confirmed delete,
   a player with spectrum and transport controls, style / lyrics / ABC / score, run tables.
+- **06 // COVER** — source audio → SheetSage2 transcription (separate venv) → editable ABC,
+  chord strip → one click into GENERATE with the right plan mode.
+- **07 // EDIT** — freeze a baseline, edit the score, check exact melody/meter invariants,
+  regenerate from the edited score, compare baseline vs edit.
 - **Settings rail** — device, dtype, backend, quantization, memory budget, ODE steps,
   VAE core frames, model/VAE revisions, offline mode, load / unload.
 
@@ -46,6 +50,9 @@ per-run request / sampling tables:
 - About 8 GB of disk for the model weights (`m-a-p/YuE2-3B` + `m-a-p/YuE2-Vae`), which
   download from Hugging Face on first use.
 - The model weights are licensed **CC BY-NC 4.0 (non-commercial)** by the YuE2 project.
+- *Optional, for covers:* a separate SheetSage2 environment (Python 3.10/3.11, its own
+  torch/transformers, FFmpeg 6.1+) — see [Cover from audio](#cover-from-audio-sheetsage2).
+  Everything except 06 COVER works without it.
 
 ## Quick start
 
@@ -134,7 +141,11 @@ YUE2_GROOVE_RUNS=/path/to/runs       # where works are stored (default: ./runs)
 YUE2_GROOVE_MODEL=m-a-p/YuE2-3B      # Hugging Face id or a local directory
 YUE2_GROOVE_VAE=m-a-p/YuE2-Vae
 YUE2_GROOVE_VAE_LEGACY=m-a-p/YuE2-Vae-legacy
-YUE2_GROOVE_MODELS=/path/to/models   # optional: a folder holding YuE2-3B/, YuE2-Vae/, YuE2-Vae-legacy/
+YUE2_GROOVE_MODELS=/path/to/models   # optional: a folder holding YuE2-3B/, YuE2-Vae/, YuE2-Vae-legacy/, SheetSage2/
+YUE2_GROOVE_SHEETSAGE_PYTHON=/path/to/.venv-sheetsage2/bin/python   # 06 COVER (separate env)
+YUE2_GROOVE_SHEETSAGE_MODEL=m-a-p/SheetSage2   # or a local SheetSage2 snapshot
+YUE2_GROOVE_SHEETSAGE_DEVICE=auto              # auto | cuda | mps | cpu
+YUE2_GROOVE_TRANSCRIPTIONS=/path/to/transcriptions   # default: <runs>/transcriptions
 ```
 
 The same things are available as command-line flags:
@@ -146,6 +157,10 @@ The same things are available as command-line flags:
 bash scripts/serve.sh start --port 7861 --device mps --dtype bfloat16 --no-preload
 bash scripts/serve.sh start -f          # foreground, Ctrl-C to stop
 ```
+
+`--tab` selects the start tab (`0..6`, order: GENERATE, DECODE, BATCH, TOOLS, LIBRARY,
+COVER, EDIT). `--sheetsage-python` points at the SheetSage2 interpreter (same as
+`YUE2_GROOVE_SHEETSAGE_PYTHON`).
 
 `--device auto` picks CUDA → MPS → CPU; `--dtype auto` is bfloat16 on CUDA/MPS (the
 checkpoint dtype) and float32 on CPU.
@@ -184,6 +199,56 @@ pip install "torch==2.14.0"                      # macOS only
 
 More on the Apple Silicon story, with measurements: [docs/MACOS_MPS.md](docs/MACOS_MPS.md).
 
+## Cover from audio (SheetSage2)
+
+**06 // COVER** turns a recording into a cover: upload audio → SheetSage2 transcribes it to ABC
+(melody-only or full score) → review/edit the score, strip chords → **SEND TO GENERATE** fills
+the ABC and the right plan mode → the normal YuE2 generation path runs unchanged.
+
+SheetSage2 pins different torch/transformers versions than YuE2, so it runs in its **own
+virtual environment** and the UI talks to it over a subprocess boundary: nothing in the groove
+process imports `transformers`, and an unconfigured SheetSage2 cannot break the rest of the UI.
+Install it next to the YuE checkout (Linux/CUDA shown; see the model card for others):
+
+```bash
+cd /path/to/YuE
+python3.11 -m venv .venv-sheetsage2
+.venv-sheetsage2/bin/python -m pip install huggingface-hub==0.36.0
+.venv-sheetsage2/bin/hf download m-a-p/SheetSage2 --local-dir models/SheetSage2
+.venv-sheetsage2/bin/python -m pip install torch==2.8.0 torchaudio==2.8.0 \
+  --index-url https://download.pytorch.org/whl/cu126
+.venv-sheetsage2/bin/python -m pip install -r models/SheetSage2/requirements.txt
+
+# in yue2_groove/.env (or pass --sheetsage-python on the command line)
+YUE2_GROOVE_SHEETSAGE_PYTHON=/path/to/YuE/.venv-sheetsage2/bin/python
+```
+
+FFmpeg 6.1+ must be on `PATH`. MERT-v2-FullSong, SheetSage2's parent encoder, downloads
+automatically — do not install it separately. On macOS use the same commands without the CUDA
+index and `device=mps` (untested) or `device=cpu` (works, slow). The **CHECK ENVIRONMENT**
+button probes the second venv without loading weights; the TRANSCRIBE task picks vocal-only,
+vocal+instrumental, or full-score (with chords) output. Running both models sequentially on
+one GPU is the supported setup.
+
+Manual walkthrough (`C1`/`C2`), failure behavior and hardware expectations:
+[docs/COVER_EDIT.md](docs/COVER_EDIT.md).
+
+## Edit a work and compare
+
+**07 // EDIT** is the iteration loop from the upstream skill: load a saved work → **FREEZE
+BASELINE** (hashes + copies of `score.abc`/`request.json`; the original run directory is never
+modified) → edit the ABC → **CHECK INVARIANTS** (exact sounding-note/meter comparison, per
+voice, with an explicit allow-tempo flag) → **GENERATE EDITED**.
+
+Generation refuses to run unless the check passed on exactly the current ABC: the edited score
+is always submitted, so an edit can never silently fall back to a fresh plan. `ALLOW
+MELODY/RHYTHM CHANGES` exists for intentional adaptations. Each attempt is a new run directory
+with `edit_manifest.json` (source/edit hashes, invariant result, permitted changes), and
+**BUILD COMPARISON // baseline vs edit** creates a local listening page from both runs.
+
+Manual walkthrough (`E1`) and the failure cases (`X`):
+[docs/COVER_EDIT.md](docs/COVER_EDIT.md).
+
 ## Keeping up with upstream
 
 YuE2 moves quickly. This UI pins nothing about upstream at the code level; the compatibility
@@ -192,6 +257,11 @@ matrix is:
 | yue2-groove | YuE2 (`yue2-infer`) | Notes |
 |---|---|---|
 | 0.1.x | `yue2-v0.1.6` | NAR/VAE progress via an internal hook; a [pull request](https://github.com/multimodal-art-projection/YuE/pull/173) adds a public `on_progress` callback that the UI uses automatically once merged |
+
+SheetSage2 is used only by 06 COVER, through its Transformers interface
+(`AutoModel.from_pretrained(..., trust_remote_code=True)` then `transcribe(..., melody_only=True)`).
+The driver verifies that `melody_only` is an explicit keyword and refuses older revisions
+instead of guessing; it never imports SheetSage2's code into this process.
 
 To upgrade YuE2:
 
@@ -215,14 +285,24 @@ uv pip install --python .venv/bin/python -e ".[test]" --overrides overrides/maco
 - `yue2_groove/library.py` — the Library backend; standard library only, reads run
   directories by file convention and never imports `yue2`.
 - `yue2_groove/adapter.py` — every call into `yue2`; keep it that way.
+- `yue2_groove/sheetsage_adapter.py` — the only module that runs SheetSage2; subprocess,
+  progress, cancel. It never imports `transformers` in this process.
+- `yue2_groove/sheetsage_driver.py` — the stdlib-only script executed inside the SheetSage2
+  venv (adapted from upstream's `skills/yue2-music/scripts/transcribe.py`).
+- `yue2_groove/cover.py` — transcription task → plan mode, chord stripping, cover request.
+- `yue2_groove/edit_flow.py` — baseline freeze, invariant check, edit manifest.
 - `yue2_groove/vendor/` — `abc_tools.py` and `listen.py` copied from upstream's
   `skills/yue2-music/scripts` (Apache 2.0; the wheel does not ship them).
 - `scripts/serve.sh` — service manager; `scripts/mps_sdpa_check.py` — MPS kernel guard.
+- `docs/COVER_EDIT.md` — 06 COVER / 07 EDIT manual, manual E2E checks C1/C2/E1/X.
 
 ## Credits and license
 
 - [YuE2](https://github.com/multimodal-art-projection/YuE) by the Multimodal Art Projection
   team — the model and the `yue2` runtime (Apache 2.0). Model weights: CC BY-NC 4.0.
+- [SheetSage2](https://huggingface.co/m-a-p/SheetSage2) and
+  [MERT-v2-FullSong](https://huggingface.co/m-a-p/MERT-v2-FullSong) — optional audio→score
+  models for 06 COVER, loaded from their public snapshots. Weights: CC BY-NC 4.0.
 - [abcjs](https://github.com/paulrosen/abcjs) renders the scores (MIT).
 - This repository: Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
   Not affiliated with or endorsed by the YuE2 authors.
