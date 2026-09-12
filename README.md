@@ -9,6 +9,7 @@ browser, adds a library of your generated works, and runs as a small local servi
 - **01 // GENERATE** — style + lyrics (+ optional ABC score) → editable plan → song.
   Plan mode `full / melody / off`, seed, CFG scale, all seven sampling parameters of both
   phases, budget presets, cancel, live progress, a rendered score, one-click artifact download.
+  **ALL MODES** runs the same text request as `full` + `melody` + `off` and compares them.
 - **02 // DECODE** — re-decode a saved `latent.npy` with another decoder
   (source / standard / legacy / custom VAE, full or tiled) without generating again.
 - **03 // BATCH** — one JSON request per line, run in order, with a results table.
@@ -248,6 +249,15 @@ with `edit_manifest.json` (source/edit hashes, invariant result, permitted chang
 
 Manual walkthrough (`E1`) and the failure cases (`X`):
 [docs/COVER_EDIT.md](docs/COVER_EDIT.md).
+
+## Compare the three plan modes
+
+**ALL MODES** (01 GENERATE) runs the same text request three times — `full`, `melody`, `off` —
+like upstream's `all-modes`: text-only input (an ABC would be invalid for `off`), one fresh
+directory per mode under `runs/<stamp>-allmodes-<id>/`, a `run.json` summary at the group root,
+and a retained `failure.json` when one mode fails while the others keep running. Each mode
+appears in 05 LIBRARY like any other work, and when at least two modes complete the UI also
+builds the same local listening bundle as 04 TOOLS with the link shown under the buttons.
 
 ## Keeping up with upstream
 

@@ -6,7 +6,8 @@ for one parameter.
 
   01 GENERATE   style + lyrics (+ optional ABC) → editable score plan → 48 kHz stereo song;
                 all sampling parameters of both the ABC and the semantic phase; plan mode
-                full/melody/off, seed, cfg_scale, custom id, cancel, live progress
+                full/melody/off, seed, cfg_scale, custom id, cancel, live progress; ALL MODES
+                runs the same text request as full + melody + off and compares them
   02 DECODE     re-decode a saved latent.npy (source / standard / legacy / custom VAE,
                 full or tiled) without generating again; single .npy upload supported
   03 BATCH      one JSON request per line (the equivalent of ``yue2 batch``), run in order
@@ -231,12 +232,12 @@ def _update_run_choices():
 
 
 def _scan_batches():
-    """[(label, batch_dir)] for batch runs that contain saved songs with result.json."""
+    """[(label, batch_dir)] for batch or all-modes groups with saved songs."""
     out = []
     if not RUNS.is_dir():
         return out
     for d in sorted(RUNS.iterdir(), reverse=True):
-        if not d.is_dir() or "batch" not in d.name:
+        if not d.is_dir() or not ("batch" in d.name or "-allmodes-" in d.name):
             continue
         songs = [p for p in sorted(d.iterdir()) if p.is_dir() and (p / "result.json").is_file()]
         if songs:
@@ -385,6 +386,133 @@ def generate(style, lyrics, cot, seed, cfg_scale, abc_text, out_id, preset,
     except Exception as exc:  # noqa: BLE001
         yield gr.update(), gr.update(), \
             f"Generation failed: {type(exc).__name__}: {exc}", gr.update(), *idle
+    finally:
+        _RUNNING.release()
+
+
+ALL_MODES = ("full", "melody", "off")
+
+
+def generate_all_modes(style, lyrics, seed, cfg_scale, abc_text, out_id,
+                       abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
+                       sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max,
+                       device, dtype, backend, quantization, offload_ar, budget, ode_steps,
+                       vae_core_frames, model, vae_choice, vae_custom, revision, vae_revision,
+                       offline, progress=gr.Progress()):
+    """Generator: the same text request as full / melody / off, then a comparison.
+
+    Mirrors upstream's ``all-modes``: text-only input (``cot=off`` cannot accept an
+    ABC), one fresh directory per mode, a ``run.json`` summary at the group root,
+    failures retained as ``failure.json``, and a listening bundle of the modes that
+    completed.  Buttons are disabled while running; CANCEL stops after the current
+    mode.
+    """
+    if (abc_text or "").strip():
+        raise gr.Error("ALL MODES is text-only: cot=off cannot accept an ABC score. Clear "
+                       "ABC SCORE, or generate the modes one by one with their own ABC.")
+    style, lyrics = _request_texts(style, lyrics)
+    base_id = (out_id or "").strip() or _slug(style)
+    try:
+        adapter.song_request(style=style, lyrics=lyrics, cot="full", seed=int(seed), id=base_id)
+    except (ValueError, TypeError) as exc:
+        raise gr.Error(f"Invalid request: {exc}") from exc
+    abc_sampling = _sampling(abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max, "ABC phase")
+    sem_sampling = _sampling(sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max,
+                             "semantic phase")
+
+    _CANCEL.clear()
+    if not _RUNNING.acquire(blocking=False):
+        yield gr.update(), gr.update(), gr.update(), \
+            "Another job is already running — wait for it to finish", \
+            gr.update(), gr.update(), gr.update()
+        return
+    busy = (gr.update(interactive=False),) * 3
+    idle = (gr.update(interactive=True),) * 3
+    try:
+        yield gr.update(), gr.update(), gr.update(), \
+            "Starting ALL MODES (full → melody → off)…", *busy
+        pipe, note = _get_pipe(device, dtype, backend, quantization, offload_ar, budget,
+                               ode_steps, vae_core_frames, model, vae_choice, vae_custom,
+                               revision, vae_revision, offline, progress)
+        root = RUNS / f"{time.strftime('%Y%m%d-%H%M%S')}-allmodes-{_slug(base_id)}"
+        results, files, done_dirs = [], [], []
+        for position, mode in enumerate(ALL_MODES):
+            mode_dir = root / mode
+            if _CANCEL.is_set():
+                results.append({"mode": mode, "status": "cancelled"})
+                break
+            kwargs = {"style": style, "lyrics": lyrics, "cot": mode, "seed": int(seed),
+                      "id": f"{base_id}_{mode}"}
+            if cfg_scale:
+                kwargs["cfg_scale"] = float(cfg_scale)
+            request = adapter.song_request(**kwargs)
+
+            def scoped(value, desc=None, position=position, mode=mode):
+                fraction = position + (0.0 if value is None else min(1.0, float(value)))
+                progress(min(1.0, fraction / len(ALL_MODES)),
+                         desc=f"[{mode}] {desc}" if desc else f"[{mode}]")
+
+            try:
+                mode_dir.mkdir(parents=True, exist_ok=True)
+                (mode_dir / "input.json").write_text(
+                    json.dumps(request.to_dict(), ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8")
+                song, receipt, elapsed = _run_generation(
+                    pipe, request, mode_dir, abc_sampling=abc_sampling,
+                    semantic_sampling=sem_sampling, progress=scoped, note=note)
+                results.append({"mode": mode, "status": "complete",
+                                "audio_seconds": receipt["audio_seconds"],
+                                "truncated": receipt["truncated"],
+                                "seconds": round(elapsed, 2)})
+                files += _artifact_files(mode_dir, bool(song.abc))
+                done_dirs.append(str(mode_dir))
+            except InterruptedError as exc:
+                record = {"mode": mode, "status": "cancelled", "error": str(exc)}
+                (mode_dir / "failure.json").write_text(
+                    json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                results.append(record)
+                break
+            except Exception as exc:  # noqa: BLE001 — keep going; the failure is retained
+                record = {"mode": mode, "status": "failed", "type": type(exc).__name__,
+                          "error": str(exc)}
+                mode_dir.mkdir(parents=True, exist_ok=True)
+                (mode_dir / "failure.json").write_text(
+                    json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                results.append(record)
+            progress((position + 1) / len(ALL_MODES), desc=f"{mode} finished")
+
+        root.mkdir(parents=True, exist_ok=True)
+        summary = {"action": "all-modes", "request": {"style": style, "lyrics": lyrics,
+                   "seed": int(seed), "cfg_scale": float(cfg_scale) if cfg_scale else None,
+                   "id": base_id}, "results": results}
+        (root / "run.json").write_text(
+            json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+        link, comparison = "", ""
+        if len(done_dirs) >= 2:
+            progress(0.98, desc="Building listening comparison…")
+            try:
+                _html, link, comparison = make_comparison("\n".join(done_dirs))
+            except gr.Error as exc:
+                comparison = f"comparison failed: {exc}"
+
+        lines = [f"ALL MODES finished: {root}", ""]
+        for record in results:
+            if record["status"] == "complete":
+                lines.append(f"  {record['mode']:<7} complete  {record['audio_seconds']:.1f}s "
+                             f"audio in {record['seconds']:.0f}s  truncated={record['truncated']}")
+            else:
+                lines.append(f"  {record['mode']:<7} {record['status']}  "
+                             f"{record.get('error', '')}")
+        lines += ["", note]
+        if comparison:
+            lines.append(comparison)
+        if len(done_dirs) < 2:
+            lines.append("(the comparison needs at least two completed modes)")
+        yield gr.update(), files, link, "\n".join(lines), *idle
+    except Exception as exc:  # noqa: BLE001
+        yield gr.update(), gr.update(), gr.update(), \
+            f"ALL MODES failed: {type(exc).__name__}: {exc}", *idle
     finally:
         _RUNNING.release()
 
@@ -1398,7 +1526,8 @@ table { border-color: var(--bb-line) !important; }
 #bb-env-status textarea { font-size: 11.5px !important; line-height: 1.55 !important;
   letter-spacing: .04em; color: var(--bb-ink3) !important; }
 /* listening comparison link */
-#bb-compare-link a {
+#bb-compare-link a,
+#bb-allmodes-link a {
   display: inline-block; margin-top: 4px; color: var(--bb-ink) !important;
   font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
   text-decoration: underline; text-underline-offset: 3px;
@@ -2025,8 +2154,11 @@ def build_ui(defaults):
                             run_btn = gr.Button("GENERATE", variant="primary", size="lg", scale=3,
                                                 elem_id="bb-run")
                             plan_btn = gr.Button("PLAN ONLY", size="lg", scale=2, elem_id="bb-plan")
+                            allmodes_btn = gr.Button("ALL MODES", size="lg", scale=2,
+                                                     elem_id="bb-allmodes")
                             cancel_btn = gr.Button("CANCEL", variant="stop", size="lg", scale=1,
                                                    elem_id="bb-cancel")
+                        allmodes_link = gr.HTML(elem_id="bb-allmodes-link")
                         with gr.Accordion("SCORE INPUT (optional)", open=False):
                             abc = gr.Textbox(label="ABC SCORE", lines=8,
                                              placeholder="Leave empty to let the model plan")
@@ -2156,7 +2288,7 @@ def build_ui(defaults):
                             abc_compare_out = gr.Textbox(label="COMPARE RESULT", lines=6)
                         with gr.Accordion("LISTENING COMPARISON (static HTML)", open=False):
                             with gr.Row():
-                                batch_pick = gr.Dropdown(label="FILL FROM BATCH RUN",
+                                batch_pick = gr.Dropdown(label="FILL FROM GROUP RUN (BATCH / ALL MODES)",
                                                          choices=[c for c, _ in _scan_batches()],
                                                          interactive=True, scale=4,
                                                          elem_id="bb-batch-pick")
@@ -2410,6 +2542,13 @@ def build_ui(defaults):
                                abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max]
                               + model_args,
                        outputs=[score_out, gen_status, files_out, run_btn, plan_btn])
+        allmodes_btn.click(generate_all_modes,
+                           inputs=[style, lyrics, seed, cfg, abc, out_id,
+                                   abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
+                                   sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max]
+                                  + model_args,
+                           outputs=[gen_status, files_out, allmodes_link,
+                                    run_btn, plan_btn, allmodes_btn])
         # Cooperative cancel only: do NOT use cancels=[...] here, because Gradio would
         # tear down the running generator event and drop its final "re-enable buttons" yield.
         cancel_btn.click(cancel_run, outputs=gen_status)
