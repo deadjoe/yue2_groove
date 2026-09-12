@@ -32,11 +32,11 @@ that fail loudly when an upstream release changes something the UI depends on.
 Dark scene (the UI also has a bright one). **05 // LIBRARY** — work list, spectrum player,
 per-run request / sampling tables:
 
-<img src="docs/images/library-dark.png" alt="05 // LIBRARY: work list, spectrum player, request and sampling tables" width="100%">
+<img src="docs/images/library-dark.webp" alt="05 // LIBRARY: work list, spectrum player, request and sampling tables" width="100%">
 
 **01 // GENERATE** — style, lyrics, plan mode, sampling presets, score and status panes:
 
-<img src="docs/images/generate-dark.png" alt="01 // GENERATE: style, lyrics, plan mode, sampling presets" width="58%">
+<img src="docs/images/generate-dark.webp" alt="01 // GENERATE: style, lyrics, plan mode, sampling presets" width="58%">
 
 ## Requirements
 
