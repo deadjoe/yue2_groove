@@ -23,13 +23,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - name: Install (CPU torch from the PyTorch index)
+      - name: Install CPU torch (upstream's pin, from the PyTorch index)
         run: |
           uv venv .venv --python 3.12
+          uv pip install --python .venv/bin/python "torch==2.10.0" \
+            --index-url https://download.pytorch.org/whl/cpu
+      - name: Install YuE2 and yue2-groove
+        run: |
           uv pip install --python .venv/bin/python \
             "yue2-infer @ git+https://github.com/multimodal-art-projection/YuE@${{ matrix.upstream }}" \
-            -e ".[test]" --overrides overrides/linux.txt \
-            --extra-index-url https://download.pytorch.org/whl/cpu
+            -e ".[test]" --overrides overrides/linux.txt
       - name: Model-free tests (library, adapter, upstream contract)
         run: .venv/bin/python -m pytest -q
       - name: Import and build the UI
