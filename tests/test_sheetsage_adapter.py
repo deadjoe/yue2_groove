@@ -154,6 +154,15 @@ def test_transcribe_missing_audio_is_refused_before_spawning(monkeypatch, tmp_pa
         adapter.transcribe(tmp_path / "nope.wav")
 
 
+def test_unconfigured_environment_leaves_no_output_directory(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("YUE2_GROOVE_SHEETSAGE_PYTHON", raising=False)
+    audio = tmp_path / "reference.wav"
+    audio.write_bytes(b"RIFF")
+    with pytest.raises(adapter.SheetsageNotConfigured):
+        adapter.transcribe(audio, output_dir=tmp_path / "nested" / "out")
+    assert not (tmp_path / "nested").exists()
+
+
 def test_cancel_terminates_the_driver(monkeypatch, tmp_path: Path) -> None:
     audio = tmp_path / "reference.wav"
     audio.write_bytes(b"RIFF")

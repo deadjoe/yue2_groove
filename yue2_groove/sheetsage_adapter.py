@@ -227,11 +227,12 @@ def transcribe(audio_path, *, output_dir=None, task: str = "melody-full",
 
     output = Path(output_dir).expanduser() if output_dir else _default_output_dir(audio)
     output = _unique_dir(output)
-    output.parent.mkdir(parents=True, exist_ok=True)
     cmd = build_command(audio, output, python=python, task=task, model=model,
                         revision=revision, base_model=base_model, offline=offline,
                         device=device, dtype=dtype, preset=preset,
                         max_seconds=max_seconds, threads=threads)
+    # Only touch the filesystem after the environment checks above passed.
+    output.parent.mkdir(parents=True, exist_ok=True)
 
     def report(fraction, description):
         if progress is not None:
