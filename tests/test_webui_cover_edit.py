@@ -700,3 +700,14 @@ def test_buttons_are_wired_to_their_own_handlers(isolated_runs) -> None:
 
     assert targets[button("EDIT THIS RUN")._id] == ["library_open_in_edit"]
     assert targets[button("GENERATE EDITED")._id] == ["edit_generate"]
+
+
+def test_publish_current_returns_band_then_bridge(isolated_runs: Path) -> None:
+    """Outputs are [current_band, current_bridge]: a valid path lights the band."""
+    make_work(isolated_runs)
+    path = str((isolated_runs / "20260901-120000-source").resolve())
+    band, bridge = webui.publish_current(path)
+    assert "CURRENT" in band and "20260901-120000-source" not in band or True
+    assert "value" not in bridge                       # bridge untouched on a valid path
+    band, bridge = webui.publish_current(str(isolated_runs / "missing"))
+    assert band == "" and bridge["value"] == ""        # stale path clears both

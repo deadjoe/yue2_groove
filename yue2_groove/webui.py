@@ -1104,8 +1104,8 @@ def publish_current(path):
     """Band for the hidden current-work bridge; clears an invalid stored path once."""
     text = workflow.band(RUNS, path)
     if (path or "").strip() and not text:
-        return gr.update(value=""), ""      # stale localStorage entry: drop it, then settle
-    return gr.update(), text
+        return "", gr.update(value="")      # (band, bridge): stale entry — clear both
+    return text, gr.update()                # band rendered, bridge untouched
 
 
 def _rel_of_run(value) -> str:
@@ -2509,6 +2509,8 @@ CURRENT_WORK_JS = r"""(function () {
     }
     if (el.value && el.value !== stored) {
       try { localStorage.setItem(KEY, el.value); } catch (e) {}   // server-set: remember it
+    } else if (!el.value && stored) {
+      try { localStorage.removeItem(KEY); } catch (e) {}          // server cleared a stale path
     }
   }, 500);
 })();"""
