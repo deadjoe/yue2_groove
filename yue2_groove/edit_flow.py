@@ -98,6 +98,29 @@ def _compare_pitch(before, after, names) -> dict:
             "scope": "ordered pitch sequence per voice; rhythm, meter and tempo are not gated"}
 
 
+def _compare_exact_without_meter(before, after, names, allow_tempo_change: bool) -> dict:
+    """Exact notes/tempo comparison with the bar-time-grid check reported, not gated.
+
+    Local implementation instead of filtering the vendored checker's message text,
+    so ``ALLOW METER CHANGE`` cannot silently break when upstream rewords a string.
+    """
+    differences, allowed = [], []
+    if before.bpm != after.bpm and not allow_tempo_change:
+        differences.append("quarter-note tempo differs")
+    for name in names:
+        a, b = before.voices[name], after.voices[name]
+        if a.notes != b.notes:
+            common = min(len(a.notes), len(b.notes))
+            first = next((i for i in range(common) if a.notes[i] != b.notes[i]), common)
+            differences.append(f"{name}: sounding notes differ starting at note {first + 1} "
+                               f"(pitch, onset or duration)")
+        if a.bars != b.bars:
+            allowed.append(f"{name}: meter/time grid differs (permitted by ALLOW METER CHANGE)")
+    return {"match": not differences, "compared_voices": list(names),
+            "differences": differences, "allowed_differences": allowed,
+            "scope": "sounding notes and meter-reported; bar-grid differences permitted"}
+
+
 def check_invariants(before_abc: str, after_abc: str, *, voices: str = "both",
                      allow_tempo_change: bool = False, allow_meter_change: bool = False,
                      contract: str = "exact") -> dict:
@@ -115,19 +138,18 @@ def check_invariants(before_abc: str, after_abc: str, *, voices: str = "both",
     before = abc_tools.parse_abc(before_text)
     after = abc_tools.parse_abc(after_text)
     if contract == "free":
-        result = {"match": True, "compared_voices": list(names), "differences": [],
-                  "scope": "free adaptation: differences are recorded, nothing is gated"}
+        # report, do not gate: the same comparison as exact, with the verdict forced true
+        reported = abc_tools.compare(before, after, names=names, allow_tempo_change=True)
+        result = {"match": True, "compared_voices": list(names),
+                  "differences": reported["differences"],
+                  "scope": "free adaptation: differences are listed for the record, nothing is gated"}
     elif contract == "pitch":
         result = _compare_pitch(before, after, names)
+    elif allow_meter_change:
+        result = _compare_exact_without_meter(before, after, names, bool(allow_tempo_change))
     else:
         result = abc_tools.compare(before, after, names=names,
                                    allow_tempo_change=bool(allow_tempo_change))
-        if allow_meter_change:
-            allowed = [d for d in result["differences"] if "meter/time grid differs" in d]
-            result["differences"] = [d for d in result["differences"]
-                                     if "meter/time grid differs" not in d]
-            result["match"] = not result["differences"]
-            result["allowed_differences"] = allowed
     result.setdefault("tempo_change_allowed", bool(allow_tempo_change))
     result["meter_change_allowed"] = bool(allow_meter_change)
     result["contract"] = contract

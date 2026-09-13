@@ -997,12 +997,13 @@ def cover_generate(style, lyrics, abc_text, task, keep_voice, seed, cfg_scale,
     _CANCEL.clear()
     if not _RUNNING.acquire(blocking=False):
         yield ("Another job is already running — wait for it to finish",
-               gr.update(), gr.update(), gr.update(), *((gr.update(),) * 7))
+               gr.update(), gr.update(), gr.update(), *((gr.update(),) * 7), gr.skip())
         return
     controls = (gr.update(interactive=False),) * 7
     idle = (gr.update(interactive=True),) * 7
     try:
-        yield "Starting cover generation…", gr.update(), gr.update(), gr.update(), *controls
+        yield ("Starting cover generation…", gr.update(), gr.update(), gr.update(), *controls,
+               gr.skip())
         pipe, note = _get_pipe(device, dtype, backend, quantization, offload_ar, budget,
                                ode_steps, vae_core_frames, model, vae_choice, vae_custom,
                                revision, vae_revision, offline, progress)
@@ -1013,12 +1014,12 @@ def cover_generate(style, lyrics, abc_text, task, keep_voice, seed, cfg_scale,
             progress=progress, note=note)
         yield (_generation_status(song, result, outdir, elapsed, request, note),
                str(outdir / "audio.flac"), (song.abc or ""),
-               _artifact_files(outdir, bool(song.abc)), *idle)
+               _artifact_files(outdir, bool(song.abc)), *idle, str(outdir))
     except InterruptedError as exc:
-        yield f"Cancelled: {exc}", gr.update(), gr.update(), gr.update(), *idle
+        yield f"Cancelled: {exc}", gr.update(), gr.update(), gr.update(), *idle, gr.skip()
     except Exception as exc:  # noqa: BLE001
         yield (f"Generation failed: {type(exc).__name__}: {exc}",
-               gr.update(), gr.update(), gr.update(), *idle)
+               gr.update(), gr.update(), gr.update(), *idle, gr.skip())
     finally:
         _RUNNING.release()
 
@@ -1066,7 +1067,8 @@ def cover_send_to_generate(text, task, style, lyrics, keep_voice):
 # ───────────────── edit tab (see edit_flow.py) ─────────────────
 
 BUSY_HTML = ('<div id="bb-busy" role="status" aria-live="polite">'
-             '● JOB RUNNING — other tabs stay locked until it finishes or you press CANCEL'
+             '● JOB RUNNING — a second job is refused until it finishes; use CANCEL on the '
+             'running tab to stop it'
              '</div>')
 
 
@@ -2049,8 +2051,8 @@ TIPS = {
     "SAMPLING // FROM 01 GENERATE": "Read-only mirror of 01 GENERATE → ADVANCED // SAMPLING. Both flows share those sliders; change them there.",
     "CONTRACT": "What CHECK INVARIANTS must preserve: EXACT keeps notes, meter and durations (tempo/meter optional); PITCH keeps only the ordered pitch sequence, so rhythm may change; FREE records differences without gating anything.",
     "ALLOW METER CHANGE": "EXACT contract only: treat bar/time-grid differences as permitted instead of a violation.",
-    "ALLOW MELODY/RHYTHM CHANGES": "Permit generating even when CHECK INVARIANTS reports differences (intentional adaptations). It does not skip FREEZE BASELINE or the check itself.",
-    "CHECK RESULT": "Exact sounding-note / meter comparison of baseline vs edit. Chord-only edits pass; pitch or rhythm changes are reported by voice.",
+    "ALLOW MELODY/RHYTHM CHANGES": "Permit generating even when CHECK INVARIANTS did not pass (e.g. an intentional pitch edit under EXACT). The FREE contract already permits everything, so this override only matters for EXACT/PITCH; it never skips FREEZE BASELINE or the check itself.",
+    "CHECK RESULT": "Result of CHECK INVARIANTS under the chosen CONTRACT: EXACT compares sounding notes and the meter grid (tempo/meter permissions optional), PITCH compares only the ordered pitch sequence, FREE lists the differences without gating anything. Chord-only edits pass under EXACT.",
     "COMPARISON": "Baseline vs edited render: a local listening page built from both run directories.",
 }
 
@@ -2677,6 +2679,8 @@ def build_ui(defaults):
                                 cover_generate_btn = gr.Button("GENERATE COVER", variant="primary",
                                                                size="lg", scale=2,
                                                                elem_id="bb-cover-generate")
+                                cover_open_library_btn = gr.Button("OPEN IN LIBRARY", size="lg",
+                                                                   scale=1)
                             cover_sampling_note = gr.Textbox(
                                 label="SAMPLING // FROM 01 GENERATE", lines=2,
                                 interactive=False, elem_id="bb-cover-sampling")
@@ -2693,6 +2697,7 @@ def build_ui(defaults):
                             with gr.Accordion("GENERATED FILES", open=False):
                                 cover_gen_files = gr.File(label="FILES", file_count="multiple",
                                                           height=120)
+                            cover_last_run = gr.State("")
                         with gr.Accordion("TRANSCRIPTION ARTIFACTS", open=False):
                             cover_files = gr.File(label="FILES", file_count="multiple", height=120,
                                                   elem_id="bb-cover-files")
@@ -3102,7 +3107,9 @@ def build_ui(defaults):
                     abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
                     sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max] + model_args,
             outputs=[cover_status, cover_result_audio, cover_result_abc, cover_gen_files,
-                     *cover_controls])
+                     *cover_controls, cover_last_run])
+        cover_open_library_btn.click(open_last_in_library, inputs=[cover_last_run],
+                                     outputs=library_outputs_for_flow)
         cover_cancel_btn.click(cancel_run, outputs=cover_status)
         cover_env_btn.click(cover_check_environment, outputs=cover_status)
         cover_unload_btn.click(cover_unload_worker, outputs=cover_status)
