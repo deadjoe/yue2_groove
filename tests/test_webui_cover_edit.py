@@ -67,20 +67,21 @@ def test_cover_strip_and_send_flow() -> None:
     stripped, status = webui.cover_strip(BASE_ABC, "both")
     assert '"C"' not in stripped and "verified" in status
 
-    (score_update, cot_update, style_update, lyrics_update, tab_update,
+    (score_update, cot_update, style_update, lyrics_update, score_input, tab_update,
      status) = webui.cover_send_to_generate(BASE_ABC, "melody-full",
                                             "English jazz", "[Verse]\nla", "both")
     assert '"C"' not in score_update["value"] and score_update["value"].startswith("X:1")
     assert cot_update["value"] == "melody" and tab_update["selected"] == "gen"
     assert style_update["value"] == "English jazz" and lyrics_update["value"] == "[Verse]\nla"
-    assert "STYLE, LYRICS" in status and "GENERATE" in status
+    assert score_input["open"] is True                      # the attached score is visible
+    assert "STYLE, LYRICS" in status and "chord-free" in status and "GENERATE" in status
 
     # empty target fields do not wipe what 01 GENERATE already has
-    (score_update, cot_update, style_update, lyrics_update, _tab,
+    (score_update, cot_update, style_update, lyrics_update, _score_input, _tab,
      status) = webui.cover_send_to_generate(BASE_ABC, "full", "", "  ", "both")
     assert '"C"' in score_update["value"] and cot_update["value"] == "full"
     assert "value" not in style_update and "value" not in lyrics_update
-    assert "STYLE, LYRICS" not in status
+    assert "STYLE, LYRICS" not in status and "full score" in status
 
     with pytest.raises(gr.Error, match="Cannot send"):
         webui.cover_send_to_generate("   ", "melody-full", "", "", "both")
@@ -172,7 +173,9 @@ def test_edit_load_fills_the_baseline(isolated_runs: Path) -> None:
 
 def test_edit_freeze_and_check_guards(isolated_runs: Path) -> None:
     make_work(isolated_runs)
-    record, info, status = webui.edit_freeze("20260901-120000-source")
+    with pytest.raises(gr.Error, match="press LOAD first"):
+        webui.edit_freeze("20260901-120000-source", "20260901-129999-other")
+    record, info, status = webui.edit_freeze("20260901-120000-source", "20260901-120000-source")
     assert record["schema"] == "yue2-groove-baseline-v1" and "untouched" in info
     assert "frozen" in status
     with pytest.raises(gr.Error, match="Load a source work"):
@@ -503,14 +506,15 @@ def test_cover_send_to_edit_hands_over_the_source(isolated_runs: Path) -> None:
     make_work(isolated_runs)
     edited = BASE_ABC.replace('"C"E2G2A2G2E2D2C4', '"C"F2G2A2G2E2D2C4')
     (abc_update, baseline, style_update, lyrics_update, rel, check_state, baseline_state,
-     info, status, tab_update) = webui.cover_send_to_edit(edited, "20260901-120000-source",
-                                                          "jazz", "")
+     info, status, source_update, tab_update) = webui.cover_send_to_edit(
+        edited, "20260901-120000-source", "jazz", "")
     assert abc_update["value"] == edited.strip()
     assert baseline == BASE_ABC.strip()               # checked against the frozen source
     assert rel == "20260901-120000-source" and check_state == {} and baseline_state is None
     assert style_update["value"] == "jazz"            # COVER wins...
     assert lyrics_update["value"].startswith("[Verse]")   # ...source fills the rest
     assert "FREEZE BASELINE" in status and "FREEZE BASELINE" in info
+    assert source_update["value"] == "20260901-120000-source"   # visible dropdown stays in sync
     assert tab_update["selected"] == "edit"
 
     with pytest.raises(gr.Error, match="Transcribe or load"):

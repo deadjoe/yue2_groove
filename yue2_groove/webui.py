@@ -959,11 +959,13 @@ def cover_send_to_edit(abc_text, rel, style, lyrics):
             source_abc,                        # baseline ABC for CHECK INVARIANTS
             gr.update(value=style_value) if style_value else gr.update(),
             gr.update(value=lyrics_value) if lyrics_value else gr.update(),
-            rel,                               # SOURCE WORK in 03 EDIT
+            rel,                               # SOURCE WORK in 03 EDIT (state)
             {},                                # check state reset
             None,                              # not frozen yet: FREEZE BASELINE is required
             f"From 02 COVER: baseline = {rel}. Press FREEZE BASELINE, then CHECK INVARIANTS.",
             "Loaded from 02 COVER — FREEZE BASELINE is required before CHECK / GENERATE EDITED.",
+            gr.update(choices=[value for _label, value in
+                               _library_choices(_library_mode("time", "desc"))[1]], value=rel),
             gr.update(selected="edit"))
 
 
@@ -1053,10 +1055,12 @@ def cover_send_to_generate(text, task, style, lyrics, keep_voice):
         lyrics_update = gr.update(value=lyrics.strip())
         copied.append("LYRICS")
     what = f" and the {', '.join(copied)} typed here" if copied else ""
-    status = (f"Sent to 01 GENERATE: PLAN MODE={cot.upper()}, the ABC score{what}. "
-              f"Add anything still missing there, then press GENERATE.")
+    detail = "chord-free (melody mode)" if cot == "melody" else "full score (with chords)"
+    status = (f"Sent to 01 GENERATE: PLAN MODE={cot.upper()}, the {detail} ABC{what}. "
+              f"SCORE INPUT is open so you can review it; add anything still missing, "
+              f"then press GENERATE.")
     return (gr.update(value=prepared), gr.update(value=cot), style_update, lyrics_update,
-            gr.update(selected="gen"), status)
+            gr.update(open=True), gr.update(selected="gen"), status)
 
 
 # ───────────────── edit tab (see edit_flow.py) ─────────────────
@@ -1087,9 +1091,13 @@ def edit_load(rel):
             f"Loaded {item['name']} as the edit source.")
 
 
-def edit_freeze(source_rel):
+def edit_freeze(source_rel, visible_rel=""):
     if not (source_rel or "").strip():
         raise gr.Error("Load a source work first")
+    if (visible_rel or "").strip() and visible_rel.strip() != source_rel.strip():
+        raise gr.Error(f"SOURCE WORK now shows “{visible_rel.strip()}” but “{source_rel.strip()}” "
+                       f"is loaded — press LOAD first so the baseline you freeze is the one you "
+                       f"see")
     try:
         record = edit_flow.freeze_baseline(RUNS, source_rel)
     except (ValueError, OSError) as exc:
@@ -2428,7 +2436,8 @@ def build_ui(defaults):
                             cancel_btn = gr.Button("CANCEL", variant="stop", size="lg", scale=1,
                                                    elem_id="bb-cancel")
                         allmodes_link = gr.HTML(elem_id="bb-allmodes-link")
-                        with gr.Accordion("SCORE INPUT (optional)", open=False):
+                        with gr.Accordion("SCORE INPUT (optional)",
+                                          open=False) as score_input_accordion:
                             abc = gr.Textbox(label="ABC SCORE", lines=8,
                                              placeholder="Leave empty to let the model plan")
                         with gr.Accordion("ADVANCED // SAMPLING", open=False):
@@ -2971,12 +2980,14 @@ def build_ui(defaults):
             cover_send_to_edit,
             inputs=[cover_abc, cover_source, cover_style, cover_lyrics],
             outputs=[edit_abc, edit_baseline_abc, edit_style, edit_lyrics, edit_source_rel,
-                     edit_check_state, edit_baseline_state, edit_baseline_info, edit_status, tabs])
+                     edit_check_state, edit_baseline_state, edit_baseline_info, edit_status,
+                     edit_source, tabs])
         cover_strip_btn.click(cover_strip, inputs=[cover_abc, cover_keep],
                               outputs=[cover_abc, cover_status])
         cover_send_btn.click(cover_send_to_generate,
                              inputs=[cover_abc, cover_task, cover_style, cover_lyrics, cover_keep],
-                             outputs=[abc, cot, style, lyrics, tabs, cover_status])
+                             outputs=[abc, cot, style, lyrics, score_input_accordion, tabs,
+                                      cover_status])
 
         # ───── edit wiring (pure logic in edit_flow.py) ─────
         edit_tab.select(edit_choices, outputs=edit_source)
@@ -3000,7 +3011,7 @@ def build_ui(defaults):
             edit_load, inputs=[edit_source],
             outputs=[edit_style, edit_lyrics, edit_abc, edit_baseline_abc, edit_source_rel,
                      edit_check_state, edit_baseline_state, edit_baseline_info, edit_status])
-        edit_freeze_btn.click(edit_freeze, inputs=[edit_source_rel],
+        edit_freeze_btn.click(edit_freeze, inputs=[edit_source_rel, edit_source],
                               outputs=[edit_baseline_state, edit_baseline_info, edit_status])
         edit_check_btn.click(
             edit_check,
