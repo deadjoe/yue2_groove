@@ -768,7 +768,11 @@ LIBRARY_JS = r"""(function () {
         var ctx = audioCtx();
         if (ctx && ctx.state === 'suspended') { try { ctx.resume(); } catch (error) {} }
         ensureAnalyser(state);
-        var p = audio.play(); if (p && p.catch) p.catch(function () {});
+        var p = audio.play();
+        if (p && p.catch) p.catch(function () {
+          if (audio.error) return;        // the error listener owns a broken file
+          if (time) time.textContent = 'playback blocked — click play again';
+        });
       } else { audio.pause(); }
     });
     var back = player.querySelector('[data-bb-back]');
@@ -945,6 +949,45 @@ LIBRARY_JS = r"""(function () {
     reap();
     renderScore();
   }
+  // Gradio swaps the details pane asynchronously. Binding only from a 700 ms
+  // interval left a window in which a freshly rendered player had no listeners,
+  // so clicking play did nothing until a later tick (or a page refresh). Bind as
+  // soon as nodes appear (debounced), and keep a delegated fallback for a click
+  // that still beats the observer: bind that player and replay the click through
+  // the freshly attached listener.
+  var bbTickTimer = null;
+  function scheduleTick() {
+    if (bbTickTimer) return;
+    bbTickTimer = setTimeout(function () { bbTickTimer = null; tick(); }, 50);
+  }
+  function observeLibrary() {
+    var root = document.getElementById('bb-lib-info') || document.body;
+    if (!root || !window.MutationObserver) return;
+    new MutationObserver(function (records) {
+      for (var i = 0; i < records.length; i++) {
+        if (records[i].addedNodes && records[i].addedNodes.length) { scheduleTick(); return; }
+      }
+    }).observe(root, { childList: true, subtree: true });
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', observeLibrary);
+  } else {
+    observeLibrary();
+  }
+  document.addEventListener('click', function (event) {
+    var target = event.target;
+    var button = target && target.closest ? target.closest('[data-bb-player] button') : null;
+    if (!button) return;
+    var player = button.closest('[data-bb-player]');
+    if (!player || player.getAttribute('data-bb-bound') === '1') return;   // normal path
+    bind(player);
+    button.click();                     // replay through the now-attached listener
+  }, true);
+  document.addEventListener('pointerdown', function (event) {
+    var target = event.target;
+    var player = target && target.closest ? target.closest('[data-bb-player]') : null;
+    if (player && player.getAttribute('data-bb-bound') !== '1') bind(player);
+  }, true);
   setInterval(tick, 700);
   var pending = null;
   window.addEventListener('resize', function () {

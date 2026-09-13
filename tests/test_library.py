@@ -227,3 +227,14 @@ def test_scan_and_load_are_thread_safe_enough(tmp_path: Path) -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+def test_library_js_binds_players_immediately_and_delegates_clicks() -> None:
+    """Regression: a fresh player must not wait for the 700 ms tick to be clickable."""
+    js = lib.LIBRARY_JS
+    assert "new MutationObserver" in js and "scheduleTick" in js
+    # delegated fallback: bind the unbound player, then replay the click
+    assert "player.getAttribute('data-bb-bound') === '1'" in js
+    assert "bind(player);" in js and "button.click();" in js
+    # a rejected play() must not be silent
+    assert "playback blocked" in js
