@@ -111,9 +111,10 @@ def test_cover_transcribe_yields_result_and_frees_the_lock(monkeypatch, tmp_path
     monkeypatch.setattr(webui.sheetsage_adapter, "transcribe", fake_transcribe)
     yields = list(webui.cover_transcribe(str(audio), "melody-full", 0, "m-a-p/SheetSage2",
                                          "auto", "auto", "", "/mert-snapshot", False, False))
-    assert all(len(chunk) == 12 for chunk in yields)         # matches the 12 wired outputs
+    assert all(len(chunk) == 13 for chunk in yields)         # + current_bridge
     abc, files, status, *controls = yields[-1]
-    assert len(controls) == 9
+    assert len(controls) == 10
+    assert controls[9] == str(transcript)                    # transcription sets current work
     assert controls[7]["open"] is True                       # GENERATE COVER surfaced
     assert controls[8]["value"] == "transcriptions/reference"  # new transcription preselected
     assert abc == CHORD_FREE and files and str(transcript / "score.abc") in files
@@ -509,7 +510,7 @@ def test_cover_send_to_edit_hands_over_the_source(isolated_runs: Path) -> None:
     make_work(isolated_runs)
     edited = BASE_ABC.replace('"C"E2G2A2G2E2D2C4', '"C"F2G2A2G2E2D2C4')
     (abc_update, baseline, style_update, lyrics_update, rel, check_state, baseline_state,
-     info, status, source_update, tab_update) = webui.cover_send_to_edit(
+     info, status, source_update, source_path, tab_update) = webui.cover_send_to_edit(
         edited, "20260901-120000-source", "jazz", "")
     assert abc_update["value"] == edited.strip()
     assert baseline == BASE_ABC.strip()               # checked against the frozen source
@@ -518,6 +519,7 @@ def test_cover_send_to_edit_hands_over_the_source(isolated_runs: Path) -> None:
     assert lyrics_update["value"].startswith("[Verse]")   # ...source fills the rest
     assert "FREEZE BASELINE" in status and "FREEZE BASELINE" in info
     assert source_update["value"] == "20260901-120000-source"   # visible dropdown stays in sync
+    assert source_path == str((isolated_runs / "20260901-120000-source").resolve())
     assert tab_update["selected"] == "edit"
 
     with pytest.raises(gr.Error, match="Transcribe or load"):
@@ -586,16 +588,16 @@ def test_library_flow_back_and_open_last_in_library(isolated_runs: Path) -> None
     make_transcription(isolated_runs)
 
     outs = webui.library_open_in_edit("20260901-120000-source")
-    assert len(outs) == 11
+    assert len(outs) == 12
     assert outs[2]["value"].startswith("X:1")                     # EDITED ABC filled
     assert outs[4] == "20260901-120000-source"                    # baseline state
     assert outs[9]["value"] == "20260901-120000-source"           # visible dropdown synced
-    assert outs[10]["selected"] == "edit"
+    assert outs[11]["selected"] == "edit"
 
     outs = webui.library_use_in_cover("transcriptions/20260901-130000-reference")
-    assert len(outs) == 6 and outs[0]["value"].startswith("X:1")
+    assert len(outs) == 7 and outs[0]["value"].startswith("X:1")
     assert outs[4]["value"] == "transcriptions/20260901-130000-reference"
-    assert outs[5]["selected"] == "cover"
+    assert outs[6]["selected"] == "cover"
 
     run = isolated_runs / "20260901-140000-fresh"
     run.mkdir()
@@ -603,7 +605,7 @@ def test_library_flow_back_and_open_last_in_library(isolated_runs: Path) -> None
                                      encoding="utf-8")
     (run / "audio.flac").write_bytes(b"fLaC")
     outs = webui.open_last_in_library(str(run))                   # absolute path accepted
-    assert len(outs) == 10 and outs[0]["value"] == ["20260901-140000-fresh"]
+    assert len(outs) == 11 and outs[0]["value"] == ["20260901-140000-fresh"]
     assert "bb-player" in outs[1] and outs[8]["selected"] == "library"
 
     for call in (webui.library_open_in_edit, webui.library_use_in_cover,
@@ -700,3 +702,37 @@ def test_buttons_are_wired_to_their_own_handlers(isolated_runs) -> None:
 
     assert targets[button("EDIT THIS RUN")._id] == ["library_open_in_edit"]
     assert targets[button("GENERATE EDITED")._id] == ["edit_generate"]
+
+
+def test_publish_current_returns_band_then_bridge(isolated_runs: Path) -> None:
+    """Outputs are [current_band, current_bridge]: a valid path lights the band."""
+    make_work(isolated_runs)
+    path = str((isolated_runs / "20260901-120000-source").resolve())
+    band, bridge = webui.publish_current(path)
+    assert "CURRENT" in band and "<b>source</b>" in band  # the band is the first return value
+    assert "value" not in bridge                        # bridge untouched on a valid path
+    band, bridge = webui.publish_current(str(isolated_runs / "missing"))
+    assert band == "" and bridge["value"] == ""        # stale path clears both
+
+
+def test_handoffs_set_the_current_work(isolated_runs: Path) -> None:
+    """Handoff actions feed the hidden bridge with the absolute run path."""
+    make_work(isolated_runs)
+    source = str((isolated_runs / "20260901-120000-source").resolve())
+
+    edit_outs = webui.library_open_in_edit("20260901-120000-source")
+    assert edit_outs[-2] == source and edit_outs[-1]["selected"] == "edit"
+
+    cover_outs = webui.library_use_in_cover("20260901-120000-source")
+    assert cover_outs[-2] == source and cover_outs[-1]["selected"] == "cover"
+
+    library_outs = webui.open_last_in_library("20260901-120000-source")
+    assert library_outs[-1] == source and library_outs[-3]["selected"] == "library"
+
+    abc = (isolated_runs / "20260901-120000-source" / "score.abc").read_text(encoding="utf-8")
+    send_outs = webui.cover_send_to_edit(abc, "20260901-120000-source", "", "")
+    assert send_outs[-2] == source and send_outs[-1]["selected"] == "edit"
+
+    # and the bridge value really lights the band
+    band, bridge = webui.publish_current(send_outs[-2])
+    assert "CURRENT" in band and "value" not in bridge

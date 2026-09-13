@@ -62,7 +62,7 @@ import numpy as np
 import soundfile as sf
 import torch
 
-from . import __version__, adapter, config, cover, edit_flow, library, sheetsage_adapter
+from . import __version__, adapter, config, cover, edit_flow, library, sheetsage_adapter, workflow
 from .vendor import abc_tools
 
 # Where generated works are stored; main() may override it with --runs.
@@ -425,13 +425,13 @@ def generate_all_modes(style, lyrics, seed, cfg_scale, abc_text, out_id,
     _CANCEL.clear()
     if not _RUNNING.acquire(blocking=False):
         yield ("Another job is already running — wait for it to finish",
-               gr.update(), gr.update(), gr.update(), gr.update(), gr.update())
+               gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.skip())
         return
     busy = (gr.update(interactive=False),) * 3
     idle = (gr.update(interactive=True),) * 3
     try:
         yield ("Starting ALL MODES (full → melody → off)…",
-               gr.update(), gr.update(), *busy)
+               gr.update(), gr.update(), *busy, gr.skip())
         pipe, note = _get_pipe(device, dtype, backend, quantization, offload_ar, budget,
                                ode_steps, vae_core_frames, model, vae_choice, vae_custom,
                                revision, vae_revision, offline, progress)
@@ -510,10 +510,10 @@ def generate_all_modes(style, lyrics, seed, cfg_scale, abc_text, out_id,
             lines.append(comparison)
         if len(done_dirs) < 2:
             lines.append("(the comparison needs at least two completed modes)")
-        yield "\n".join(lines), files, link, *idle
+        yield "\n".join(lines), files, link, *idle, str(root)
     except Exception as exc:  # noqa: BLE001
         yield (f"ALL MODES failed: {type(exc).__name__}: {exc}",
-               gr.update(), gr.update(), *idle)
+               gr.update(), gr.update(), *idle, gr.skip())
     finally:
         _RUNNING.release()
 
@@ -539,12 +539,12 @@ def plan_only(style, lyrics, cot, seed, cfg_scale, out_id,
     _CANCEL.clear()
     if not _RUNNING.acquire(blocking=False):
         yield gr.update(), "Another job is already running — wait for it to finish", \
-            gr.update(), gr.update(), gr.update()
+            gr.update(), gr.update(), gr.update(), gr.skip()
         return
     busy = (gr.update(interactive=False), gr.update(interactive=False))
     idle = (gr.update(interactive=True), gr.update(interactive=True))
     try:
-        yield gr.update(), "Planning score…", gr.update(), *busy
+        yield gr.update(), "Planning score…", gr.update(), *busy, gr.skip()
         pipe, note = _get_pipe(device, dtype, backend, quantization, offload_ar, budget,
                                ode_steps, vae_core_frames, model, vae_choice, vae_custom,
                                revision, vae_revision, offline, progress)
@@ -555,11 +555,12 @@ def plan_only(style, lyrics, cot, seed, cfg_scale, out_id,
         plan.save(outdir)
         files = [str(outdir / n) for n in ("score.abc", "plan.json", "abc_tokens.npy", "prefix.npy")
                  if (outdir / n).exists()]
-        yield (plan.abc or ""), f"Plan saved: {outdir}\n{note}", files, *idle
+        yield (plan.abc or ""), f"Plan saved: {outdir}\n{note}", files, *idle, str(outdir)
     except InterruptedError as exc:
-        yield gr.update(), f"Cancelled: {exc}", gr.update(), *idle
+        yield gr.update(), f"Cancelled: {exc}", gr.update(), *idle, gr.skip()
     except Exception as exc:  # noqa: BLE001
-        yield gr.update(), f"Planning failed: {type(exc).__name__}: {exc}", gr.update(), *idle
+        yield gr.update(), f"Planning failed: {type(exc).__name__}: {exc}", gr.update(), *idle, \
+            gr.skip()
     finally:
         _RUNNING.release()
 
@@ -581,10 +582,11 @@ def decode_run(source_dir, latent_file, dec_vae_choice, dec_vae_custom, dec_vae_
         raise gr.Error(f"Latent shape must be [T,64], got {latents.shape}")
 
     if not _RUNNING.acquire(blocking=False):
-        yield gr.update(), "Another job is already running — wait for it to finish", gr.update()
+        yield gr.update(), "Another job is already running — wait for it to finish", \
+            gr.update(), gr.skip()
         return
     try:
-        yield gr.update(), "Decoding…", gr.update(interactive=False)
+        yield gr.update(), "Decoding…", gr.update(interactive=False), gr.skip()
         pipe, note = _get_pipe(device, dtype, backend, quantization, offload_ar, budget,
                                ode_steps, vae_core_frames, model, gen_vae_choice, gen_vae_custom,
                                revision, gen_vae_revision, offline, progress)
@@ -620,9 +622,10 @@ def decode_run(source_dir, latent_file, dec_vae_choice, dec_vae_custom, dec_vae_
         status = (f"Decoded {len(audio) / 48000:.1f}s audio in {seconds:.0f}s\n"
                   f"VAE={vae_name}  mode={'full' if full_decode else 'tiled'}  "
                   f"source={path}\nrun directory: {outdir}\n{note}")
-        yield str(outdir / "audio.flac"), status, gr.update(interactive=True)
+        yield str(outdir / "audio.flac"), status, gr.update(interactive=True), str(outdir)
     except Exception as exc:  # noqa: BLE001
-        yield gr.update(), f"Decode failed: {type(exc).__name__}: {exc}", gr.update(interactive=True)
+        yield gr.update(), f"Decode failed: {type(exc).__name__}: {exc}", \
+            gr.update(interactive=True), gr.skip()
     finally:
         _RUNNING.release()
 
@@ -652,9 +655,10 @@ def batch_generate(jsonl_text, jsonl_file, out_id,
 
     _CANCEL.clear()
     if not _RUNNING.acquire(blocking=False):
-        yield gr.update(), "Another job is already running — wait for it to finish", gr.update()
+        yield gr.update(), "Another job is already running — wait for it to finish", \
+            gr.update(), gr.skip()
         return
-    yield gr.update(), "Starting batch…", gr.update(interactive=False)
+    yield gr.update(), "Starting batch…", gr.update(interactive=False), gr.skip()
     try:
         pipe, note = _get_pipe(device, dtype, backend, quantization, offload_ar, budget,
                                ode_steps, vae_core_frames, model, vae_choice, vae_custom,
@@ -717,9 +721,10 @@ def batch_generate(jsonl_text, jsonl_file, out_id,
         status = (f"Batch finished: {len(results)} rows, {failures} failed in {total:.0f}s "
                   f"({total / max(1, len(results)):.0f}s per song)\n"
                   f"run directory: {outdir}\n{note}")
-        yield results, status, gr.update(interactive=True)
+        yield results, status, gr.update(interactive=True), str(outdir)
     except Exception as exc:  # noqa: BLE001
-        yield gr.update(), f"Batch failed: {type(exc).__name__}: {exc}", gr.update(interactive=True)
+        yield gr.update(), f"Batch failed: {type(exc).__name__}: {exc}", \
+            gr.update(interactive=True), gr.skip()
     finally:
         _RUNNING.release()
 
@@ -854,13 +859,13 @@ def cover_transcribe(audio_path, task, max_seconds, model, device, dtype, revisi
     if not _RUNNING.acquire(blocking=False):
         yield (gr.update(), gr.update(),
                "Another job is already running — wait for it to finish",
-               *((gr.update(),) * 7), gr.update(), gr.update())
+               *((gr.update(),) * 7), gr.update(), gr.update(), gr.skip())
         return
     controls = (gr.update(interactive=False),) * 7
     idle = (gr.update(interactive=True),) * 7
     try:
         yield gr.update(), gr.update(), "Starting SheetSage2 transcription…", *controls, \
-            gr.update(), gr.update()
+            gr.update(), gr.update(), gr.skip()
         outdir = config.transcriptions_dir(RUNS) / \
             f"{time.strftime('%Y%m%d-%H%M%S')}-{_slug(Path(audio_path).stem)}"
 
@@ -897,14 +902,16 @@ def cover_transcribe(audio_path, task, max_seconds, model, device, dtype, revisi
         source_update = (gr.update(choices=choices, value=rel) if rel in known
                          else gr.update(choices=choices))
         yield (abc, _transcription_files(record["output_dir"]), "\n".join(lines),
-               *idle, gr.update(open=True), source_update)
+               *idle, gr.update(open=True), source_update, record["output_dir"])
     except InterruptedError as exc:
         note = (" The resident SheetSage2 worker was stopped; the next transcription reloads it."
                 if keep_warm else "")
-        yield gr.update(), gr.update(), f"Cancelled: {exc}.{note}", *idle, gr.update(), gr.update()
+        yield gr.update(), gr.update(), f"Cancelled: {exc}.{note}", *idle, gr.update(), \
+            gr.update(), gr.skip()
     except Exception as exc:  # noqa: BLE001
         yield gr.update(), gr.update(), \
-            f"Transcription failed: {type(exc).__name__}: {exc}", *idle, gr.update(), gr.update()
+            f"Transcription failed: {type(exc).__name__}: {exc}", *idle, gr.update(), \
+            gr.update(), gr.skip()
     finally:
         _RUNNING.release()
 
@@ -966,7 +973,7 @@ def cover_send_to_edit(abc_text, rel, style, lyrics):
             "Loaded from 02 COVER — FREEZE BASELINE is required before CHECK / GENERATE EDITED.",
             gr.update(choices=[value for _label, value in
                                _library_choices(_library_mode("time", "desc"))[1]], value=rel),
-            gr.update(selected="edit"))
+            str((RUNS / rel).resolve()), gr.update(selected="edit"))
 
 
 def cover_generate(style, lyrics, abc_text, task, keep_voice, seed, cfg_scale,
@@ -1093,6 +1100,26 @@ def cover_detect_python():
     return f"Using {found} for this session — add it to .env (or --sheetsage-python) to persist."
 
 
+def mirror_current(value):
+    """Forward a *_last_run state into the hidden current-work bridge."""
+    return (value or "").strip() or gr.update()
+
+
+def _abs_of_run(value) -> str:
+    """Absolute path of a run given an absolute path, a Library rel or empty."""
+    if not (value or "").strip():
+        return ""
+    return str((RUNS / _rel_of_run(value)).resolve())
+
+
+def publish_current(path):
+    """Band for the hidden current-work bridge; clears an invalid stored path once."""
+    text = workflow.band(RUNS, path)
+    if (path or "").strip() and not text:
+        return "", gr.update(value="")      # (band, bridge): stale entry — clear both
+    return text, gr.update()                # band rendered, bridge untouched
+
+
 def _rel_of_run(value) -> str:
     """Accept a run directory (absolute) or a Library rel and return the rel."""
     text = (value or "").strip()
@@ -1115,7 +1142,7 @@ def library_open_in_edit(active):
     choices = gr.update(choices=[value for _label, value in
                                  _library_choices(_library_mode("time", "desc"))[1]], value=rel)
     return (style, lyrics, abc, baseline_abc, source_rel, check_state, baseline_state, info,
-            status, choices, gr.update(selected="edit"))
+            status, choices, str((RUNS / rel).resolve()), gr.update(selected="edit"))
 
 
 def library_use_in_cover(active):
@@ -1124,7 +1151,8 @@ def library_use_in_cover(active):
     abc, style, lyrics, status = cover_load(rel)
     choices = gr.update(choices=[value for _label, value in
                                  _library_choices(_library_mode("time", "desc"))[1]], value=rel)
-    return abc, style, lyrics, status, choices, gr.update(selected="cover")
+    return abc, style, lyrics, status, choices, str((RUNS / rel).resolve()), \
+        gr.update(selected="cover")
 
 
 def open_last_in_library(active):
@@ -1133,7 +1161,7 @@ def open_last_in_library(active):
     _items, choices = _library_choices(_library_mode("time", "desc"))
     info, style, lyrics, abc, rename_box, rename_btn, status = _library_details([rel])
     return (gr.update(choices=choices, value=[rel]), info, style, lyrics, abc, rename_box,
-            rename_btn, status, gr.update(selected="library"), rel)
+            rename_btn, status, gr.update(selected="library"), rel, str((RUNS / rel).resolve()))
 
 
 def edit_choices():
@@ -1822,6 +1850,18 @@ table { border-color: var(--bb-line) !important; }
 /* the environment status is a hint, not content: same scale as the note below it */
 #bb-env-status textarea { font-size: 11.5px !important; line-height: 1.55 !important;
   letter-spacing: .04em; color: var(--bb-ink3) !important; }
+/* current work: a factual one-line band above the start strip, fed by a hidden
+   bridge that the client mirrors to localStorage (per browser, not per server) */
+#bb-current-work { display: none !important; }
+#bb-current-band-wrap { min-height: 0; }
+#bb-current-band {
+  display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline;
+  border: 1px solid var(--bb-line); border-radius: 8px; background: var(--bb-panel);
+  padding: 7px 12px; margin-bottom: 10px;
+  font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--bb-ink2);
+}
+#bb-current-band b { color: var(--bb-ink); font-weight: 500; }
+
 /* first-run strip + global busy banner */
 #bb-start { align-items: center; gap: 8px; margin-bottom: 10px; }
 #bb-start .bb-note p { margin: 0; }
@@ -2457,6 +2497,38 @@ HEAD_HTML += ("<script>window.__BB_EXAMPLES__ = "
 HEAD_HTML += "<script>" + EXAMPLE_JS + "</script>"
 HEAD_HTML += "<script>" + library.LIBRARY_JS + "</script>"
 
+CURRENT_WORK_JS = r"""(function () {
+  var KEY = 'bb-current';
+  function area() {
+    var box = document.getElementById('bb-current-work');
+    return box ? box.querySelector('textarea') : null;
+  }
+  function setNative(el, value) {
+    var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+    setter.call(el, value);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  var restored = false;
+  setInterval(function () {
+    var el = area();
+    if (!el) return;
+    var stored = '';
+    try { stored = localStorage.getItem(KEY) || ''; } catch (e) {}
+    if (!restored) {
+      restored = true;
+      if (!el.value && stored) setNative(el, stored);   // ask the server to validate it
+      return;
+    }
+    if (el.value && el.value !== stored) {
+      try { localStorage.setItem(KEY, el.value); } catch (e) {}   // server-set: remember it
+    } else if (!el.value && stored) {
+      try { localStorage.removeItem(KEY); } catch (e) {}          // server cleared a stale path
+    }
+  }, 500);
+})();"""
+HEAD_HTML += "<script>" + CURRENT_WORK_JS + "</script>"
+
 
 def bb_theme():
     """Bearbone dark scene at startup; bright is switched at runtime via CSS variables."""
@@ -2487,6 +2559,9 @@ def build_ui(defaults):
 
     with gr.Blocks(title="YUE2 // GROOVE") as demo:
         gr.HTML(header)
+        current_band = gr.HTML("", elem_id="bb-current-band-wrap")
+        current_bridge = gr.Textbox(value="", elem_id="bb-current-work",
+                                    elem_classes=["bb-output"])
         with gr.Row(elem_id="bb-start"):
             gr.Markdown("START →", elem_classes=["bb-note"])
             start_song_btn = gr.Button("NEW SONG", size="sm", scale=1)
@@ -3007,26 +3082,32 @@ def build_ui(defaults):
                       outputs=[audio_out, score_out, gen_status, files_out,
                                run_btn, plan_btn, gen_last_run])
         library_outputs_for_flow = [lib_list, lib_info, lib_style, lib_lyrics, lib_abc,
-                                    lib_rename_box, lib_rename_btn, lib_status, tabs, lib_active]
+                                    lib_rename_box, lib_rename_btn, lib_status, tabs, lib_active,
+                                    current_bridge]
         edit_outputs_for_flow = [edit_style, edit_lyrics, edit_abc, edit_baseline_abc,
                                  edit_source_rel, edit_check_state, edit_baseline_state,
-                                 edit_baseline_info, edit_status, edit_source, tabs]
+                                 edit_baseline_info, edit_status, edit_source, current_bridge,
+                                 tabs]
         open_library_btn.click(open_last_in_library, inputs=[gen_last_run],
                                outputs=library_outputs_for_flow)
+        gen_last_run.change(mirror_current, inputs=[gen_last_run], outputs=[current_bridge])
+        edit_last_run.change(mirror_current, inputs=[edit_last_run], outputs=[current_bridge])
+        cover_last_run.change(mirror_current, inputs=[cover_last_run], outputs=[current_bridge])
         gen_edit_btn.click(library_open_in_edit, inputs=[gen_last_run],
                            outputs=edit_outputs_for_flow)
         plan_btn.click(plan_only,
                        inputs=[style, lyrics, cot, seed, cfg, out_id,
                                abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max]
                               + model_args,
-                       outputs=[score_out, gen_status, files_out, run_btn, plan_btn])
+                       outputs=[score_out, gen_status, files_out, run_btn, plan_btn,
+                                current_bridge])
         allmodes_btn.click(generate_all_modes,
                            inputs=[style, lyrics, seed, cfg, abc, out_id,
                                    abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
                                    sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max]
                                   + model_args,
                            outputs=[gen_status, files_out, allmodes_link,
-                                    run_btn, plan_btn, allmodes_btn])
+                                    run_btn, plan_btn, allmodes_btn, current_bridge])
         # Cooperative cancel only: do NOT use cancels=[...] here, because Gradio would
         # tear down the running generator event and drop its final "re-enable buttons" yield.
         cancel_btn.click(cancel_run, outputs=gen_status)
@@ -3055,7 +3136,7 @@ def build_ui(defaults):
         decode_btn.click(decode_run,
                          inputs=[source_dir, latent_upload, dec_vae_choice, dec_vae_custom,
                                  dec_vae_revision, full_decode] + model_args,
-                         outputs=[decode_audio, decode_status, decode_btn])
+                         outputs=[decode_audio, decode_status, decode_btn, current_bridge])
         decode_reset_btn.click(lambda: ("standard", "", "", False),
                                outputs=[dec_vae_choice, dec_vae_custom, dec_vae_revision, full_decode])
 
@@ -3064,7 +3145,7 @@ def build_ui(defaults):
                                 abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
                                 sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max]
                               + model_args,
-                        outputs=[batch_table, batch_status, batch_btn])
+                        outputs=[batch_table, batch_status, batch_btn, current_bridge])
         cancel_btn.click(cancel_run, outputs=batch_status)
 
         inspect_btn.click(abc_inspect, inputs=abc_tool_text, outputs=abc_result)
@@ -3081,6 +3162,8 @@ def build_ui(defaults):
                          outputs=doctor_out)
         load_btn.click(lambda *a: load_pipeline(*a)[1], inputs=model_args, outputs=env_status)
         unload_btn.click(lambda: (unload_pipeline(), "Model unloaded")[1], outputs=env_status)
+        current_bridge.change(publish_current, inputs=[current_bridge],
+                              outputs=[current_band, current_bridge])
         start_song_btn.click(lambda: gr.update(selected="gen"), outputs=tabs)
         start_cover_btn.click(lambda: gr.update(selected="cover"), outputs=tabs)
         start_edit_btn.click(lambda: gr.update(selected="edit"), outputs=tabs)
@@ -3099,7 +3182,7 @@ def build_ui(defaults):
                                 cover_device, cover_dtype, cover_revision, cover_base_model,
                                 cover_keep_warm, cover_offline],
                         outputs=[cover_abc, cover_files, cover_status, *cover_controls,
-                                 cover_generate_accordion, cover_source])
+                                 cover_generate_accordion, cover_source, current_bridge])
         cover_generate_btn.click(
             cover_generate,
             inputs=[cover_style, cover_lyrics, cover_abc, cover_task, cover_keep, cover_seed,
@@ -3121,7 +3204,7 @@ def build_ui(defaults):
             inputs=[cover_abc, cover_source, cover_style, cover_lyrics],
             outputs=[edit_abc, edit_baseline_abc, edit_style, edit_lyrics, edit_source_rel,
                      edit_check_state, edit_baseline_state, edit_baseline_info, edit_status,
-                     edit_source, tabs])
+                     edit_source, current_bridge, tabs])
         cover_strip_btn.click(cover_strip, inputs=[cover_abc, cover_keep],
                               outputs=[cover_abc, cover_status])
         cover_send_btn.click(cover_send_to_generate,
@@ -3201,7 +3284,7 @@ def build_ui(defaults):
                            outputs=edit_outputs_for_flow)
         lib_cover_btn.click(library_use_in_cover, inputs=[lib_active],
                             outputs=[cover_abc, cover_style, cover_lyrics, cover_status,
-                                     cover_source, tabs])
+                                     cover_source, current_bridge, tabs])
         lib_delete_btn.click(library_delete_prepare,
                              inputs=[lib_list, lib_sort_key, lib_sort_dir],
                              outputs=[lib_confirm, lib_pending, lib_confirm_btn, lib_status])
