@@ -262,8 +262,8 @@ permissions are written to `edit_manifest.json`.
 
 Generation refuses to run unless the check passed on exactly the current ABC: the edited score
 is always submitted, so an edit can never silently fall back to a fresh plan. `ALLOW
-MELODY/RHYTHM CHANGES` exists for intentional adaptations — it is also the only way past the
-FREEZE BASELINE requirement that ties the check to an immutable record. Sampling parameters are
+MELODY/RHYTHM CHANGES` exists for intentional adaptations: it only lets a *failing* check
+through — FREEZE BASELINE and CHECK INVARIANTS are always required. Sampling parameters are
 shared with 01 GENERATE (the EDIT tab mirrors them read-only). Each attempt is a new run directory
 with `edit_manifest.json` (source/edit hashes, frozen flag, invariant result, permitted changes),
 and **BUILD COMPARISON // baseline vs edit** creates a local listening page from both runs.

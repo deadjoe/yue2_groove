@@ -2581,7 +2581,7 @@ def build_ui(defaults):
                                                 elem_id="bb-files")
                         with gr.Row():
                             open_library_btn = gr.Button("OPEN IN LIBRARY", size="sm", scale=1)
-                            edit_run_btn = gr.Button("EDIT THIS RUN", size="sm", scale=1)
+                            gen_edit_btn = gr.Button("EDIT THIS RUN", size="sm", scale=1)
                         gen_status = gr.Textbox(label="STATUS", lines=6, interactive=False)
                         gen_last_run = gr.State("")
 
@@ -3013,7 +3013,7 @@ def build_ui(defaults):
                                  edit_baseline_info, edit_status, edit_source, tabs]
         open_library_btn.click(open_last_in_library, inputs=[gen_last_run],
                                outputs=library_outputs_for_flow)
-        edit_run_btn.click(library_open_in_edit, inputs=[gen_last_run],
+        gen_edit_btn.click(library_open_in_edit, inputs=[gen_last_run],
                            outputs=edit_outputs_for_flow)
         plan_btn.click(plan_only,
                        inputs=[style, lyrics, cot, seed, cfg, out_id,

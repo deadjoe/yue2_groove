@@ -678,3 +678,25 @@ def test_cover_generate_event_wiring_matches_its_outputs(isolated_runs) -> None:
     assert len(events["cover_generate"].outputs) == 12      # matches the handler yields
     assert len(events["generate"].outputs) == 7
     assert len(events["edit_generate"].outputs) == 11
+
+
+def test_buttons_are_wired_to_their_own_handlers(isolated_runs) -> None:
+    """Regression: EDIT THIS RUN and GENERATE EDITED must not share a variable/handler.
+
+    A duplicate Python variable silently pointed both wirings at GENERATE EDITED,
+    leaving EDIT THIS RUN dead and double-firing the edit handler.
+    """
+    demo = webui.build_ui({"device": "cpu", "dtype": "float32", "model": "m-a-p/YuE2-3B",
+                           "vae": "standard", "tab": 0, "status": ""})
+    targets: dict[int, list[str]] = {}
+    for f in demo.fns.values():
+        for target in (getattr(f, "targets", None) or []):
+            first = target[0] if isinstance(target, (tuple, list)) else target
+            component_id = first if isinstance(first, int) else first._id
+            targets.setdefault(component_id, []).append(f.api_name or f.fn.__name__)
+
+    def button(label: str):
+        return next(c for c in demo.blocks.values() if getattr(c, "value", None) == label)
+
+    assert targets[button("EDIT THIS RUN")._id] == ["library_open_in_edit"]
+    assert targets[button("GENERATE EDITED")._id] == ["edit_generate"]
