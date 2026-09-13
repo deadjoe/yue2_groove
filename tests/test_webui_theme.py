@@ -30,3 +30,20 @@ def test_theme_button_has_no_text_label(monkeypatch, tmp_path) -> None:
     button = next(c for c in demo.blocks.values()
                   if getattr(c, "elem_id", None) == "bb-theme-btn")
     assert button.value == ""
+
+
+def test_bright_dark_controls_share_the_cool_black() -> None:
+    """The bright scene's dark controls must not fall back to the old warm black."""
+    values = webui._theme_values(webui.BRIGHT)
+    assert webui.BRIGHT["primary_fill"] == "#11141C"
+    for key in ("button_primary_background_fill", "checkbox_background_color_selected",
+                "checkbox_border_color_selected", "slider_color", "loader_color"):
+        assert values[key] == "#11141C", key
+    assert webui._bb_vars(webui.BRIGHT)["--bb-chip-bg"] == "#11141C"   # selected chips/rows
+
+
+def test_dark_scene_unchanged_by_the_bright_controls() -> None:
+    values = webui._theme_values(webui.DARK)
+    assert webui.DARK["primary_fill"] == "#F1ECE2"        # ivory on the cool ground
+    assert values["button_primary_background_fill"] == "#F1ECE2"
+    assert webui._bb_vars(webui.DARK)["--bb-chip-bg"] != "#11141C"
