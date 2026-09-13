@@ -6,11 +6,17 @@
 # password when you expose it on a network (see below).
 #
 # Usage:
-#   bash scripts/serve.sh start [--port 7860] [--host 0.0.0.0] [--tab 0]
+#   bash scripts/serve.sh start [--port 7860] [--host 0.0.0.0] [--view song|studio]
+#                               [--tab 0..6]
 #                               [--device auto|mps|cuda|cpu] [--dtype auto|bfloat16|float32]
 #                               [--model ID_OR_DIR] [--runs DIR]
 #                               [--auth user:password] [--sheetsage-python PATH]
 #                               [--no-preload] [-f]
+#
+# The app opens in the SONG view by default.  --view forces SONG or STUDIO for
+# this launch (or set YUE2_GROOVE_VIEW in .env); an explicit --tab forces the
+# Studio view on that tab.  Without either flag the last choice is remembered
+# per browser (localStorage).
 #   bash scripts/serve.sh stop
 #   bash scripts/serve.sh restart [same options as start]
 #   bash scripts/serve.sh status
@@ -37,7 +43,8 @@ RUN_DIR="${YUE2_GROOVE_RUNS:-$ROOT/runs}"
 
 HOST="${YUE2_GROOVE_HOST:-0.0.0.0}"
 PORT="${YUE2_GROOVE_PORT:-7860}"
-TAB=0
+TAB=""
+VIEW=""
 FOREGROUND=0
 EXTRA_ARGS=()
 
@@ -65,6 +72,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --port)     PORT="$2"; shift 2 ;;
     --host)     HOST="$2"; shift 2 ;;
+    --view)     VIEW="$2"; shift 2 ;;
     --tab)      TAB="$2"; shift 2 ;;
     --device)   EXTRA_ARGS+=("--device" "$2"); shift 2 ;;
     --dtype)    EXTRA_ARGS+=("--dtype" "$2"); shift 2 ;;
@@ -157,7 +165,15 @@ start_service() {
   # The login is handed to the app through the environment (YUE2_GROOVE_AUTH), not
   # as a command-line argument, so it does not show up in `ps` or in this output.
   export YUE2_GROOVE_AUTH="${YUE2_GROOVE_AUTH:-}"
-  local args=(-m yue2_groove --host "$HOST" --port "$PORT" --tab "$TAB" --runs "$RUN_DIR")
+  local args=(-m yue2_groove --host "$HOST" --port "$PORT" --runs "$RUN_DIR")
+  # only pass the view/tab flags when they were asked for: the app's own default
+  # is SONG, and a bare --tab 0 would force the Studio view
+  if [ -n "$VIEW" ]; then
+    args+=(--view "$VIEW")
+  fi
+  if [ -n "$TAB" ]; then
+    args+=(--tab "$TAB")
+  fi
   # bash 3.2 treats an empty array as unbound under set -u, hence the length check
   if [ "${#EXTRA_ARGS[@]}" -gt 0 ]; then
     args+=("${EXTRA_ARGS[@]}")
