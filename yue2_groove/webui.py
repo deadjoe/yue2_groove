@@ -966,7 +966,7 @@ def cover_send_to_edit(abc_text, rel, style, lyrics):
             "Loaded from 02 COVER — FREEZE BASELINE is required before CHECK / GENERATE EDITED.",
             gr.update(choices=[value for _label, value in
                                _library_choices(_library_mode("time", "desc"))[1]], value=rel),
-            gr.update(selected="edit"))
+            str((RUNS / rel).resolve()), gr.update(selected="edit"))
 
 
 def cover_generate(style, lyrics, abc_text, task, keep_voice, seed, cfg_scale,
@@ -1130,7 +1130,7 @@ def library_open_in_edit(active):
     choices = gr.update(choices=[value for _label, value in
                                  _library_choices(_library_mode("time", "desc"))[1]], value=rel)
     return (style, lyrics, abc, baseline_abc, source_rel, check_state, baseline_state, info,
-            status, choices, gr.update(selected="edit"))
+            status, choices, str((RUNS / rel).resolve()), gr.update(selected="edit"))
 
 
 def library_use_in_cover(active):
@@ -1139,7 +1139,8 @@ def library_use_in_cover(active):
     abc, style, lyrics, status = cover_load(rel)
     choices = gr.update(choices=[value for _label, value in
                                  _library_choices(_library_mode("time", "desc"))[1]], value=rel)
-    return abc, style, lyrics, status, choices, gr.update(selected="cover")
+    return abc, style, lyrics, status, choices, str((RUNS / rel).resolve()), \
+        gr.update(selected="cover")
 
 
 def open_last_in_library(active):
@@ -1148,7 +1149,7 @@ def open_last_in_library(active):
     _items, choices = _library_choices(_library_mode("time", "desc"))
     info, style, lyrics, abc, rename_box, rename_btn, status = _library_details([rel])
     return (gr.update(choices=choices, value=[rel]), info, style, lyrics, abc, rename_box,
-            rename_btn, status, gr.update(selected="library"), rel)
+            rename_btn, status, gr.update(selected="library"), rel, str((RUNS / rel).resolve()))
 
 
 def edit_choices():
@@ -3069,10 +3070,12 @@ def build_ui(defaults):
                       outputs=[audio_out, score_out, gen_status, files_out,
                                run_btn, plan_btn, gen_last_run])
         library_outputs_for_flow = [lib_list, lib_info, lib_style, lib_lyrics, lib_abc,
-                                    lib_rename_box, lib_rename_btn, lib_status, tabs, lib_active]
+                                    lib_rename_box, lib_rename_btn, lib_status, tabs, lib_active,
+                                    current_bridge]
         edit_outputs_for_flow = [edit_style, edit_lyrics, edit_abc, edit_baseline_abc,
                                  edit_source_rel, edit_check_state, edit_baseline_state,
-                                 edit_baseline_info, edit_status, edit_source, tabs]
+                                 edit_baseline_info, edit_status, edit_source, current_bridge,
+                                 tabs]
         open_library_btn.click(open_last_in_library, inputs=[gen_last_run],
                                outputs=library_outputs_for_flow)
         gen_edit_btn.click(library_open_in_edit, inputs=[gen_last_run],
@@ -3185,7 +3188,7 @@ def build_ui(defaults):
             inputs=[cover_abc, cover_source, cover_style, cover_lyrics],
             outputs=[edit_abc, edit_baseline_abc, edit_style, edit_lyrics, edit_source_rel,
                      edit_check_state, edit_baseline_state, edit_baseline_info, edit_status,
-                     edit_source, tabs])
+                     edit_source, current_bridge, tabs])
         cover_strip_btn.click(cover_strip, inputs=[cover_abc, cover_keep],
                               outputs=[cover_abc, cover_status])
         cover_send_btn.click(cover_send_to_generate,
@@ -3265,7 +3268,7 @@ def build_ui(defaults):
                            outputs=edit_outputs_for_flow)
         lib_cover_btn.click(library_use_in_cover, inputs=[lib_active],
                             outputs=[cover_abc, cover_style, cover_lyrics, cover_status,
-                                     cover_source, tabs])
+                                     cover_source, current_bridge, tabs])
         lib_delete_btn.click(library_delete_prepare,
                              inputs=[lib_list, lib_sort_key, lib_sort_dir],
                              outputs=[lib_confirm, lib_pending, lib_confirm_btn, lib_status])
