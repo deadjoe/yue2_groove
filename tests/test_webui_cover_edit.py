@@ -7,6 +7,7 @@ tests verify the state machine: guards, yields, button re-enabling, states.
 from __future__ import annotations
 
 import json
+import os
 import textwrap
 from pathlib import Path
 
@@ -645,3 +646,24 @@ def test_generate_hands_the_run_to_the_flow_back_buttons(monkeypatch, isolated_r
     assert audio.endswith("audio.flac") and abc.startswith("X:1")
     assert Path(last_run, "audio.flac").is_file()
     assert run_btn["interactive"] is True and plan_btn["interactive"] is True
+
+
+def test_busy_banner_reflects_the_global_lock() -> None:
+    assert webui.busy_banner() == ""
+    webui._RUNNING.acquire()
+    try:
+        assert "JOB RUNNING" in webui.busy_banner()
+    finally:
+        webui._RUNNING.release()
+    assert webui.busy_banner() == ""
+
+
+def test_cover_detect_python_uses_a_documented_location(monkeypatch, tmp_path) -> None:
+    fake = tmp_path / "python"
+    fake.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.delenv("YUE2_GROOVE_SHEETSAGE_PYTHON", raising=False)
+    monkeypatch.setattr(webui, "_sheetsage_python_candidates", lambda: [tmp_path / "nope", fake])
+    message = webui.cover_detect_python()
+    assert str(fake) in message and os.environ["YUE2_GROOVE_SHEETSAGE_PYTHON"] == str(fake)
+    monkeypatch.setattr(webui, "_sheetsage_python_candidates", lambda: [tmp_path / "nope"])
+    assert "No SheetSage2 venv found" in webui.cover_detect_python()

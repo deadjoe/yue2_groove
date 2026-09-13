@@ -60,7 +60,8 @@ a background reaper also stops it once the idle timeout passes (no need to wait 
 run), and CANCEL terminates a busy worker (the following run starts a fresh one).
 
 The **CHECK ENVIRONMENT** button in 02 COVER probes that interpreter (`torch`,
-`transformers`, ffmpeg) without loading weights. If SheetSage2 is not configured, the
+`transformers`, ffmpeg) without loading weights, and **AUTO-DETECT VENV** looks for
+`./.venv-sheetsage2` / `../YuE/.venv-sheetsage2` and uses it for the session. If SheetSage2 is not configured, the
 tab reports a configuration error and every other tab keeps working.
 
 ## 2. 02 COVER — audio to a cover song
@@ -116,8 +117,10 @@ symbolic invariant check, regeneration from the edited score, and a listening co
    *failing* check through for intentional adaptations — FREEZE and CHECK are always required.
 3. **Edit** the ABC (and style/lyrics if the arrangement changes). Keep the native dialect:
    the checker rejects unsupported notation rather than guessing.
-4. **CHECK INVARIANTS** — compares baseline and edit per voice. Chord-only edits pass; pitch,
-   onset or duration changes are reported by voice; tempo changes need `ALLOW TEMPO CHANGE`.
+4. **CHECK INVARIANTS** — compares baseline and edit per voice under the chosen **CONTRACT**:
+   `EXACT` (notes + meter grid; `ALLOW TEMPO CHANGE` / `ALLOW METER CHANGE` relax those),
+   `PITCH` (ordered pitch sequence only, rhythm may change) or `FREE` (differences are
+   recorded, nothing is gated). Chord-only edits pass under EXACT.
 5. **GENERATE EDITED** — refused unless the check passed on *exactly* the current ABC, and the
    edited score is always submitted (an edit can never silently turn into a fresh plan). For
    intentional melody/rhythm changes, tick `ALLOW MELODY/RHYTHM CHANGES`. Every attempt is a new
@@ -131,7 +134,9 @@ symbolic invariant check, regeneration from the edited score, and a listening co
    remains active.
 6. **BUILD COMPARISON // baseline vs edit** — builds a local listening page from the original
    run and the new one (same player as 05 TOOLS → LISTENING COMPARISON). Listen to the whole
-   song and to the changed passage.
+   song and to the changed passage; the symbolic check is not listening evidence. **OPEN IN
+   LIBRARY** shows the finished attempt, and 04 LIBRARY can send any work back with **OPEN IN
+   03 EDIT** / **USE IN 02 COVER**.
 
 The check is symbolic: passing it does not guarantee the audio realizes the score. Treat
 transcription, symbolic checks and listening as three separate pieces of evidence.

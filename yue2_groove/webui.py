@@ -1065,6 +1065,32 @@ def cover_send_to_generate(text, task, style, lyrics, keep_voice):
 
 # ───────────────── edit tab (see edit_flow.py) ─────────────────
 
+BUSY_HTML = ('<div id="bb-busy" role="status" aria-live="polite">'
+             '● JOB RUNNING — other tabs stay locked until it finishes or you press CANCEL'
+             '</div>')
+
+
+def busy_banner():
+    """Global busy indicator polled by a gr.Timer (no handler signature changes)."""
+    return BUSY_HTML if _RUNNING.locked() else ""
+
+
+def _sheetsage_python_candidates() -> list[Path]:
+    repo = Path(__file__).resolve().parent.parent
+    return [repo / ".venv-sheetsage2" / "bin" / "python",
+            repo.parent / "YuE" / ".venv-sheetsage2" / "bin" / "python"]
+
+
+def cover_detect_python():
+    """Look for a SheetSage2 venv in the documented locations and use it for this session."""
+    found = next((path for path in _sheetsage_python_candidates() if path.is_file()), None)
+    if found is None:
+        return ("No SheetSage2 venv found at ./.venv-sheetsage2 or ../YuE/.venv-sheetsage2 — "
+                "install one (README, 'Cover from audio') or set YUE2_GROOVE_SHEETSAGE_PYTHON.")
+    os.environ["YUE2_GROOVE_SHEETSAGE_PYTHON"] = str(found)
+    return f"Using {found} for this session — add it to .env (or --sheetsage-python) to persist."
+
+
 def _rel_of_run(value) -> str:
     """Accept a run directory (absolute) or a Library rel and return the rel."""
     text = (value or "").strip()
@@ -1794,6 +1820,17 @@ table { border-color: var(--bb-line) !important; }
 /* the environment status is a hint, not content: same scale as the note below it */
 #bb-env-status textarea { font-size: 11.5px !important; line-height: 1.55 !important;
   letter-spacing: .04em; color: var(--bb-ink3) !important; }
+/* first-run strip + global busy banner */
+#bb-start { align-items: center; gap: 8px; margin-bottom: 10px; }
+#bb-start .bb-note p { margin: 0; }
+#bb-start button { text-transform: uppercase !important; letter-spacing: .08em !important; }
+#bb-busy-wrap { min-height: 0; }
+#bb-busy {
+  border: 1px solid var(--bb-line2); border-radius: 8px; padding: 7px 12px; margin-bottom: 10px;
+  font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--bb-ink2);
+  background: var(--bb-panel);
+}
+
 /* footer credit link */
 #bb-footer a {
   color: var(--bb-ink2) !important; text-decoration: underline; text-underline-offset: 3px;
@@ -2448,6 +2485,13 @@ def build_ui(defaults):
 
     with gr.Blocks(title="YUE2 // GROOVE") as demo:
         gr.HTML(header)
+        with gr.Row(elem_id="bb-start"):
+            gr.Markdown("START →", elem_classes=["bb-note"])
+            start_song_btn = gr.Button("NEW SONG", size="sm", scale=1)
+            start_cover_btn = gr.Button("COVER A RECORDING", size="sm", scale=1)
+            start_edit_btn = gr.Button("EDIT A WORK", size="sm", scale=1)
+            start_library_btn = gr.Button("LIBRARY", size="sm", scale=1)
+        busy_out = gr.HTML("", elem_id="bb-busy-wrap")
         with gr.Row(elem_id="bb-topbtns"):
             rail_btn = gr.Button("", size="sm", elem_id="bb-rail-btn")
             theme_btn = gr.Button("", size="sm", elem_id="bb-theme-btn")
@@ -2586,6 +2630,7 @@ def build_ui(defaults):
                                 info="Reuse one resident model process between transcriptions until "
                                      "UNLOAD or the idle timeout", scale=3)
                             cover_env_btn = gr.Button("CHECK ENVIRONMENT", size="sm", scale=1)
+                            cover_detect_btn = gr.Button("AUTO-DETECT VENV", size="sm", scale=1)
                             cover_unload_btn = gr.Button("UNLOAD SHEETSAGE2", size="sm", scale=1)
                         with gr.Row():
                             cover_source = gr.Dropdown(
@@ -2708,6 +2753,10 @@ def build_ui(defaults):
                                 edit_check_btn = gr.Button("CHECK INVARIANTS", size="sm", scale=1)
                             edit_check_out = gr.Textbox(label="CHECK RESULT", lines=7,
                                                         interactive=False)
+                            gr.Markdown("**Symbolic check only.** A passing contract says nothing "
+                                        "about how the generated audio sounds — confirm with the "
+                                        "listening comparison below (whole song and a passage "
+                                        "around the edit).", elem_classes=["bb-note"])
                         with gr.Row():
                             edit_run_btn = gr.Button("GENERATE EDITED", variant="primary",
                                                      size="lg", scale=3, elem_id="bb-edit-run")
@@ -2846,9 +2895,10 @@ def build_ui(defaults):
                     # ───── 06 DECODE ─────
                     with gr.Tab("06 // DECODE", id="decode"):
                         gr.Markdown(
-                            "Re-decode a saved **latent.npy** without generating again "
-                            "(same as the upstream skill script `run_yue2.py decode`). "
-                            "Typical use: compare `standard` and `legacy` decoders on the same song.",
+                            "**Evaluation / reproduction path** — re-decode a saved **latent.npy** "
+                            "without generating again (same as the upstream skill script "
+                            "`run_yue2.py decode`). Typical use: compare `standard` and `legacy` "
+                            "decoders on the same song. Not part of the song-writing flow.",
                             elem_classes=["bb-note"],
                         )
                         with gr.Row():
@@ -3026,6 +3076,13 @@ def build_ui(defaults):
                          outputs=doctor_out)
         load_btn.click(lambda *a: load_pipeline(*a)[1], inputs=model_args, outputs=env_status)
         unload_btn.click(lambda: (unload_pipeline(), "Model unloaded")[1], outputs=env_status)
+        start_song_btn.click(lambda: gr.update(selected="gen"), outputs=tabs)
+        start_cover_btn.click(lambda: gr.update(selected="cover"), outputs=tabs)
+        start_edit_btn.click(lambda: gr.update(selected="edit"), outputs=tabs)
+        start_library_btn.click(lambda: gr.update(selected="library"), outputs=tabs)
+        cover_detect_btn.click(cover_detect_python, outputs=cover_status)
+        busy_timer = gr.Timer(2.0)
+        busy_timer.tick(busy_banner, outputs=busy_out)
         theme_btn.click(fn=None, js=THEME_TOGGLE_JS, outputs=theme_btn)
         rail_btn.click(fn=None, js=RAIL_TOGGLE_JS, outputs=rail_btn)
 
