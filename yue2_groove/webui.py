@@ -844,12 +844,12 @@ def cover_transcribe(audio_path, task, max_seconds, model, device, dtype, revisi
     if not _RUNNING.acquire(blocking=False):
         yield (gr.update(), gr.update(),
                "Another job is already running — wait for it to finish",
-               *((gr.update(),) * 6))
+               *((gr.update(),) * 7))
         return
-    busy = (gr.update(interactive=False),) * 6
-    idle = (gr.update(interactive=True),) * 6
+    controls = (gr.update(interactive=False),) * 7
+    idle = (gr.update(interactive=True),) * 7
     try:
-        yield gr.update(), gr.update(), "Starting SheetSage2 transcription…", *busy
+        yield gr.update(), gr.update(), "Starting SheetSage2 transcription…", *controls
         outdir = config.transcriptions_dir(RUNS) / \
             f"{time.strftime('%Y%m%d-%H%M%S')}-{_slug(Path(audio_path).stem)}"
 
@@ -877,7 +877,9 @@ def cover_transcribe(audio_path, task, max_seconds, model, device, dtype, revisi
                          f"transcription until UNLOAD or the idle timeout.")
         yield abc, _transcription_files(record["output_dir"]), "\n".join(lines), *idle
     except InterruptedError as exc:
-        yield gr.update(), gr.update(), f"Cancelled: {exc}", *idle
+        note = (" The resident SheetSage2 worker was stopped; the next transcription reloads it."
+                if keep_warm else "")
+        yield gr.update(), gr.update(), f"Cancelled: {exc}.{note}", *idle
     except Exception as exc:  # noqa: BLE001
         yield gr.update(), gr.update(), \
             f"Transcription failed: {type(exc).__name__}: {exc}", *idle
@@ -913,12 +915,12 @@ def cover_generate(style, lyrics, abc_text, task, seed, cfg_scale,
     _CANCEL.clear()
     if not _RUNNING.acquire(blocking=False):
         yield ("Another job is already running — wait for it to finish",
-               gr.update(), gr.update(), gr.update(), *((gr.update(),) * 6))
+               gr.update(), gr.update(), gr.update(), *((gr.update(),) * 7))
         return
-    busy = (gr.update(interactive=False),) * 6
-    idle = (gr.update(interactive=True),) * 6
+    controls = (gr.update(interactive=False),) * 7
+    idle = (gr.update(interactive=True),) * 7
     try:
-        yield "Starting cover generation…", gr.update(), gr.update(), gr.update(), *busy
+        yield "Starting cover generation…", gr.update(), gr.update(), gr.update(), *controls
         pipe, note = _get_pipe(device, dtype, backend, quantization, offload_ar, budget,
                                ode_steps, vae_core_frames, model, vae_choice, vae_custom,
                                revision, vae_revision, offline, progress)
@@ -1789,7 +1791,7 @@ TIPS = {
     "MAX SECONDS (0 = WHOLE FILE)": "Deliberately crop the transcript to the first N seconds; 0 processes the whole file. Long files take longer and use more GPU memory.",
     "SHEETSAGE2 MODEL / DIR": "Hugging Face id (m-a-p/SheetSage2) or the path of a downloaded snapshot. MERT-v2-FullSong loads automatically as its parent encoder.",
     "BASE MODEL / MERT SNAPSHOT": "Optional local path of the MERT-v2-FullSong snapshot; passed as base_model_path so a fully offline adapter load does not need the Hub cache.",
-    "KEEP SHEETSAGE2 WARM": "Keep one SheetSage2 process resident and reuse its loaded model between transcriptions (faster repeats) until UNLOAD SHEETSAGE2 or the idle timeout. Off: every transcription starts a fresh process and frees all memory on exit.",
+    "KEEP SHEETSAGE2 WARM": "Keep one SheetSage2 process resident and reuse its loaded model between transcriptions (faster repeats) until UNLOAD SHEETSAGE2 or the idle timeout. Off: every transcription starts a fresh process and frees all memory on exit. Locked while a transcription runs; changes apply from the next request.",
     "COVER ABC": "The transcription, editable. Fix wrong notes/meter before covering; STRIP CHORDS removes harmony for cot=melody, SEND TO GENERATE fills 01 GENERATE and sets the plan mode.",
     "SOURCE WORK": "A saved work with a score.abc (generated plan or an earlier edit); its ABC becomes the frozen baseline.",
     "BASELINE": "Record of the frozen source: hashes plus copies of score.abc/request.json. The original run directory is never modified.",
@@ -2759,20 +2761,20 @@ def build_ui(defaults):
         rail_btn.click(fn=None, js=RAIL_TOGGLE_JS, outputs=rail_btn)
 
         # ───── cover wiring (SheetSage2 lives in sheetsage_adapter.py) ─────
-        cover_buttons = [cover_btn, cover_strip_btn, cover_send_btn, cover_generate_btn,
-                         cover_env_btn, cover_unload_btn]
+        cover_controls = [cover_btn, cover_strip_btn, cover_send_btn, cover_generate_btn,
+                          cover_env_btn, cover_unload_btn, cover_keep_warm]
         cover_btn.click(cover_transcribe,
                         inputs=[cover_audio, cover_task, cover_max_seconds, cover_model,
                                 cover_device, cover_dtype, cover_revision, cover_base_model,
                                 cover_keep_warm, cover_offline],
-                        outputs=[cover_abc, cover_files, cover_status, *cover_buttons])
+                        outputs=[cover_abc, cover_files, cover_status, *cover_controls])
         cover_generate_btn.click(
             cover_generate,
             inputs=[cover_style, cover_lyrics, cover_abc, cover_task, cover_seed, cover_cfg,
                     abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
                     sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max] + model_args,
             outputs=[cover_status, cover_result_audio, cover_result_abc, cover_gen_files,
-                     *cover_buttons])
+                     *cover_controls])
         cover_cancel_btn.click(cancel_run, outputs=cover_status)
         cover_env_btn.click(cover_check_environment, outputs=cover_status)
         cover_unload_btn.click(cover_unload_worker, outputs=cover_status)

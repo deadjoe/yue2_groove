@@ -27,8 +27,8 @@ clear configuration error and the rest of the UI keeps working.
 * ``YUE2_GROOVE_SHEETSAGE_KEEP_WARM``  ``1`` keeps a resident SheetSage2 worker alive between
                                     transcriptions (faster repeats, holds the model in memory;
                                     default: off / one process per transcription)
-* ``YUE2_GROOVE_SHEETSAGE_IDLE_SECONDS``  how long a resident worker may sit idle before the next
-                                    transcription replaces it (default: 900)
+* ``YUE2_GROOVE_SHEETSAGE_IDLE_SECONDS``  how long a resident worker may sit idle before the
+                                    background reaper stops it (default: 900)
 * ``YUE2_GROOVE_TRANSCRIPTIONS``    where transcription outputs are written (default:
                                     ``<runs>/transcriptions``)
 """
@@ -100,7 +100,7 @@ def sheetsage_keep_warm() -> bool:
 
 
 def sheetsage_idle_seconds() -> float:
-    """Idle lifetime of the resident worker before the next run replaces it."""
+    """Idle lifetime of the resident worker before the background reaper stops it."""
     try:
         return max(0.0, float(os.environ.get("YUE2_GROOVE_SHEETSAGE_IDLE_SECONDS") or 900))
     except ValueError:

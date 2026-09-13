@@ -286,6 +286,11 @@ class _Worker:
     def alive(self) -> bool:
         return self.process is not None and self.process.poll() is None
 
+    @property
+    def busy(self) -> bool:
+        """True while a request is being served (never reap a busy worker)."""
+        return self._lock.locked()
+
     def stderr_tail(self, limit: int = 800) -> str:
         return "".join(self._stderr).strip()[-limit:]
 
@@ -315,64 +320,104 @@ class _Worker:
         if not self.alive():
             raise SheetsageFailed("SheetSage2 worker is not running")
         with self._lock:
-            self.last_used = time.monotonic()
+            self.last_used = time.monotonic()   # checked out: never reap mid-request
             try:
-                assert self.process is not None and self.process.stdin is not None
-                self.process.stdin.write(json.dumps({"op": "transcribe", **request}) + "\n")
-                self.process.stdin.flush()
-            except (OSError, ValueError) as exc:
-                raise SheetsageFailed(
-                    "SheetSage2 worker closed its input: " + self.stderr_tail()) from exc
-            deadline = time.monotonic() + timeout if timeout else None
-            while True:
+                return self._request(request, cancelled=cancelled, progress=progress,
+                                     timeout=timeout)
+            finally:
+                # Idle time starts when the request *ends*: a long transcription must
+                # not look expired the moment it finishes.
+                self.last_used = time.monotonic()
+
+    def _request(self, request: dict, *, cancelled: Cancelled | None,
+                 progress: Progress | None, timeout: float | None) -> dict:
+        try:
+            assert self.process is not None and self.process.stdin is not None
+            self.process.stdin.write(json.dumps({"op": "transcribe", **request}) + "\n")
+            self.process.stdin.flush()
+        except (OSError, ValueError) as exc:
+            raise SheetsageFailed(
+                "SheetSage2 worker closed its input: " + self.stderr_tail()) from exc
+        deadline = time.monotonic() + timeout if timeout else None
+        while True:
+            try:
+                line = self._lines.get(timeout=0.25)
+            except queue.Empty:
+                line = ""
+            if line is None:
+                self.process = None
+                raise SheetsageFailed("SheetSage2 worker stopped unexpectedly: "
+                                      + self.stderr_tail())
+            if line.startswith(PROGRESS_PREFIX):
                 try:
-                    line = self._lines.get(timeout=0.25)
-                except queue.Empty:
-                    line = ""
-                if line is None:
-                    self.process = None
-                    raise SheetsageFailed("SheetSage2 worker stopped unexpectedly: "
-                                          + self.stderr_tail())
-                if line.startswith(PROGRESS_PREFIX):
+                    event = json.loads(line[len(PROGRESS_PREFIX):])
+                except ValueError:
+                    event = {}
+                done, total = event.get("done"), event.get("total")
+                fraction = (done / total) if (isinstance(done, (int, float)) and total) else None
+                if progress is not None:
                     try:
-                        event = json.loads(line[len(PROGRESS_PREFIX):])
-                    except ValueError:
-                        event = {}
-                    done, total = event.get("done"), event.get("total")
-                    fraction = (done / total) if (isinstance(done, (int, float)) and total) else None
-                    if progress is not None:
-                        try:
-                            progress(fraction, "Transcribing…" + (f" {done}/{total}" if total else ""))
-                        except Exception:  # noqa: BLE001 — a UI callback must never kill the job
-                            pass
-                elif line.startswith(RESULT_PREFIX):
-                    try:
-                        reply = json.loads(line[len(RESULT_PREFIX):])
-                    except ValueError as exc:
-                        raise SheetsageFailed(f"Unreadable worker reply: {line[:200]!r}") from exc
-                    if reply.get("ok"):
-                        return reply
-                    raise SheetsageFailed(str(reply.get("error") or "SheetSage2 worker failed"))
-                if cancelled is not None and self.alive() and cancelled():
-                    _terminate(self.process)
-                    self.process = None
-                    raise InterruptedError("Transcription cancelled")
-                if deadline is not None and time.monotonic() > deadline:
-                    _terminate(self.process)
-                    self.process = None
-                    raise SheetsageFailed(
-                        f"Transcription timed out after {timeout:.0f}s")
-                if not self.alive() and self._lines.empty():
-                    raise SheetsageFailed("SheetSage2 worker exited: " + self.stderr_tail())
+                        progress(fraction, "Transcribing…" + (f" {done}/{total}" if total else ""))
+                    except Exception:  # noqa: BLE001 — a UI callback must never kill the job
+                        pass
+            elif line.startswith(RESULT_PREFIX):
+                try:
+                    reply = json.loads(line[len(RESULT_PREFIX):])
+                except ValueError as exc:
+                    raise SheetsageFailed(f"Unreadable worker reply: {line[:200]!r}") from exc
+                if reply.get("ok"):
+                    return reply
+                raise SheetsageFailed(str(reply.get("error") or "SheetSage2 worker failed"))
+            if cancelled is not None and self.alive() and cancelled():
+                _terminate(self.process)
+                self.process = None
+                raise InterruptedError("Transcription cancelled")
+            if deadline is not None and time.monotonic() > deadline:
+                _terminate(self.process)
+                self.process = None
+                raise SheetsageFailed(f"Transcription timed out after {timeout:.0f}s")
+            if not self.alive() and self._lines.empty():
+                raise SheetsageFailed("SheetSage2 worker exited: " + self.stderr_tail())
 
 
 _WORKER: _Worker | None = None
 _WORKER_LOCK = threading.Lock()
+_REAPER: threading.Thread | None = None
+_REAPER_TICK = 5.0          # how often the background reaper checks the idle timeout
+
+
+def _reap_idle_worker() -> bool:
+    """Stop the resident worker when it has been idle past the configured timeout.
+
+    Called by the background reaper (so memory is actually released without waiting
+    for the next transcription) and directly by tests.  A busy worker is never
+    reaped; an expired worker is stopped and ``None`` is returned by status.
+    """
+    global _WORKER
+    with _WORKER_LOCK:
+        worker = _WORKER
+        if worker is None or not worker.alive():
+            return False
+        idle = config.sheetsage_idle_seconds()
+        if not idle or worker.busy or (time.monotonic() - worker.last_used) <= idle:
+            return False
+        _WORKER = None
+    worker.stop()
+    return True
+
+
+def _reaper_loop() -> None:
+    while True:
+        time.sleep(_REAPER_TICK)
+        try:
+            _reap_idle_worker()
+        except Exception:  # noqa: BLE001 — the reaper must never kill the process
+            pass
 
 
 def _ensure_worker(cmd: list[str], idle_seconds: float) -> _Worker:
     """Return the resident worker for *cmd*, starting/replacing it when needed."""
-    global _WORKER
+    global _WORKER, _REAPER
     key = tuple(cmd)
     with _WORKER_LOCK:
         if _WORKER is not None:
@@ -384,6 +429,12 @@ def _ensure_worker(cmd: list[str], idle_seconds: float) -> _Worker:
             worker = _Worker(cmd, key)
             worker.start()
             _WORKER = worker
+            if _REAPER is None or not _REAPER.is_alive():
+                _REAPER = threading.Thread(target=_reaper_loop, daemon=True,
+                                           name="sheetsage-reaper")
+                _REAPER.start()
+        # mark as just used so the reaper cannot race a request that is starting
+        _WORKER.last_used = time.monotonic()
         return _WORKER
 
 

@@ -233,9 +233,9 @@ automatically — do not install it separately. On macOS use the same commands w
 index and `device=mps` (untested) or `device=cpu` (works, slow). The **CHECK ENVIRONMENT**
 button probes the second venv without loading weights; the TRANSCRIBE task picks vocal-only,
 vocal+instrumental, or full-score (with chords) output. **KEEP SHEETSAGE2 WARM** reuses one
-resident worker between transcriptions (fast repeats; **UNLOAD SHEETSAGE2** frees it), while the
-default is a fresh process per transcription that returns all memory on exit. Running both models
-sequentially on one GPU is the supported setup.
+resident worker between transcriptions (fast repeats; **UNLOAD SHEETSAGE2** or the idle reaper
+frees it), while the default is a fresh process per transcription that returns all memory on
+exit. Running both models sequentially on one GPU is the supported setup.
 
 Manual walkthrough (`C1`/`C2`), failure behavior and hardware expectations:
 [docs/COVER_EDIT.md](docs/COVER_EDIT.md).

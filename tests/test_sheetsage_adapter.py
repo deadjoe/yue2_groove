@@ -363,6 +363,7 @@ SERVE_STUB = """
 def _no_resident_worker():
     yield
     adapter.stop_worker()
+    adapter._REAPER = None   # next warm start gets a fresh reaper with the current tick
 
 
 def enable_warm(monkeypatch, tmp_path: Path, stub_body: str = SERVE_STUB) -> Path:
@@ -520,3 +521,32 @@ def test_warm_config_flags(monkeypatch) -> None:
     assert config.sheetsage_idle_seconds() == 900.0
     monkeypatch.setenv("YUE2_GROOVE_SHEETSAGE_IDLE_SECONDS", "30")
     assert config.sheetsage_idle_seconds() == 30.0
+
+
+def test_idle_worker_is_reaped_in_the_background(monkeypatch, tmp_path: Path) -> None:
+    audio = tmp_path / "ref.wav"
+    audio.write_bytes(b"RIFF")
+    enable_warm(monkeypatch, tmp_path)
+    monkeypatch.setenv("YUE2_GROOVE_SHEETSAGE_IDLE_SECONDS", "0.05")
+    monkeypatch.setattr(adapter, "_REAPER_TICK", 0.02)
+
+    adapter.transcribe(audio, output_dir=tmp_path / "one")
+    assert adapter.worker_status() is not None
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and adapter.worker_status() is not None:
+        time.sleep(0.02)
+    assert adapter.worker_status() is None            # freed without another transcription
+
+
+def test_reaper_never_stops_a_busy_worker(monkeypatch, tmp_path: Path) -> None:
+    audio = tmp_path / "ref.wav"
+    audio.write_bytes(b"RIFF")
+    enable_warm(monkeypatch, tmp_path)
+    adapter.transcribe(audio, output_dir=tmp_path / "one")
+    worker = adapter._WORKER
+    assert worker is not None
+    monkeypatch.setenv("YUE2_GROOVE_SHEETSAGE_IDLE_SECONDS", "0.001")
+    with worker._lock:
+        time.sleep(0.01)
+        assert adapter._reap_idle_worker() is False
+    assert adapter.worker_status() is not None

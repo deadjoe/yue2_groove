@@ -103,10 +103,10 @@ def test_cover_transcribe_yields_result_and_frees_the_lock(monkeypatch, tmp_path
     monkeypatch.setattr(webui.sheetsage_adapter, "transcribe", fake_transcribe)
     yields = list(webui.cover_transcribe(str(audio), "melody-full", 0, "m-a-p/SheetSage2",
                                          "auto", "auto", "", "/mert-snapshot", False, False))
-    assert all(len(chunk) == 9 for chunk in yields)          # matches the 9 wired outputs
+    assert all(len(chunk) == 10 for chunk in yields)         # matches the 10 wired outputs
     abc, files, status, *buttons = yields[-1]
     assert abc == CHORD_FREE and files and str(transcript / "score.abc") in files
-    assert "low confidence" in status and len(buttons) == 6
+    assert "low confidence" in status and len(buttons) == 7
     assert all(button["interactive"] is True for button in buttons)   # all actions re-enabled
     assert seen["cancelled"] is not None and seen["base_model"] == "/mert-snapshot"
     assert seen["keep_warm"] is False
@@ -364,11 +364,11 @@ def test_cover_generate_runs_directly_from_the_cover_tab(isolated_runs: Path,
     monkeypatch.setattr(webui, "_run_generation", fake_run_generation)
 
     yields = list(webui.cover_generate(*cover_generate_args()))
-    assert all(len(chunk) == 10 for chunk in yields)  # status + audio + result abc + files + 6 buttons
+    assert all(len(chunk) == 11 for chunk in yields)  # status + audio + result abc + files + 7 controls
     status, audio, result_abc, files, *buttons = yields[-1]
     assert captured["cot"] == "melody" and '"C"' not in captured["abc"]
     assert audio.endswith("audio.flac") and result_abc == FakeSong.abc
-    assert len(buttons) == 6 and all(b["interactive"] is True for b in buttons)
+    assert len(buttons) == 7 and all(b["interactive"] is True for b in buttons)
     assert "run directory" in status
 
     # a full-score transcription keeps its chord symbols and uses cot=full
@@ -416,3 +416,19 @@ def test_make_comparison_builds_a_real_listening_bundle(isolated_runs: Path) -> 
     assert (outdir / "index.html").is_file() and (outdir / "manifest.json").is_file()
     assert (outdir / "case-001").is_dir() and (outdir / "case-002").is_dir()
     assert "gradio_api/file=" in link and "cases" in status
+
+
+def test_cover_transcribe_cancel_explains_the_stopped_worker(monkeypatch, tmp_path: Path) -> None:
+    audio = tmp_path / "ref.wav"
+    audio.write_bytes(b"RIFF")
+
+    def fake_transcribe(audio_path, **kwargs):
+        raise InterruptedError("Transcription cancelled")
+
+    monkeypatch.setattr(webui.sheetsage_adapter, "transcribe", fake_transcribe)
+    yields = list(webui.cover_transcribe(str(audio), "melody-full", 0, "m", "auto", "auto", "",
+                                         "", True, False))
+    status = yields[-1][2]
+    assert "Cancelled" in status and "worker was stopped" in status
+    assert list(webui.cover_transcribe(str(audio), "melody-full", 0, "m", "auto", "auto", "",
+                                       "", False, False))[-1][2].count("worker was stopped") == 0

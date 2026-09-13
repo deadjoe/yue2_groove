@@ -56,8 +56,8 @@ the 06 COVER UI writes every transcription into a fresh timestamped directory th
 every transcription is a fresh subprocess (dependencies isolated, all memory returned on exit);
 `KEEP SHEETSAGE2 WARM` keeps one resident worker whose loaded model is reused — much faster
 repeats, at the cost of holding the weights in memory. UNLOAD SHEETSAGE2 frees it immediately;
-the next transcription after the idle timeout also replaces it, and CANCEL terminates a busy
-worker (the following run starts a fresh one).
+a background reaper also stops it once the idle timeout passes (no need to wait for another
+run), and CANCEL terminates a busy worker (the following run starts a fresh one).
 
 The **CHECK ENVIRONMENT** button in 06 COVER probes that interpreter (`torch`,
 `transformers`, ffmpeg) without loading weights. If SheetSage2 is not configured, the
@@ -208,7 +208,8 @@ a support guarantee.
   interpreter, remote code and MERT-v2-FullSong parent are loaded fresh and all memory is
   returned when the process exits (dependency isolation; nothing left reserved when YuE2
   loads). `KEEP SHEETSAGE2 WARM` switches to **one resident worker** whose model is reused
-  until UNLOAD / the idle timeout; CANCEL or a crash kills it and the next run restarts it.
+  until UNLOAD / the idle timeout; a background reaper stops it once idle, and CANCEL or a
+  crash kills it immediately (the next run restarts it).
   Measured on this machine (MPS fp32, 30 s excerpt, warm OS cache): 9.7 s cold vs 6.0 s warm
   on the second run — the saving grows when the weights are not in the page cache.
 - YuE2 generation: the upstream baseline (24 GB NVIDIA, BF16) or Apple Silicon with the
