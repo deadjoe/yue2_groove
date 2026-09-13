@@ -137,6 +137,13 @@ def test_view_toggle_is_flat_compact_chrome() -> None:
     assert "#bb-topbtns { flex-wrap: nowrap !important; }" in css
 
 
+def test_rail_toggle_is_disabled_in_song_view() -> None:
+    """The settings rail lives inside STUDIO, so its toggle is dead in SONG."""
+    assert "rail.disabled = songView" in webui.VIEW_JS
+    assert "__bbApplyRail" in webui.VIEW_JS and "__bbApplyRail" in webui.HEAD_HTML
+    assert "Settings live in STUDIO" in webui.VIEW_JS
+
+
 def test_forced_view_does_not_write_the_remembered_choice() -> None:
     boot = webui._head_html("studio")
     assert "window.__BB_VIEW_FORCED__ = (mode === 'song' || mode === 'studio');" in boot

@@ -2573,11 +2573,16 @@ HEAD_HTML = """<meta name="color-scheme" content="dark light">
     var railWrap = document.getElementById('bb-rail-btn');
     var railBtn = railWrap && (railWrap.tagName === 'BUTTON' ? railWrap : railWrap.querySelector('button'));
     if (railBtn) {
-      var hidden = document.documentElement.classList.contains('bb-rail-hidden');
-      railBtn.classList.toggle('bb-on', !hidden);
-      var label = hidden ? 'Show the settings rail' : 'Hide the settings rail';
-      railBtn.title = label;
-      railBtn.setAttribute('aria-label', label);
+      // the rail lives inside STUDIO; VIEW_JS disables the toggle in SONG
+      if (window.__bbApplyRail) {
+        window.__bbApplyRail();
+      } else {
+        var hidden = document.documentElement.classList.contains('bb-rail-hidden');
+        railBtn.classList.toggle('bb-on', !hidden);
+        var label = hidden ? 'Show the settings rail' : 'Hide the settings rail';
+        railBtn.title = label;
+        railBtn.setAttribute('aria-label', label);
+      }
     }
   }
   sync();
@@ -2945,8 +2950,25 @@ VIEW_JS = r"""(function () {
     var wrap = document.getElementById(id);
     return wrap ? (wrap.tagName === 'BUTTON' ? wrap : wrap.querySelector('button')) : null;
   }
+  function applyRail(view) {
+    // the settings rail sits inside the STUDIO root, so the toggle is a dead
+    // control in SONG; disable it there and label it honestly
+    var rail = button('bb-rail-btn');
+    if (!rail) return;
+    var songView = norm(view) !== 'studio';
+    var hidden = document.documentElement.classList.contains('bb-rail-hidden');
+    rail.disabled = songView;
+    rail.classList.toggle('bb-on', !songView && !hidden);
+    var label = songView ? 'Settings live in STUDIO'
+              : (hidden ? 'Show the settings rail' : 'Hide the settings rail');
+    rail.title = label;
+    rail.setAttribute('aria-label', label);
+  }
+  var currentView = 'song';
+  window.__bbApplyRail = function () { applyRail(currentView); };
   function apply(view) {
     view = norm(view);
+    currentView = view;
     var root = document.documentElement;
     root.classList.toggle('bb-view-song', view !== 'studio');
     root.classList.toggle('bb-view-studio', view === 'studio');
@@ -2954,6 +2976,7 @@ VIEW_JS = r"""(function () {
     var studio = button('bb-view-studio-btn');
     if (song) song.classList.toggle('bb-active', view !== 'studio');
     if (studio) studio.classList.toggle('bb-active', view === 'studio');
+    applyRail(view);
   }
   window.__bbSetView = function (view) {
     view = norm(view);
