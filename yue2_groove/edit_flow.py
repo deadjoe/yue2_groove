@@ -19,9 +19,9 @@ import hashlib
 import json
 import textwrap
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
 
 from . import adapter, library
 from .vendor import abc_tools
@@ -86,7 +86,7 @@ def check_invariants(before_abc: str, after_abc: str, *, voices: str = "both",
     result = abc_tools.compare(before, after, names=names, allow_tempo_change=bool(allow_tempo_change))
     result["before_sha256"] = sha256_text(before_text)
     result["after_sha256"] = sha256_text(after_text)
-    result["checked_at"] = datetime.now().isoformat(timespec="seconds")
+    result["checked_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
     return result
 
 
@@ -136,7 +136,7 @@ def freeze_baseline(root, rel: str, *, baseline_root=None, now=None) -> dict:
 
     record = {
         "schema": "yue2-groove-baseline-v1",
-        "created": datetime.fromtimestamp(now if now is not None else time.time()).isoformat(timespec="seconds"),
+        "created": datetime.fromtimestamp(now if now is not None else time.time()).astimezone().isoformat(timespec="seconds"),
         "source": {"rel": rel, "path": str(source)},
         "baseline": {"rel": destination.relative_to(root).as_posix() if destination.is_relative_to(root)
                      else str(destination), "path": str(destination)},
@@ -160,7 +160,7 @@ def build_edit_manifest(*, source_rel: str, before_abc: str, after_abc: str, cot
     before_text, after_text = clean_abc(before_abc), clean_abc(after_abc)
     return {
         "schema": "yue2-groove-edit-v1",
-        "created": datetime.fromtimestamp(now if now is not None else time.time()).isoformat(timespec="seconds"),
+        "created": datetime.fromtimestamp(now if now is not None else time.time()).astimezone().isoformat(timespec="seconds"),
         "source": {"rel": source_rel, "frozen": baseline is not None, "baseline": baseline or None},
         "abc": {"before_sha256": sha256_text(before_text) if before_text else None,
                 "after_sha256": sha256_text(after_text)},

@@ -30,7 +30,6 @@ import hashlib
 import importlib.metadata
 import inspect
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -168,13 +167,13 @@ def load_model(args):
     Returns ``(model, device, dtype)``.  Shared by the one-shot ``run`` and the
     resident ``serve`` loop, so a warm worker loads exactly what the CLI would.
     """
-    import torch  # noqa: PLC0415  (this module must import without the SheetSage2 env)
-    from transformers import AutoModel  # noqa: PLC0415
+    import torch  # deliberately late: this module must import without the SheetSage2 env
+    from transformers import AutoModel  # deliberately late as well
 
     device, dtype = resolve_device_dtype(args.device, args.dtype, torch)
     if args.threads:
         torch.set_num_threads(args.threads)
-    loader = dict(trust_remote_code=True, local_files_only=bool(args.offline))
+    loader = {"trust_remote_code": True, "local_files_only": bool(args.offline)}
     if args.revision:
         loader.update(revision=args.revision, code_revision=args.revision)
     if args.base_model:
@@ -236,7 +235,7 @@ def write_failure(output: Path, record: dict, exc: Exception) -> None:
 def run_transcription(model, args, device: str, dtype: str, model_provenance: dict,
                       request: dict) -> dict:
     """Transcribe one request with an already loaded model into a fresh directory."""
-    audio, output, task, max_seconds, prompts, melody_only, record = prepare_request(args, request)
+    audio, output, _task, max_seconds, prompts, melody_only, record = prepare_request(args, request)
     write_json(output / "model_provenance.json", model_provenance)
     record["device"], record["dtype"] = device, dtype
     try:

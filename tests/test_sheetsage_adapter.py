@@ -12,13 +12,14 @@ import json
 import os
 import stat
 import sys
-import time
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
 
-from yue2_groove import config, sheetsage_adapter as adapter
+from yue2_groove import config
+from yue2_groove import sheetsage_adapter as adapter
 from yue2_groove import sheetsage_driver as driver
 
 PACKAGE = Path(adapter.__file__).resolve().parent

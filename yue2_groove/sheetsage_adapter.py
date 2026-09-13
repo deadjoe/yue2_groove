@@ -34,8 +34,8 @@ import signal
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from . import config
 
@@ -97,7 +97,7 @@ def probe(python: str | None = None, *, timeout: float = 180) -> dict:
     interpreter = resolve_python(python)
     try:
         result = subprocess.run([interpreter, "-c", _python_fragment()],
-                                capture_output=True, text=True, timeout=timeout)
+                                capture_output=True, text=True, timeout=timeout, check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise SheetsageFailed(f"Could not run the SheetSage2 python ({interpreter}): {exc}") from exc
     if result.returncode != 0:
@@ -358,7 +358,7 @@ class _Worker:
                 if progress is not None:
                     try:
                         progress(fraction, "Transcribing…" + (f" {done}/{total}" if total else ""))
-                    except Exception:  # noqa: BLE001 — a UI callback must never kill the job
+                    except Exception:  # noqa: BLE001, S110 — a UI callback must never kill the job
                         pass
             elif line.startswith(RESULT_PREFIX):
                 try:
@@ -411,7 +411,7 @@ def _reaper_loop() -> None:
         time.sleep(_REAPER_TICK)
         try:
             _reap_idle_worker()
-        except Exception:  # noqa: BLE001 — the reaper must never kill the process
+        except Exception:  # noqa: BLE001, S110 — the reaper must never kill the process
             pass
 
 
@@ -445,7 +445,7 @@ def worker_status() -> dict | None:
             return None
         return {"pid": _WORKER.process.pid if _WORKER.process else None,
                 "idle_seconds": round(time.monotonic() - _WORKER.last_used, 1),
-                "command": list(_WORKER.cmd)}
+                "command": _WORKER.cmd.copy()}
 
 
 def stop_worker() -> bool:
@@ -491,7 +491,7 @@ def transcribe(audio_path, *, output_dir=None, task: str = "melody-full",
         if progress is not None:
             try:
                 progress(fraction, description)
-            except Exception:  # noqa: BLE001 — a UI callback must never kill the job
+            except Exception:  # noqa: BLE001, S110 — a UI callback must never kill the job
                 pass
 
     warm = config.sheetsage_keep_warm() if keep_warm is None else bool(keep_warm)
@@ -544,9 +544,8 @@ def transcribe(audio_path, *, output_dir=None, task: str = "melody-full",
 
     def pump_stderr():
         try:
-            for line in process.stderr:
-                stderr_lines.append(line)
-        except (OSError, ValueError):
+            stderr_lines.extend(process.stderr)
+        except (OSError, ValueError):  # the pipe closes when the child exits
             pass
 
     stdout_thread = threading.Thread(target=pump_stdout, daemon=True)

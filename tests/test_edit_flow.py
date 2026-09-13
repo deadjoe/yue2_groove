@@ -165,7 +165,8 @@ def test_build_edit_manifest_records_hashes_and_permissions() -> None:
                                      "changes_override": False}
     assert manifest["invariants"]["match"] is True
     from datetime import datetime
-    assert manifest["created"] == datetime.fromtimestamp(0).isoformat(timespec="seconds")
+    assert manifest["created"] == datetime.fromtimestamp(0).astimezone().isoformat(
+        timespec="seconds")
 
     frozen = edit_flow.build_edit_manifest(
         source_rel="20260901-120000-source", before_abc=BASE_ABC, after_abc=CHORD_EDIT,

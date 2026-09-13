@@ -13,7 +13,7 @@ import pytest
 
 gr = pytest.importorskip("gradio")
 
-from yue2_groove import webui  # noqa: E402
+webui = pytest.importorskip("yue2_groove.webui")
 
 
 @pytest.fixture(autouse=True)
@@ -28,7 +28,8 @@ class FakeSong:
 
 
 def all_modes_args(**overrides):
-    args = dict(style="English piano pop", lyrics="[Verse]\nla", seed=831001, cfg_scale=0,
+    args = dict(  # noqa: C408 — test fixture builder
+        style="English piano pop", lyrics="[Verse]\nla", seed=831001, cfg_scale=0,
                 abc_text="", out_id="modes",
                 abc_temp=.7, abc_p=.9, abc_k=30, abc_rep=1.005, abc_win=100, abc_min=32,
                 abc_max=4096, sem_temp=1.0, sem_p=.95, sem_k=100, sem_rep=1.2, sem_win=50,
@@ -104,7 +105,7 @@ def test_all_modes_retains_a_failed_mode_and_compares_the_rest(monkeypatch) -> N
 
     yields = list(webui.generate_all_modes(*all_modes_args()))
     assert all(len(chunk) == 6 for chunk in yields)
-    status, files, _link, *_idle = yields[-1]
+    status, _files, _link, *_idle = yields[-1]
 
     root = Path(state["calls"][0]["dir"]).parent
     summary = json.loads((root / "run.json").read_text(encoding="utf-8"))

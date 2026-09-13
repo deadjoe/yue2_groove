@@ -11,7 +11,7 @@ plan a new melody, silently discarding the transcription.
 from __future__ import annotations
 
 import textwrap
-from typing import Callable
+from collections.abc import Callable
 
 from . import adapter
 from .vendor import abc_tools

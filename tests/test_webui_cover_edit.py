@@ -14,7 +14,9 @@ import pytest
 
 gr = pytest.importorskip("gradio")
 
-from yue2_groove import edit_flow, library, webui  # noqa: E402
+edit_flow = pytest.importorskip("yue2_groove.edit_flow")
+library = pytest.importorskip("yue2_groove.library")
+webui = pytest.importorskip("yue2_groove.webui")
 
 BASE_ABC = textwrap.dedent("""\
     X:1
@@ -191,8 +193,10 @@ def test_edit_freeze_and_check_guards(isolated_runs: Path) -> None:
 
 class FakeSong:
     abc = BASE_ABC
-    timing = {"nar_seconds": 1.0, "vae_seconds": 0.5,
-              "semantic": {"output_tps": 9.0}, "abc": {"output_tokens": 10}}
+
+    def __init__(self):
+        self.timing = {"nar_seconds": 1.0, "vae_seconds": 0.5,
+                       "semantic": {"output_tps": 9.0}, "abc": {"output_tokens": 10}}
 
 
 def fake_run_generation(pipe, request, outdir, *args, **kwargs):
@@ -205,7 +209,8 @@ def fake_run_generation(pipe, request, outdir, *args, **kwargs):
 
 
 def edit_generate_args(**overrides):
-    args = dict(style="jazz", lyrics="la", cot="full", seed=831001, cfg_scale=0,
+    args = dict(  # noqa: C408 — test fixture builder
+        style="jazz", lyrics="la", cot="full", seed=831001, cfg_scale=0,
                 abc_text=BASE_ABC, baseline_abc=BASE_ABC, source_rel="20260901-120000-source",
                 check_state={"sha256": edit_flow.sha256_text(edit_flow.clean_abc(BASE_ABC)),
                              "match": True, "result": {"match": True}, "voices": "both",
@@ -260,7 +265,7 @@ def test_edit_generate_guards(isolated_runs: Path, monkeypatch) -> None:
                "voices": "both", "allow_tempo_change": False}
     yields = list(webui.edit_generate(*edit_generate_args(check_state=failing, allow_changes=True)))
     assert all(len(chunk) == 11 for chunk in yields)          # matches the 11 wired outputs
-    audio, abc, files, status, *rest = yields[-1]
+    audio, _abc, _files, _status, *rest = yields[-1]
     assert len(rest) == 7                                      # 6 idle buttons + last run
     assert audio.endswith("audio.flac") and rest[0]["interactive"] is True
     last_run = rest[-1]
@@ -277,7 +282,7 @@ def test_edit_generate_happy_path_writes_a_manifest(isolated_runs: Path, monkeyp
     monkeypatch.setattr(webui, "_run_generation", fake_run_generation)
     yields = list(webui.edit_generate(*edit_generate_args()))
     assert all(len(chunk) == 11 for chunk in yields)
-    audio, result_abc, files, status, *rest = yields[-1]
+    audio, result_abc, _files, status, *rest = yields[-1]
     # the editor is not an output: only the separate RESULT ABC box receives song.abc
     assert audio.endswith("audio.flac") and result_abc == FakeSong.abc
     assert all(button["interactive"] is True for button in rest[:-1])   # 6 idle buttons
@@ -341,7 +346,8 @@ def test_sampling_summary_mirrors_the_shared_sliders() -> None:
 # ── direct cover generation ──────────────────────────────────────────────
 
 def cover_generate_args(**overrides):
-    args = dict(style="English jazz", lyrics="[Verse]\nla", abc_text=BASE_ABC,
+    args = dict(  # noqa: C408 — test fixture builder
+        style="English jazz", lyrics="[Verse]\nla", abc_text=BASE_ABC,
                 task="melody-full", seed=831001, cfg_scale=0,
                 abc_temp=.7, abc_p=.9, abc_k=30, abc_rep=1.005, abc_win=100, abc_min=32,
                 abc_max=4096, sem_temp=1.0, sem_p=.95, sem_k=100, sem_rep=1.2, sem_win=50,
@@ -375,7 +381,7 @@ def test_cover_generate_runs_directly_from_the_cover_tab(isolated_runs: Path,
 
     yields = list(webui.cover_generate(*cover_generate_args()))
     assert all(len(chunk) == 11 for chunk in yields)  # status + audio + result abc + files + 7 controls
-    status, audio, result_abc, files, *buttons = yields[-1]
+    status, audio, result_abc, _files, *buttons = yields[-1]
     assert captured["cot"] == "melody" and '"C"' not in captured["abc"]
     assert audio.endswith("audio.flac") and result_abc == FakeSong.abc
     assert len(buttons) == 7 and all(b["interactive"] is True for b in buttons)

@@ -877,8 +877,8 @@ def cover_transcribe(audio_path, task, max_seconds, model, device, dtype, revisi
         abc = record.get("abc") or ""
         warnings = record.get("warnings") or []
         lines = [f"Transcribed (task={record.get('task')}) → {record['output_dir']}",
-                 f"device={record.get('device')} dtype={record.get('dtype')}  "
-                 f"melody_only={record.get('melody_only')}",
+                 (f"device={record.get('device')} dtype={record.get('dtype')}  "
+                  f"melody_only={record.get('melody_only')}"),
                  "Review the ABC before covering; transcription can contain musical errors."]
         if warnings:
             lines.append("warnings: " + "; ".join(str(w) for w in warnings))
@@ -931,8 +931,8 @@ def cover_load(rel):
     return (gr.update(value=abc),
             gr.update(value=style) if style.strip() else gr.update(),
             gr.update(value=lyrics) if lyrics.strip() else gr.update(),
-            f"Loaded {item['name']} ({item['kind']}) — {len(abc)} chars. Continue here or "
-            f"press SEND TO EDIT.")
+            (f"Loaded {item['name']} ({item['kind']}) — {len(abc)} chars. Continue here or "
+             f"press SEND TO EDIT."))
 
 
 def cover_send_to_edit(abc_text, rel, style, lyrics):
