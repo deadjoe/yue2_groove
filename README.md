@@ -10,16 +10,16 @@ browser, adds a library of your generated works, and runs as a small local servi
   Plan mode `full / melody / off`, seed, CFG scale, all seven sampling parameters of both
   phases, budget presets, cancel, live progress, a rendered score, one-click artifact download.
   **ALL MODES** runs the same text request as `full` + `melody` + `off` and compares them.
-- **02 // DECODE** — re-decode a saved `latent.npy` with another decoder
+- **06 // DECODE** — re-decode a saved `latent.npy` with another decoder
   (source / standard / legacy / custom VAE, full or tiled) without generating again.
-- **03 // BATCH** — one JSON request per line, run in order, with a results table.
-- **04 // TOOLS** — ABC validation and event export, chord stripping for cover melodies,
+- **07 // BATCH** — one JSON request per line, run in order, with a results table.
+- **05 // TOOLS** — ABC validation and event export, chord stripping for cover melodies,
   edit invariant check, listening-comparison page, environment doctor.
-- **05 // LIBRARY** — every work you generated: sort, select, rename, confirmed delete,
+- **04 // LIBRARY** — every work you generated: sort, select, rename, confirmed delete,
   a player with spectrum and transport controls, style / lyrics / ABC / score, run tables.
-- **06 // COVER** — source audio → SheetSage2 transcription (separate venv) → editable ABC,
+- **02 // COVER** — source audio → SheetSage2 transcription (separate venv) → editable ABC,
   chord strip → one click into GENERATE with the right plan mode.
-- **07 // EDIT** — freeze a baseline, edit the score, check exact melody/meter invariants,
+- **03 // EDIT** — freeze a baseline, edit the score, check exact melody/meter invariants,
   regenerate from the edited score, compare baseline vs edit.
 - **Settings rail** — device, dtype, backend, quantization, memory budget, ODE steps,
   VAE core frames, model/VAE revisions, offline mode, load / unload.
@@ -34,10 +34,10 @@ that fail loudly when an upstream release changes something the UI depends on.
 
 ## Screenshots
 
-Dark scene (the UI also has a bright one). **05 // LIBRARY** — work list, spectrum player,
+Dark scene (the UI also has a bright one). **04 // LIBRARY** — work list, spectrum player,
 per-run request / sampling tables:
 
-<img src="docs/images/library-dark.webp" alt="05 // LIBRARY: work list, spectrum player, request and sampling tables" width="100%">
+<img src="docs/images/library-dark.webp" alt="04 // LIBRARY: work list, spectrum player, request and sampling tables" width="100%">
 
 **01 // GENERATE** — style, lyrics, plan mode, sampling presets, score and status panes:
 
@@ -53,7 +53,7 @@ per-run request / sampling tables:
 - The model weights are licensed **CC BY-NC 4.0 (non-commercial)** by the YuE2 project.
 - *Optional, for covers:* a separate SheetSage2 environment (Python 3.10/3.11, its own
   torch/transformers, FFmpeg 6.1+) — see [Cover from audio](#cover-from-audio-sheetsage2).
-  Everything except 06 COVER works without it.
+  Everything except 02 COVER works without it.
 
 ## Quick start
 
@@ -143,7 +143,7 @@ YUE2_GROOVE_MODEL=m-a-p/YuE2-3B      # Hugging Face id or a local directory
 YUE2_GROOVE_VAE=m-a-p/YuE2-Vae
 YUE2_GROOVE_VAE_LEGACY=m-a-p/YuE2-Vae-legacy
 YUE2_GROOVE_MODELS=/path/to/models   # optional: a folder holding YuE2-3B/, YuE2-Vae/, YuE2-Vae-legacy/, SheetSage2/
-YUE2_GROOVE_SHEETSAGE_PYTHON=/path/to/.venv-sheetsage2/bin/python   # 06 COVER (separate env)
+YUE2_GROOVE_SHEETSAGE_PYTHON=/path/to/.venv-sheetsage2/bin/python   # 02 COVER (separate env)
 YUE2_GROOVE_SHEETSAGE_MODEL=m-a-p/SheetSage2   # or a local SheetSage2 snapshot
 YUE2_GROOVE_SHEETSAGE_BASE_MODEL=/path/to/MERT-v2-FullSong   # offline parent encoder snapshot
 YUE2_GROOVE_SHEETSAGE_DEVICE=auto              # auto | cuda | mps | cpu
@@ -162,8 +162,8 @@ bash scripts/serve.sh start --port 7861 --device mps --dtype bfloat16 --no-prelo
 bash scripts/serve.sh start -f          # foreground, Ctrl-C to stop
 ```
 
-`--tab` selects the start tab (`0..6`, order: GENERATE, DECODE, BATCH, TOOLS, LIBRARY,
-COVER, EDIT). `--sheetsage-python` points at the SheetSage2 interpreter (same as
+`--tab` selects the start tab (`0..6`, order: GENERATE, COVER, EDIT, LIBRARY, TOOLS,
+DECODE, BATCH). `--sheetsage-python` points at the SheetSage2 interpreter (same as
 `YUE2_GROOVE_SHEETSAGE_PYTHON`).
 
 `--device auto` picks CUDA → MPS → CPU; `--dtype auto` is bfloat16 on CUDA/MPS (the
@@ -205,7 +205,7 @@ More on the Apple Silicon story, with measurements: [docs/MACOS_MPS.md](docs/MAC
 
 ## Cover from audio (SheetSage2)
 
-**06 // COVER** turns a recording into a cover: upload audio → SheetSage2 transcribes it to ABC
+**02 // COVER** turns a recording into a cover: upload audio → SheetSage2 transcribes it to ABC
 (melody-only or full score) → review/edit the score, strip chords → **SEND TO GENERATE** fills
 the ABC and the right plan mode, or **GENERATE COVER** generates right on the COVER tab with its
 own style/lyrics → the normal YuE2 generation path runs unchanged.
@@ -242,7 +242,7 @@ Manual walkthrough (`C1`/`C2`), failure behavior and hardware expectations:
 
 ## Edit a work and compare
 
-**07 // EDIT** is the iteration loop from the upstream skill: load a saved work → **FREEZE
+**03 // EDIT** is the iteration loop from the upstream skill: load a saved work → **FREEZE
 BASELINE** (hashes + copies of `score.abc`/`request.json`; the original run directory is never
 modified) → edit the ABC → **CHECK INVARIANTS** (exact sounding-note/meter comparison, per
 voice, with an explicit allow-tempo flag) → **GENERATE EDITED**.
@@ -264,8 +264,8 @@ Manual walkthrough (`E1`) and the failure cases (`X`):
 like upstream's `all-modes`: text-only input (an ABC would be invalid for `off`), one fresh
 directory per mode under `runs/<stamp>-allmodes-<id>/`, a `run.json` summary at the group root,
 and a retained `failure.json` when one mode fails while the others keep running. Each mode
-appears in 05 LIBRARY like any other work, and when at least two modes complete the UI also
-builds the same local listening bundle as 04 TOOLS with the link shown under the buttons.
+appears in 04 LIBRARY like any other work, and when at least two modes complete the UI also
+builds the same local listening bundle as 05 TOOLS with the link shown under the buttons.
 
 ## Keeping up with upstream
 
@@ -276,7 +276,7 @@ matrix is:
 |---|---|---|
 | 0.1.x | `yue2-v0.1.6` | NAR/VAE progress via an internal hook; a [pull request](https://github.com/multimodal-art-projection/YuE/pull/173) adds a public `on_progress` callback that the UI uses automatically once merged |
 
-SheetSage2 is used only by 06 COVER, through its Transformers interface
+SheetSage2 is used only by 02 COVER, through its Transformers interface
 (`AutoModel.from_pretrained(..., trust_remote_code=True)` then `transcribe(..., melody_only=True)`).
 The driver verifies that `melody_only` is an explicit keyword and refuses older revisions
 instead of guessing; it never imports SheetSage2's code into this process.
@@ -312,7 +312,7 @@ uv pip install --python .venv/bin/python -e ".[test]" --overrides overrides/maco
 - `yue2_groove/vendor/` — `abc_tools.py` and `listen.py` copied from upstream's
   `skills/yue2-music/scripts` (Apache 2.0; the wheel does not ship them).
 - `scripts/serve.sh` — service manager; `scripts/mps_sdpa_check.py` — MPS kernel guard.
-- `docs/COVER_EDIT.md` — 06 COVER / 07 EDIT manual, manual E2E checks C1/C2/E1/X.
+- `docs/COVER_EDIT.md` — 02 COVER / 03 EDIT manual, manual E2E checks C1/C2/E1/X.
 
 ## Credits and license
 
@@ -320,7 +320,7 @@ uv pip install --python .venv/bin/python -e ".[test]" --overrides overrides/maco
   team — the model and the `yue2` runtime (Apache 2.0). Model weights: CC BY-NC 4.0.
 - [SheetSage2](https://huggingface.co/m-a-p/SheetSage2) and
   [MERT-v2-FullSong](https://huggingface.co/m-a-p/MERT-v2-FullSong) — optional audio→score
-  models for 06 COVER, loaded from their public snapshots. Weights: CC BY-NC 4.0.
+  models for 02 COVER, loaded from their public snapshots. Weights: CC BY-NC 4.0.
 - [abcjs](https://github.com/paulrosen/abcjs) renders the scores (MIT).
 - This repository: Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
   Not affiliated with or endorsed by the YuE2 authors.

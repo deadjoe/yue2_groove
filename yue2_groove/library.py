@@ -23,6 +23,8 @@ from urllib.parse import quote
 
 # a directory that holds any of these is a Library entry
 ARTIFACTS = ("result.json", "audio.flac", "score.abc")
+# freeze records keep a copy of score.abc; they are provenance, not works
+SKIP_DIRS = ("baselines",)
 STAMP_RE = re.compile(r"^(\d{8})-(\d{6})-(.*)$")
 SORTS = ("time_desc", "time_asc", "name_asc", "name_desc")
 MAX_NAME = 80
@@ -165,7 +167,7 @@ def scan(root) -> list[dict]:
         except OSError:
             return
         for path in entries:
-            if not path.is_dir() or path.name.startswith("."):
+            if not path.is_dir() or path.name.startswith(".") or path.name in SKIP_DIRS:
                 continue
             if (path / "index.html").is_file() and (path / "manifest.json").is_file():
                 continue  # a listening comparison bundle, not a work

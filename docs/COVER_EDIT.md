@@ -1,4 +1,4 @@
-# Cover and edit workflows (06 // COVER, 07 // EDIT)
+# Cover and edit workflows (02 // COVER, 03 // EDIT)
 
 This is the practical manual for the two tabs added on top of the generation flow:
 **audio → ABC → cover** (SheetSage2) and **freeze → edit → check → regenerate → listen**.
@@ -52,18 +52,18 @@ YUE2_GROOVE_TRANSCRIPTIONS=/path/to/transcriptions           # defaults to <runs
 `YUE2_GROOVE_SHEETSAGE_BASE_MODEL` is passed to the model loader as `base_model_path`, which is
 what makes `OFFLINE` work against a locally downloaded MERT-v2-FullSong snapshot instead of the
 Hub cache. `YUE2_GROOVE_TRANSCRIPTIONS` wins over the default `<runs>/transcriptions` when set;
-the 06 COVER UI writes every transcription into a fresh timestamped directory there. By default
+the 02 COVER UI writes every transcription into a fresh timestamped directory there. By default
 every transcription is a fresh subprocess (dependencies isolated, all memory returned on exit);
 `KEEP SHEETSAGE2 WARM` keeps one resident worker whose loaded model is reused — much faster
 repeats, at the cost of holding the weights in memory. UNLOAD SHEETSAGE2 frees it immediately;
 a background reaper also stops it once the idle timeout passes (no need to wait for another
 run), and CANCEL terminates a busy worker (the following run starts a fresh one).
 
-The **CHECK ENVIRONMENT** button in 06 COVER probes that interpreter (`torch`,
+The **CHECK ENVIRONMENT** button in 02 COVER probes that interpreter (`torch`,
 `transformers`, ffmpeg) without loading weights. If SheetSage2 is not configured, the
 tab reports a configuration error and every other tab keeps working.
 
-## 2. 06 COVER — audio to a cover song
+## 2. 02 COVER — audio to a cover song
 
 1. **SOURCE AUDIO** — upload a reference recording (wav/mp3/flac; decoded to mono 24 kHz).
 2. **TRANSCRIPTION TASK**
@@ -81,7 +81,7 @@ tab reports a configuration error and every other tab keeps working.
    STYLE and LYRICS there and press GENERATE. The existing `adapter.generate`/`YuE2Pipeline`
    path is used unchanged; artifacts land in `runs/<stamp>-<id>/`.
 6. **GENERATE COVER** (optional, in the `GENERATE COVER // direct from this score` accordion) —
-   the same score-conditioned request without leaving 06 COVER: type the target STYLE/LYRICS
+   the same score-conditioned request without leaving 02 COVER: type the target STYLE/LYRICS
    there, press the button, and the result appears with its own RESULT audio, RESULT ABC (the
    score actually submitted — chord-stripped for melody tasks) and GENERATED FILES. Both routes
    run the identical `cover.build_cover_request` + generation core.
@@ -93,7 +93,7 @@ GENERATE buttons) is disabled; CANCEL stays active and terminates the subprocess
 cover supplies a symbolic melody condition; it does not preserve the source singer's identity or
 waveform.
 
-## 3. 07 EDIT — iterate on a score
+## 3. 03 EDIT — iterate on a score
 
 The flow follows the upstream skill: a frozen baseline, an explicit edit contract, an exact
 symbolic invariant check, regeneration from the edited score, and a listening comparison.
@@ -123,7 +123,7 @@ symbolic invariant check, regeneration from the edited score, and a listening co
    tab's action buttons (FREEZE / LOAD / CHECK / COMPARISON / GENERATE) are disabled; CANCEL
    remains active.
 6. **BUILD COMPARISON // baseline vs edit** — builds a local listening page from the original
-   run and the new one (same player as 04 TOOLS → LISTENING COMPARISON). Listen to the whole
+   run and the new one (same player as 05 TOOLS → LISTENING COMPARISON). Listen to the whole
    song and to the changed passage.
 
 The check is symbolic: passing it does not guarantee the audio realizes the score. Treat
@@ -137,7 +137,7 @@ case. `runs/` below means `YUE2_GROOVE_RUNS` (default `./runs`).
 ### C1 — cover from a recording
 
 1. `bash scripts/serve.sh start` with `YUE2_GROOVE_SHEETSAGE_PYTHON` set.
-2. 06 COVER → upload the reference → task `MELODY // VOCAL+INST` → TRANSCRIBE.
+2. 02 COVER → upload the reference → task `MELODY // VOCAL+INST` → TRANSCRIBE.
    *Expect:* status lists `runs/transcriptions/<stamp>-<name>`; `score.abc`, `events.json`,
    melody MIDI and `result.json` are written; the ABC editor and score view fill in; no chord
    symbols in the ABC.
@@ -145,17 +145,17 @@ case. `runs/` below means `YUE2_GROOVE_RUNS` (default `./runs`).
    *Expect:* 01 GENERATE shows the ABC, PLAN MODE=MELODY.
 4. Type target STYLE/LYRICS → GENERATE.
    *Expect:* `runs/<stamp>-<id>/` contains `audio.flac`, `score.abc`, `request.json`,
-   `config.json`, `result.json`, `latent.npy`, `semantic.npy`, `local_env.json`; 05 LIBRARY plays it.
+   `config.json`, `result.json`, `latent.npy`, `semantic.npy`, `local_env.json`; 04 LIBRARY plays it.
 
 ### C2 — full-score conditioning
 
-1. 06 COVER → task `FULL SCORE // + CHORDS` → TRANSCRIBE → SEND TO GENERATE.
+1. 02 COVER → task `FULL SCORE // + CHORDS` → TRANSCRIBE → SEND TO GENERATE.
    *Expect:* PLAN MODE=FULL and the chord symbols still present.
 2. Generate and confirm `request.json` in the run directory records `"cot": "full"`.
 
 ### E1 — edit iteration
 
-1. 07 EDIT → REFRESH → pick a work with audio → LOAD → FREEZE BASELINE.
+1. 03 EDIT → REFRESH → pick a work with audio → LOAD → FREEZE BASELINE.
    *Expect:* `runs/baselines/<stamp>-<name>-baseline/baseline.json` plus copies of `score.abc`
    and `request.json`; the source directory's files are unchanged.
 2. Reharmonize some chords (keep every melody note) → CHECK INVARIANTS.
@@ -172,7 +172,7 @@ case. `runs/` below means `YUE2_GROOVE_RUNS` (default `./runs`).
 
 ### X — failures stay understandable
 
-- No `YUE2_GROOVE_SHEETSAGE_PYTHON`: 06 COVER reports the missing configuration; the UI does not
+- No `YUE2_GROOVE_SHEETSAGE_PYTHON`: 02 COVER reports the missing configuration; the UI does not
   crash. A bad interpreter path / missing torch or transformers is reported the same way.
 - CANCEL during transcription terminates the SheetSage2 subprocess and re-enables the button;
   CANCEL during edit generation follows the existing cooperative-cancel path.

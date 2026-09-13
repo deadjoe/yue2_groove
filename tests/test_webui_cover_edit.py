@@ -1,4 +1,4 @@
-"""UI handler tests for 06 COVER and 07 EDIT — Gradio updates, no model.
+"""UI handler tests for 02 COVER and 03 EDIT — Gradio updates, no model.
 
 The handlers are plain functions, so they can be called with values directly.
 Model work is mocked at the ``adapter``/``sheetsage_adapter`` boundary; these
@@ -68,16 +68,23 @@ def test_cover_strip_and_send_flow() -> None:
     stripped, status = webui.cover_strip(BASE_ABC, "both")
     assert '"C"' not in stripped and "verified" in status
 
-    score_update, cot_update, tab_update, status = webui.cover_send_to_generate(BASE_ABC, "melody-full")
+    (score_update, cot_update, style_update, lyrics_update, tab_update,
+     status) = webui.cover_send_to_generate(BASE_ABC, "melody-full",
+                                            "English jazz", "[Verse]\nla")
     assert '"C"' not in score_update["value"] and score_update["value"].startswith("X:1")
     assert cot_update["value"] == "melody" and tab_update["selected"] == "gen"
-    assert "GENERATE" in status
+    assert style_update["value"] == "English jazz" and lyrics_update["value"] == "[Verse]\nla"
+    assert "STYLE, LYRICS" in status and "GENERATE" in status
 
-    score_update, cot_update, _tab, _status = webui.cover_send_to_generate(BASE_ABC, "full")
+    # empty target fields do not wipe what 01 GENERATE already has
+    (score_update, cot_update, style_update, lyrics_update, _tab,
+     status) = webui.cover_send_to_generate(BASE_ABC, "full", "", "  ")
     assert '"C"' in score_update["value"] and cot_update["value"] == "full"
+    assert "value" not in style_update and "value" not in lyrics_update
+    assert "STYLE, LYRICS" not in status
 
     with pytest.raises(gr.Error, match="Cannot send"):
-        webui.cover_send_to_generate("   ", "melody-full")
+        webui.cover_send_to_generate("   ", "melody-full", "", "")
 
 
 def test_cover_check_environment_reports_missing_configuration(monkeypatch) -> None:
@@ -103,11 +110,12 @@ def test_cover_transcribe_yields_result_and_frees_the_lock(monkeypatch, tmp_path
     monkeypatch.setattr(webui.sheetsage_adapter, "transcribe", fake_transcribe)
     yields = list(webui.cover_transcribe(str(audio), "melody-full", 0, "m-a-p/SheetSage2",
                                          "auto", "auto", "", "/mert-snapshot", False, False))
-    assert all(len(chunk) == 10 for chunk in yields)         # matches the 10 wired outputs
+    assert all(len(chunk) == 11 for chunk in yields)         # matches the 11 wired outputs
     abc, files, status, *buttons = yields[-1]
+    assert buttons[-1]["open"] is True                       # GENERATE COVER surfaced
     assert abc == CHORD_FREE and files and str(transcript / "score.abc") in files
-    assert "low confidence" in status and len(buttons) == 7
-    assert all(button["interactive"] is True for button in buttons)   # all actions re-enabled
+    assert "low confidence" in status and len(buttons) == 8
+    assert all(button["interactive"] is True for button in buttons[:-1])   # controls re-enabled
     assert seen["cancelled"] is not None and seen["base_model"] == "/mert-snapshot"
     assert seen["keep_warm"] is False
     assert seen["output_dir"].parent == webui.RUNS / "transcriptions"
@@ -282,7 +290,7 @@ def test_edit_generate_happy_path_writes_a_manifest(isolated_runs: Path, monkeyp
 def test_edit_generate_event_targets_the_result_box_not_the_editor(isolated_runs: Path) -> None:
     """Regression: GENERATE EDITED must never write back into EDITED ABC."""
     demo = webui.build_ui({"device": "cpu", "dtype": "float32", "model": "m-a-p/YuE2-3B",
-                           "vae": "standard", "tab": 6, "status": ""})
+                           "vae": "standard", "tab": 2, "status": ""})
     components = {c.elem_id: c for c in demo.blocks.values()
                   if getattr(c, "elem_id", None) in ("bb-edit-abc", "bb-edit-result-abc")}
     events = [f for f in demo.fns.values()
@@ -432,3 +440,28 @@ def test_cover_transcribe_cancel_explains_the_stopped_worker(monkeypatch, tmp_pa
     assert "Cancelled" in status and "worker was stopped" in status
     assert list(webui.cover_transcribe(str(audio), "melody-full", 0, "m", "auto", "auto", "",
                                        "", False, False))[-1][2].count("worker was stopped") == 0
+
+
+def test_sampling_mirror_load_event_returns_one_value_per_output() -> None:
+    """Regression: demo.load updated two mirrors with a single return value."""
+    pair = webui._sampling_summary_pair(*range(14))
+    assert len(pair) == 2 and pair[0] == pair[1] and "ABC" in pair[0]
+
+    demo = webui.build_ui({"device": "cpu", "dtype": "float32", "model": "m-a-p/YuE2-3B",
+                           "vae": "standard", "tab": 0, "status": ""})
+    events = [f for f in demo.fns.values()
+              if getattr(f.fn, "__name__", "") == "_sampling_summary_pair"]
+    assert len(events) == 1
+    assert len(events[0].outputs) == 2
+
+
+def test_baselines_are_not_library_works(isolated_runs: Path) -> None:
+    baseline = isolated_runs / "baselines" / "20260901-120000-source-baseline"
+    baseline.mkdir(parents=True)
+    (baseline / "baseline.json").write_text("{}", encoding="utf-8")
+    (baseline / "score.abc").write_text(BASE_ABC, encoding="utf-8")
+    make_work(isolated_runs)
+    rels = {item["rel"] for item in library.scan(isolated_runs)}
+    assert rels == {"20260901-120000-source"}          # no baseline entries
+    assert all(not rel.startswith("baselines/") for rel in
+               (rel for _label, rel in webui.edit_choices()["choices"]))
