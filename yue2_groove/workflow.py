@@ -182,7 +182,7 @@ def identify(root, path) -> dict | None:
     }
 
 
-def _last_event(work: dict) -> str:
+def last_event(work: dict) -> str:
     """What the artifact says happened last — a fact, not an inference."""
     label = work["created_label"]
     if work["stage"] == "done":
@@ -203,7 +203,7 @@ def band(root, path) -> str:
              f'<b>{html.escape(work["title"])}</b>',
              html.escape(work["stage_label"]),
              html.escape(work["kind_label"].lower()),
-             html.escape(_last_event(work))]
+             html.escape(last_event(work))]
     return '<div id="bb-current-band">' + " · ".join(cells) + "</div>"
 
 

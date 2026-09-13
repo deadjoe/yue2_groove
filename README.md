@@ -6,12 +6,24 @@ prompt and lyrics; it plans a melody-and-chord score (ABC), then renders a compl
 48 kHz stereo song. This UI puts every control of the official CLI/Python API in the
 browser, adds a library of your generated works, and runs as a small local service.
 
+Two views, one kernel.  **SONG** (the default) is the producer-facing director: it
+follows one work at a time, states its stage (`DRAFT → SCORE → AUDIO → REVISE →
+DONE`), renders its score read-only, plays it, offers the next actions, and holds no
+editable control.  **STUDIO** is the full 7-tab gear room below — the view switch is
+always one click away (top right, next to the theme toggle) and never destroys what
+you were doing.  `--view song|studio` / `YUE2_GROOVE_VIEW` forces a view for a
+launch; the last choice is remembered per browser.
+
+- **SONG** — current work, its stage, READ-ONLY score, a player, and the next
+  actions (`LISTEN` / `RENDER` / `EDIT WORK` / `TRY ANOTHER SEED` / `CHECK` /
+  `SEND TO GENERATE` / `OPEN IN LIBRARY`), each of which opens the matching Studio
+  surface with the work already set.  With no current work it offers three start
+  cards: NEW SONG / COVER A RECORDING / EDIT A WORK.
 - **01 // GENERATE** — style + lyrics (+ optional ABC score) → editable plan → song.
   Plan mode `full / melody / off`, seed, CFG scale, all seven sampling parameters of both
   phases, budget presets, cancel, live progress, a rendered score, one-click artifact download.
   **ALL MODES** runs the same text request as `full` + `melody` + `off` and compares them.
-  A run ends with **OPEN IN LIBRARY** / **EDIT THIS RUN**, and the START strip jumps
-  straight to NEW SONG / COVER A RECORDING / EDIT A WORK / LIBRARY.
+  A run ends with **OPEN IN LIBRARY** / **EDIT THIS RUN**.
 - **06 // DECODE** — re-decode a saved `latent.npy` with another decoder
   (source / standard / legacy / custom VAE, full or tiled) without generating again.
 - **07 // BATCH** — one JSON request per line, run in order, with a results table.
@@ -167,7 +179,10 @@ bash scripts/serve.sh start -f          # foreground, Ctrl-C to stop
 ```
 
 `--tab` selects the start tab (`0..6`, order: GENERATE, COVER, EDIT, LIBRARY, TOOLS,
-DECODE, BATCH). `--sheetsage-python` points at the SheetSage2 interpreter (same as
+DECODE, BATCH) and forces the Studio view.  `--view song|studio` (or
+`YUE2_GROOVE_VIEW`) forces a view for the launch without touching the tab; without
+either flag the app opens in SONG and remembers your last choice per browser.
+`--sheetsage-python` points at the SheetSage2 interpreter (same as
 `YUE2_GROOVE_SHEETSAGE_PYTHON`).
 
 `--device auto` picks CUDA → MPS → CPU; `--dtype auto` is bfloat16 on CUDA/MPS (the

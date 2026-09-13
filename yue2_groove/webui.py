@@ -22,6 +22,13 @@ for one parameter.
   Settings rail model & runtime: device / dtype / backend / quantization / offload_ar /
                 memory budget / ODE steps / VAE core frames / revisions / offline; load & unload
 
+Two views, one kernel.  **SONG** is the producer-facing director: it follows the
+current work, states its stage (DRAFT / SCORE / AUDIO / REVISE / DONE) and offers
+the next actions, all of which reuse the Studio handlers; its score is read-only
+and it holds no editable component.  **STUDIO** is the full 7-tab gear room
+above.  The switch is a class on ``<html>`` and both roots stay mounted, so the
+score SVG and the player survive it (see ``docs/VIEW_SWITCH_PREFLIGHT.md``).
+
 SheetSage2 (COVER) runs in its own virtual environment; set ``YUE2_GROOVE_SHEETSAGE_PYTHON``
 to its interpreter (see README, 'Cover from audio').  Nothing in this process imports
 ``transformers``; the subprocess boundary lives in ``sheetsage_adapter.py``.
@@ -32,10 +39,14 @@ passes 1024 tokens — so install with the override file in ``overrides/`` (see 
 run ``scripts/mps_sdpa_check.py`` to verify.  vLLM / FP8 need NVIDIA CUDA.
 
 Usage:
-  python -m yue2_groove --port 7860             # opens the browser
-  python -m yue2_groove --tab 1                 # start on a given tab 0..6
+  python -m yue2_groove --port 7860             # opens the browser, SONG view
+  python -m yue2_groove --view studio           # force the STUDIO view
+  python -m yue2_groove --tab 1                 # force STUDIO on tab 0..6
   python -m yue2_groove --host 0.0.0.0 --auth user:pass   # LAN access (set a password)
   bash scripts/serve.sh start|stop|restart|status|log     # background service
+
+The default view is SONG; ``YUE2_GROOVE_VIEW=song|studio`` or ``--view`` forces
+it for a launch, and the last choice is remembered per browser otherwise.
 
 Visual language: Bearbone Design System v0.2 (cool #11141C ground family + ivory ink,
 1px strokes, no shadows/gradients, monospace), with a dark and a bright scene.
@@ -798,12 +809,19 @@ def make_comparison(paths_text, progress=gr.Progress()):
 
 # ───────────────── cover tab (see sheetsage_adapter.py / cover.py) ─────────────────
 
-def _score_panel(prefix: str, empty: str, elem_id: str = "") -> str:
-    """HTML for one abcjs score panel; SCORE_JS fills the .bb-score-inner div."""
+def _score_panel(prefix: str, empty: str, elem_id: str = "", abc: str | None = None) -> str:
+    """HTML for one abcjs score panel; SCORE_JS fills the .bb-score-inner div.
+
+    When *abc* is given the score is rendered straight from that text (a read-only
+    panel, e.g. SONG).  Otherwise SCORE_JS finds the textarea whose label starts
+    with *prefix* — the editable Studio panels keep working that way.
+    """
     panel_id = f' id="{html.escape(elem_id, quote=True)}"' if elem_id else ""
     message = html.escape(empty)
+    inline = (f' data-bb-abc-text="{html.escape(abc, quote=True)}"'
+              if abc is not None else "")
     return (f'<div class="bb-score-panel" data-bb-abc="{html.escape(prefix, quote=True)}" '
-            f'data-bb-empty="{message}"{panel_id}>'
+            f'data-bb-empty="{message}"{inline}{panel_id}>'
             f'<div class="bb-score-inner"><div class="bb-score-empty">{message}</div></div></div>')
 
 
@@ -1162,6 +1180,269 @@ def open_last_in_library(active):
     info, style, lyrics, abc, rename_box, rename_btn, status = _library_details([rel])
     return (gr.update(choices=choices, value=[rel]), info, style, lyrics, abc, rename_box,
             rename_btn, status, gr.update(selected="library"), rel, str((RUNS / rel).resolve()))
+
+
+# ───────────────── SONG view (director; see workflow.py for identity) ─────────────────
+# The SONG view only states facts and offers actions that map to existing Studio
+# handlers — it holds no editable component (no textbox / radio / slider / number /
+# checkbox), so there is no second copy of STYLE / LYRICS / ABC / sampling state.
+VIEW_CHOICES = ("song", "studio")
+_SONG_ACTIONS = ("listen", "render", "edit", "retry", "check", "send", "library")
+_SONG_STAGES = (("draft", "DRAFT"), ("score", "SCORE"), ("audio", "AUDIO"),
+                ("revise", "REVISE"), ("done", "DONE"))
+
+
+def resolve_view(cli_view=None, cli_tab=None, env_view=None) -> tuple[str, int]:
+    """Resolve the startup view: ``(view_mode, tab)``.
+
+    ``view_mode`` is ``auto`` (the last stored choice, else the SONG default),
+    ``song`` or ``studio``.  An explicit ``--tab N`` forces the Studio view on
+    that tab; ``--view`` / ``YUE2_GROOVE_VIEW`` force a view for a fresh session.
+    """
+    if cli_tab is not None:
+        return "studio", int(cli_tab)
+    cli = (cli_view or "").strip().lower()
+    if cli in VIEW_CHOICES:
+        return cli, 0
+    env = (env_view or "").strip().lower()
+    if env in VIEW_CHOICES:
+        return env, 0
+    return "auto", 0
+
+
+def _song_work(active):
+    """Identify the current work from a bridge value, or ``None``."""
+    if not (active or "").strip():
+        return None
+    try:
+        return workflow.identify(RUNS, _abs_of_run(active))
+    except gr.Error:
+        return None
+
+
+def _song_artifact(work: dict, name: str):
+    """One artifact of a work, looking into the children of a group run."""
+    paths = [Path(work["path"])]
+    paths += [RUNS / child for child in work.get("children") or []]
+    for base in paths:
+        candidate = base / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _song_audio(work: dict):
+    path = _song_artifact(work, "audio.flac")
+    return str(path) if path is not None else None
+
+
+def _song_abc(work: dict) -> str:
+    path = _song_artifact(work, "score.abc")
+    if path is None:
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def _song_stage_track(stage: str) -> str:
+    """DRAFT → SCORE → AUDIO → REVISE → DONE, with the current stage highlighted.
+
+    DONE is only ever reached through ``finished.json`` (``workflow.identify``),
+    so the last cell stays unpainted unless the artifact says the work is done.
+    """
+    keys = [key for key, _label in _SONG_STAGES]
+    current = keys.index(stage) if stage in keys else 0
+    cells = []
+    for index, (key, label) in enumerate(_SONG_STAGES):
+        classes = ["bb-stage"]
+        if index == current:
+            classes.append("bb-stage-current")
+        elif index < current:
+            classes.append("bb-stage-past")
+        cells.append(f'<span class="{" ".join(classes)}">{label}</span>')
+    return '<div id="bb-song-stage">' + \
+        '<span class="bb-stage-sep">→</span>'.join(cells) + "</div>"
+
+
+def _song_identity(work: dict) -> str:
+    return (
+        '<div id="bb-song-identity">'
+        f'<div class="bb-song-title">{html.escape(work["title"])}</div>'
+        '<div class="bb-song-meta">'
+        f'<span>KIND <b>{html.escape(work["kind_label"])}</b></span>'
+        f'<span>STAGE <b>{html.escape(work["stage_label"])}</b></span>'
+        f'<span>LAST <b>{html.escape(workflow.last_event(work))}</b></span>'
+        f'<span>RUN <b>{html.escape(work["rel"])}</b></span>'
+        "</div></div>"
+    )
+
+
+def _song_family(entries) -> str:
+    if not entries:
+        return ""
+    rows = []
+    for entry in entries:
+        confidence = entry.get("confidence", "heuristic")
+        tag = "exact" if confidence == "exact" else "possibly related"
+        relations = html.escape(", ".join(entry.get("relations") or []))
+        rows.append(
+            '<div class="bb-family-item">'
+            f'<b class="bb-family-hit" data-bb-run="{html.escape(entry["path"], quote=True)}">'
+            f'{html.escape(entry["title"])}</b> '
+            f'<span class="bb-family-rel">[{tag}] {relations}</span></div>'
+        )
+    return ('<div id="bb-song-family"><div class="bb-score-title">FAMILY</div>'
+            '<div class="bb-family-list">'
+            + "".join(rows) + "</div></div>")
+
+
+def render_song(active):
+    """Everything the SONG view shows for the current work, or the empty state."""
+    work = _song_work(active)
+    if work is None:
+        return (
+            gr.update(visible=True),                          # song_empty
+            gr.update(visible=False),                         # song_work
+            "", "", "",                                        # identity, stage, family
+            gr.update(value=None, visible=False),             # song_player
+            _score_panel("SONG SCORE", "No current work.", abc=""),
+            *[gr.update(visible=False) for _ in _SONG_ACTIONS],
+            gr.update(visible=False),                         # song_studio_btn
+            gr.update(visible=False),                         # song_compare_btn
+        )
+    actions = workflow.next_actions(work)
+    ids = {action["id"] for action in actions}
+    updates = []
+    for key in _SONG_ACTIONS:
+        if key == "retry":
+            seed = next((a.get("seed") for a in actions if a["id"] == "retry"), None)
+            label = f"TRY SEED {seed}" if isinstance(seed, int) else "TRY ANOTHER SEED"
+            updates.append(gr.update(visible=key in ids, value=label))
+        else:
+            updates.append(gr.update(visible=key in ids))
+    audio = _song_audio(work)
+    family = workflow.family(RUNS, work)
+    comparable = bool(work.get("source_rel") or work.get("baseline_rel"))
+    return (
+        gr.update(visible=False),
+        gr.update(visible=True),
+        _song_identity(work),
+        _song_stage_track(work["stage"]),
+        _song_family(family),
+        gr.update(value=audio, visible=bool(audio)),
+        _score_panel("SONG SCORE", "No score for this work.", abc=_song_abc(work)),
+        *updates,
+        gr.update(visible=True),
+        gr.update(visible=comparable),
+    )
+
+
+def song_render_action(active):
+    """RENDER: open the Studio surface that renders this work's score.
+
+    A plan goes to 01 GENERATE with the score attached; a transcription goes to
+    02 COVER, where score-conditioned generation lives.  Nothing is generated
+    silently.  The two branches return the same 12 outputs (the unused Studio
+    fields are left untouched) so one Gradio event can serve both kinds.
+    """
+    work = _song_work(active)
+    if work is None:
+        raise gr.Error("That work no longer exists — refresh SONG")
+    noop = gr.update()
+    current = str(Path(work["path"]).resolve())
+    if work["kind"] == "transcription":
+        abc, style, lyrics, status, choices, _current, tabs = library_use_in_cover(work["rel"])
+        return (noop, noop, noop, noop, abc, style, lyrics, status, choices, current, tabs,
+                gr.update(value="studio"))
+    request = work.get("request") or {}
+    return (
+        gr.update(value=_song_abc(work)),                 # abc
+        gr.update(open=True),                             # score_input_accordion
+        gr.update(value=request.get("style") or ""),     # style
+        gr.update(value=request.get("lyrics") or ""),    # lyrics
+        noop, noop, noop, noop,                           # cover abc/style/lyrics/status
+        noop,                                             # cover_source
+        current,                                          # current_bridge
+        gr.update(selected="gen"),                       # tabs
+        gr.update(value="studio"),                       # view_bridge
+    )
+
+
+def song_retry(active):
+    """TRY ANOTHER SEED: prefill 01 GENERATE with the same request and seed + 1."""
+    work = _song_work(active)
+    if work is None:
+        raise gr.Error("That work no longer exists — refresh SONG")
+    request = work.get("request") or {}
+    seed = request.get("seed")
+    next_seed = seed + 1 if isinstance(seed, int) else 831001
+    cot = request.get("cot") if request.get("cot") in ("full", "melody", "off") else "full"
+    return (
+        gr.update(value=request.get("style") or ""),     # style
+        gr.update(value=request.get("lyrics") or ""),    # lyrics
+        gr.update(value=cot),                             # cot
+        gr.update(value=next_seed),                       # seed
+        str(Path(work["path"]).resolve()),               # current_bridge
+        gr.update(selected="gen"),                       # tabs
+        gr.update(value="studio"),                       # view_bridge
+    )
+
+
+def song_send(active):
+    """SEND TO GENERATE: the existing cover → generate handoff, with no cover UI."""
+    work = _song_work(active)
+    if work is None:
+        raise gr.Error("That work no longer exists — refresh SONG")
+    abc_text = _song_abc(work)
+    if not abc_text.strip():
+        raise gr.Error("That transcription has no score to send")
+    request = work.get("request") or {}
+    task = request.get("task") or "melody-full"
+    abc, cot, style, lyrics, accordion, tabs, status = cover_send_to_generate(
+        abc_text, task, request.get("style") or "", request.get("lyrics") or "", "both")
+    return (abc, cot, style, lyrics, accordion, tabs, status, gr.update(value="studio"))
+
+
+def song_open_edit(active):
+    """EDIT / CHECK: the existing library → edit handoff (baseline + invariant section)."""
+    return (*library_open_in_edit(active), gr.update(value="studio"))
+
+
+def song_open_library(active):
+    """OPEN IN LIBRARY: the existing library detail + player."""
+    return (*open_last_in_library(active), gr.update(value="studio"))
+
+
+def song_open_studio(active):
+    """OPEN IN STUDIO: the last surface that makes sense for this work."""
+    work = _song_work(active)
+    if work is None:
+        return gr.update(selected="gen"), gr.update(value="studio")
+    if work["kind"] == "transcription":
+        tab = "cover"
+    elif work["kind"] == "plan":
+        tab = "gen"
+    else:
+        tab = "library"
+    return gr.update(selected=tab), gr.update(value="studio")
+
+
+def song_compare(active):
+    """BUILD COMPARISON: source/baseline vs the current work, via the compare helper."""
+    work = _song_work(active)
+    if work is None:
+        raise gr.Error("That work no longer exists — refresh SONG")
+    other = work.get("source_rel") or work.get("baseline_rel")
+    if not other:
+        raise gr.Error("No baseline or source to compare against")
+    source = (RUNS / other).resolve()
+    if not source.is_dir():
+        raise gr.Error("The source work for this comparison is missing")
+    _path, link, status = make_comparison(f"{source}\n{Path(work['path']).resolve()}")
+    # stay in SONG: the link opens in a new tab and the status is readable here
+    return link, status
 
 
 def edit_choices():
@@ -1850,9 +2131,11 @@ table { border-color: var(--bb-line) !important; }
 /* the environment status is a hint, not content: same scale as the note below it */
 #bb-env-status textarea { font-size: 11.5px !important; line-height: 1.55 !important;
   letter-spacing: .04em; color: var(--bb-ink3) !important; }
-/* current work: a factual one-line band above the start strip, fed by a hidden
+/* current work: a factual one-line band above the view, fed by a hidden
    bridge that the client mirrors to localStorage (per browser, not per server) */
 #bb-current-work { display: none !important; }
+/* the view bridge is a hidden Textbox too: the view itself is an <html> class */
+#bb-view { display: none !important; }
 #bb-current-band-wrap { min-height: 0; }
 #bb-current-band {
   display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline;
@@ -1862,10 +2145,92 @@ table { border-color: var(--bb-line) !important; }
 }
 #bb-current-band b { color: var(--bb-ink); font-weight: 500; }
 
-/* first-run strip + global busy banner */
-#bb-start { align-items: center; gap: 8px; margin-bottom: 10px; }
-#bb-start .bb-note p { margin: 0; }
-#bb-start button { text-transform: uppercase !important; letter-spacing: .08em !important; }
+/* ── SONG / STUDIO views ────────────────────────────────────────────────
+   Both roots stay mounted in Gradio (visible=True) and one is hidden with a
+   class on <html>.  Remounting them would redraw the score SVG and reset the
+   player (see docs/VIEW_SWITCH_PREFLIGHT.md). */
+html.bb-view-song #bb-studio-root { display: none !important; }
+html.bb-view-studio #bb-song-root { display: none !important; }
+#bb-song-root { display: block; min-height: 200px; }
+/* the view toggle is chrome, the same weight as the theme / rail buttons */
+#bb-view-toggle { display: flex !important; align-items: center; gap: 4px; }
+#bb-view-toggle .bb-view-label {
+  font-size: 10px; letter-spacing: .14em; color: var(--bb-ink4);
+  text-transform: uppercase; margin-right: 2px;
+}
+#bb-view-song-btn button, #bb-view-studio-btn button {
+  min-width: 0 !important; padding: 4px 9px !important;
+  font-size: 10px !important; letter-spacing: .12em !important; line-height: 1.4;
+  color: var(--bb-ink3) !important; border-color: transparent !important;
+  background: transparent !important;
+}
+#bb-view-song-btn button:hover, #bb-view-studio-btn button:hover { color: var(--bb-ink) !important; }
+#bb-view-song-btn button.bb-active, #bb-view-studio-btn button.bb-active {
+  color: var(--bb-ink) !important; border-color: var(--bb-line2) !important;
+}
+/* SONG: empty state */
+#bb-song-empty {
+  border: 1px solid var(--bb-line); border-radius: 12px; background: var(--bb-panel);
+  padding: 26px 22px 28px;
+}
+#bb-song-empty .bb-song-lead {
+  font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--bb-ink3);
+}
+#bb-song-empty h2 {
+  margin: 12px 0 6px; font-size: 20px; font-weight: 600; letter-spacing: .04em;
+  color: var(--bb-ink);
+}
+#bb-song-empty p.bb-song-sub { font-size: 12px; color: var(--bb-ink3); margin: 0 0 6px; }
+#bb-song-cards { align-items: stretch; gap: 10px; margin-top: 18px; }
+#bb-song-cards .bb-song-card { border: 1px solid var(--bb-line) !important;
+  border-radius: 10px !important; background: var(--bb-field) !important; padding: 4px !important; }
+#bb-song-cards button { text-transform: uppercase !important; letter-spacing: .1em !important;
+  min-height: 64px; }
+/* SONG: current work */
+#bb-song-work { gap: 12px; }
+#bb-song-identity {
+  border: 1px solid var(--bb-line); border-radius: 12px; background: var(--bb-panel);
+  padding: 18px 20px 16px;
+}
+#bb-song-identity .bb-song-title {
+  font-size: 18px; font-weight: 600; letter-spacing: .04em; color: var(--bb-ink);
+  margin: 0 0 8px; overflow-wrap: anywhere;
+}
+#bb-song-identity .bb-song-meta {
+  display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--bb-ink3);
+}
+#bb-song-identity .bb-song-meta b { color: var(--bb-ink2); font-weight: 500; }
+#bb-song-stage {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  border: 1px solid var(--bb-line); border-radius: 10px; background: var(--bb-panel);
+  padding: 10px 12px;
+}
+#bb-song-stage .bb-stage {
+  border: 1px solid var(--bb-line); border-radius: 6px; padding: 5px 10px;
+  font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--bb-ink4);
+}
+#bb-song-stage .bb-stage-past { color: var(--bb-ink3); border-color: var(--bb-line); }
+#bb-song-stage .bb-stage-current {
+  color: var(--bb-primary-fg); background: var(--bb-primary-bg);
+  border-color: var(--bb-primary-bg); font-weight: 600;
+}
+#bb-song-stage .bb-stage-sep { color: var(--bb-ink4); font-size: 11px; }
+#bb-song-actions { gap: 8px; }
+#bb-song-actions button { text-transform: uppercase !important; letter-spacing: .08em !important; }
+#bb-song-player { margin-top: 2px; }
+#bb-song-score { border: 1px solid var(--bb-line); border-radius: 10px; background: var(--bb-panel);
+  padding: 12px 14px; }
+#bb-song-family { border: 1px solid var(--bb-line); border-radius: 10px; background: var(--bb-panel);
+  padding: 12px 14px; }
+#bb-song-family .bb-family-list { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+#bb-song-family .bb-family-item { font-size: 11.5px; color: var(--bb-ink2); }
+#bb-song-family .bb-family-item b { color: var(--bb-ink); font-weight: 500; }
+#bb-song-family .bb-family-rel { color: var(--bb-ink3); letter-spacing: .04em; }
+#bb-song-family .bb-family-hit { cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+#bb-song-family .bb-family-hit.bb-family-active { color: var(--bb-ink2); }
+
+/* global busy banner */
 #bb-busy-wrap { min-height: 0; }
 #bb-busy {
   border: 1px solid var(--bb-line2); border-radius: 8px; padding: 7px 12px; margin-bottom: 10px;
@@ -2248,8 +2613,15 @@ SCORE_JS = """(function () {
   function renderPanel(panel) {
     var box = panel.querySelector('.bb-score-inner');
     if (!box) return;
-    var ta = findArea(panel.getAttribute('data-bb-abc') || 'ABC SCORE', panel);
-    var abc = ta ? (ta.value || '') : '';
+    // read-only panels (SONG) carry the score in data-bb-abc-text and have no textarea
+    var explicit = panel.getAttribute('data-bb-abc-text');
+    var abc;
+    if (explicit !== null) {
+      abc = explicit;
+    } else {
+      var ta = findArea(panel.getAttribute('data-bb-abc') || 'ABC SCORE', panel);
+      abc = ta ? (ta.value || '') : '';
+    }
     var ink = getComputedStyle(document.documentElement).getPropertyValue('--bb-ink').trim() || '#F1ECE2';
     var key = ink + '|' + abc;
     // The key lives on the element, not in a JS cache: if Gradio re-creates the
@@ -2529,6 +2901,143 @@ CURRENT_WORK_JS = r"""(function () {
 })();"""
 HEAD_HTML += "<script>" + CURRENT_WORK_JS + "</script>"
 
+# ── SONG / STUDIO view switch ──────────────────────────────────────────────
+# The two roots are always mounted; the view is a class on <html> so a switch
+# never remounts the Studio Blocks (see docs/VIEW_SWITCH_PREFLIGHT.md).  The
+# boot script runs in <head> before the body to avoid a flash of both views
+# and honours (in order): an explicit --view/env mode, the last stored choice,
+# then the SONG default.  `--tab N` is passed through as the studio mode.
+VIEW_BOOT_JS = """<script>
+(function () {
+  var mode = __BB_VIEW_MODE_JSON__;
+  window.__BB_VIEW_MODE__ = mode;
+  // an explicit --view / --tab must not write through to the remembered choice
+  window.__BB_VIEW_FORCED__ = (mode === 'song' || mode === 'studio');
+  try {
+    var saved = localStorage.getItem('bb-view');
+    var view = window.__BB_VIEW_FORCED__ ? mode
+             : (saved === 'studio' ? 'studio' : 'song');
+    document.documentElement.classList.add('bb-view-' + view);
+  } catch (e) {
+    document.documentElement.classList.add('bb-view-song');
+  }
+})();
+</script>"""
+
+VIEW_JS = r"""(function () {
+  var KEY = 'bb-view';
+  function area() {
+    var box = document.getElementById('bb-view');
+    return box ? box.querySelector('textarea') : null;
+  }
+  function norm(view) { return view === 'studio' ? 'studio' : 'song'; }
+  function setNative(el, value) {
+    var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+    setter.call(el, value);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  function button(id) {
+    var wrap = document.getElementById(id);
+    return wrap ? (wrap.tagName === 'BUTTON' ? wrap : wrap.querySelector('button')) : null;
+  }
+  function apply(view) {
+    view = norm(view);
+    var root = document.documentElement;
+    root.classList.toggle('bb-view-song', view !== 'studio');
+    root.classList.toggle('bb-view-studio', view === 'studio');
+    var song = button('bb-view-song-btn');
+    var studio = button('bb-view-studio-btn');
+    if (song) song.classList.toggle('bb-active', view !== 'studio');
+    if (studio) studio.classList.toggle('bb-active', view === 'studio');
+  }
+  window.__bbSetView = function (view) {
+    view = norm(view);
+    try { localStorage.setItem(KEY, view); } catch (e) {}
+    apply(view);
+    var el = area();
+    if (el && el.value !== view) setNative(el, view);
+  };
+  var booted = false;
+  function boot() {
+    if (booted) return;
+    var el = area();
+    if (!el) return;
+    booted = true;
+    var mode = window.__BB_VIEW_MODE__ || 'auto';
+    var view;
+    if (mode === 'song' || mode === 'studio') {
+      view = mode;
+    } else {
+      var stored = '';
+      try { stored = localStorage.getItem(KEY) || ''; } catch (e) {}
+      view = stored === 'studio' ? 'studio' : 'song';
+    }
+    apply(view);
+    if (el.value !== view) setNative(el, view);
+  }
+  setInterval(function () {
+    boot();
+    var el = area();
+    if (!el || !el.value) return;
+    // a forced launch (--view / --tab) must not clobber the last stored choice;
+    // only a real click through __bbSetView remembers a new one
+    if (!window.__BB_VIEW_FORCED__) {
+      try { localStorage.setItem(KEY, el.value); } catch (e) {}
+    }
+    apply(el.value);
+  }, 400);
+})();"""
+HEAD_HTML += "<script>" + VIEW_JS + "</script>"
+
+
+def _head_html(view_mode: str = "auto") -> str:
+    """The page <head> with the resolved initial view baked into the boot script."""
+    if view_mode not in ("song", "studio"):
+        view_mode = "auto"
+    return VIEW_BOOT_JS.replace("__BB_VIEW_MODE_JSON__", json.dumps(view_mode)) + HEAD_HTML
+
+
+def VIEW_SET_JS(view: str) -> str:
+    """Frontend-only handler for the top-chrome SONG / STUDIO buttons."""
+    return f"() => {{ if (window.__bbSetView) window.__bbSetView({json.dumps(view)}); }}"
+
+
+SONG_LISTEN_JS = """() => {
+  var wrap = document.getElementById('bb-song-player');
+  if (wrap) wrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  var audio = wrap ? wrap.querySelector('audio') : null;
+  if (audio) { try { audio.play(); } catch (e) {} }
+}"""
+
+# Clicking a FAMILY row sets the current work through the same hidden bridge the
+# handoffs use, so the band, the stage and the actions follow the clicked work.
+SONG_JS = r"""(function () {
+  function bridge() {
+    var wrap = document.getElementById('bb-current-work');
+    return wrap ? wrap.querySelector('textarea') : null;
+  }
+  function setNative(el, value) {
+    var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+    setter.call(el, value);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  document.addEventListener('click', function (event) {
+    var hit = event.target && event.target.closest ? event.target.closest('.bb-family-hit') : null;
+    if (!hit) return;
+    var run = hit.getAttribute('data-bb-run');
+    var el = bridge();
+    if (!run || !el) return;
+    event.preventDefault();
+    var active = document.querySelectorAll('.bb-family-hit.bb-family-active');
+    for (var i = 0; i < active.length; i++) active[i].classList.remove('bb-family-active');
+    hit.classList.add('bb-family-active');
+    setNative(el, run);
+  }, true);
+})();"""
+HEAD_HTML += "<script>" + SONG_JS + "</script>"
+
 
 def bb_theme():
     """Bearbone dark scene at startup; bright is switched at runtime via CSS variables."""
@@ -2562,17 +3071,68 @@ def build_ui(defaults):
         current_band = gr.HTML("", elem_id="bb-current-band-wrap")
         current_bridge = gr.Textbox(value="", elem_id="bb-current-work",
                                     elem_classes=["bb-output"])
-        with gr.Row(elem_id="bb-start"):
-            gr.Markdown("START →", elem_classes=["bb-note"])
-            start_song_btn = gr.Button("NEW SONG", size="sm", scale=1)
-            start_cover_btn = gr.Button("COVER A RECORDING", size="sm", scale=1)
-            start_edit_btn = gr.Button("EDIT A WORK", size="sm", scale=1)
-            start_library_btn = gr.Button("LIBRARY", size="sm", scale=1)
+        # the view is applied client-side (html class) so the roots never remount;
+        # this hidden box lets a server handler ask for the Studio view.
+        view_mode = defaults.get("view_mode", "auto")
+        initial_view = view_mode if view_mode in VIEW_CHOICES else "song"
+        view_bridge = gr.Textbox(value=initial_view, elem_id="bb-view",
+                                 elem_classes=["bb-output"])
         busy_out = gr.HTML("", elem_id="bb-busy-wrap")
         with gr.Row(elem_id="bb-topbtns"):
+            with gr.Row(elem_id="bb-view-toggle"):
+                gr.HTML('<span class="bb-view-label">VIEW //</span>')
+                view_song_btn = gr.Button("SONG", size="sm", elem_id="bb-view-song-btn")
+                view_studio_btn = gr.Button("STUDIO", size="sm", elem_id="bb-view-studio-btn")
             rail_btn = gr.Button("", size="sm", elem_id="bb-rail-btn")
             theme_btn = gr.Button("", size="sm", elem_id="bb-theme-btn")
-        with gr.Row(equal_height=False, elem_classes=["bb-workspace"]):
+
+        # ═══════════════════════ SONG view ═══════════════════════
+        # The director: identity, stage, the next actions, a player and a
+        # read-only score.  No editable component lives here — every knob is
+        # one OPEN IN STUDIO away, with the current work already set.
+        with gr.Column(elem_id="bb-song-root"):
+            with gr.Column(elem_id="bb-song-empty") as song_empty:
+                gr.HTML('<div class="bb-song-lead">NO CURRENT WORK</div>'
+                        '<h2>Start or pick a work.</h2>'
+                        '<p class="bb-song-sub">SONG follows one work at a time. Pick a start, '
+                        'then SONG shows its stage and the next step. Knobs live in STUDIO.</p>')
+                with gr.Row(elem_id="bb-song-cards"):
+                    with gr.Column(elem_classes=["bb-song-card"]):
+                        song_new_btn = gr.Button("NEW SONG", size="lg")
+                    with gr.Column(elem_classes=["bb-song-card"]):
+                        song_cover_start_btn = gr.Button("COVER A RECORDING", size="lg")
+                    with gr.Column(elem_classes=["bb-song-card"]):
+                        song_edit_start_btn = gr.Button("EDIT A WORK", size="lg")
+            with gr.Column(elem_id="bb-song-work", visible=False) as song_work:
+                song_identity = gr.HTML("")
+                song_stage = gr.HTML("")
+                with gr.Row(elem_id="bb-song-actions"):
+                    song_listen_btn = gr.Button("LISTEN", size="sm", visible=False)
+                    song_render_btn = gr.Button("RENDER IN STUDIO", size="sm", visible=False)
+                    song_edit_btn = gr.Button("EDIT WORK", size="sm", visible=False)
+                    song_retry_btn = gr.Button("TRY ANOTHER SEED", size="sm", visible=False)
+                    song_check_btn = gr.Button("OPEN CHECK IN STUDIO", size="sm", visible=False)
+                    song_send_btn = gr.Button("SEND TO GENERATE", size="sm", variant="primary",
+                                              visible=False)
+                    song_library_btn = gr.Button("OPEN IN LIBRARY", size="sm", visible=False)
+                song_player = gr.Audio(label="AUDIO", interactive=False, visible=False,
+                                       elem_id="bb-song-player")
+                with gr.Column(elem_id="bb-song-score"):
+                    gr.HTML('<div class="bb-score-title">SCORE VIEW</div>')
+                    song_score = gr.HTML(_score_panel("SONG SCORE", "No current work.", abc=""),
+                                         elem_id="bb-song-score-panel")
+                song_family = gr.HTML("")
+                with gr.Row(elem_id="bb-song-compare"):
+                    song_studio_btn = gr.Button("OPEN IN STUDIO", size="sm", visible=False)
+                    song_compare_btn = gr.Button("BUILD COMPARISON", size="sm", visible=False)
+                    song_compare_link = gr.HTML("", elem_id="bb-song-compare-link")
+                song_compare_status = gr.HTML("", elem_id="bb-song-compare-status")
+
+        # ═══════════════════════ STUDIO view ═══════════════════════
+        # The existing 7-tab power UI and the runtime rail.  Never destroyed:
+        # the view switch only toggles an <html> class (see the preflight doc).
+        with gr.Row(equal_height=False, elem_id="bb-studio-root",
+                    elem_classes=["bb-workspace"]):
             # ═══════════ main work area ═══════════
             with gr.Column(scale=5, min_width=520):
                 with gr.Tabs(selected=("gen", "cover", "edit", "library", "tools", "decode", "batch")
@@ -3088,6 +3648,14 @@ def build_ui(defaults):
                                  edit_source_rel, edit_check_state, edit_baseline_state,
                                  edit_baseline_info, edit_status, edit_source, current_bridge,
                                  tabs]
+        song_outputs = [song_empty, song_work, song_identity, song_stage, song_family,
+                        song_player, song_score,
+                        song_listen_btn, song_render_btn, song_edit_btn, song_retry_btn,
+                        song_check_btn, song_send_btn, song_library_btn,
+                        song_studio_btn, song_compare_btn]
+        # SONG follows the current work: every success path / handoff lights the band
+        # and (re)renders the director view, which stays mounted while hidden.
+        current_bridge.change(render_song, inputs=[current_bridge], outputs=song_outputs)
         open_library_btn.click(open_last_in_library, inputs=[gen_last_run],
                                outputs=library_outputs_for_flow)
         gen_last_run.change(mirror_current, inputs=[gen_last_run], outputs=[current_bridge])
@@ -3164,10 +3732,41 @@ def build_ui(defaults):
         unload_btn.click(lambda: (unload_pipeline(), "Model unloaded")[1], outputs=env_status)
         current_bridge.change(publish_current, inputs=[current_bridge],
                               outputs=[current_band, current_bridge])
-        start_song_btn.click(lambda: gr.update(selected="gen"), outputs=tabs)
-        start_cover_btn.click(lambda: gr.update(selected="cover"), outputs=tabs)
-        start_edit_btn.click(lambda: gr.update(selected="edit"), outputs=tabs)
-        start_library_btn.click(lambda: gr.update(selected="library"), outputs=tabs)
+        # ───── SONG wiring: producer actions reuse the existing handlers ─────
+        # (or open Studio on the right tab); no action duplicates editable state.
+        view_song_btn.click(fn=None, js=VIEW_SET_JS("song"), outputs=view_song_btn)
+        view_studio_btn.click(fn=None, js=VIEW_SET_JS("studio"), outputs=view_studio_btn)
+        song_new_btn.click(lambda: (gr.update(selected="gen"), gr.update(value="studio")),
+                           outputs=[tabs, view_bridge])
+        song_cover_start_btn.click(
+            lambda: (gr.update(selected="cover"), gr.update(value="studio")),
+            outputs=[tabs, view_bridge])
+        song_edit_start_btn.click(
+            lambda: (gr.update(selected="library"), gr.update(value="studio")),
+            outputs=[tabs, view_bridge])
+        song_listen_btn.click(fn=None, js=SONG_LISTEN_JS, outputs=song_listen_btn)
+        song_render_btn.click(
+            song_render_action, inputs=[current_bridge],
+            outputs=[abc, score_input_accordion, style, lyrics,
+                     cover_abc, cover_style, cover_lyrics, cover_status, cover_source,
+                     current_bridge, tabs, view_bridge])
+        song_edit_btn.click(song_open_edit, inputs=[current_bridge],
+                            outputs=edit_outputs_for_flow + [view_bridge])
+        song_check_btn.click(song_open_edit, inputs=[current_bridge],
+                             outputs=edit_outputs_for_flow + [view_bridge])
+        song_retry_btn.click(
+            song_retry, inputs=[current_bridge],
+            outputs=[style, lyrics, cot, seed, current_bridge, tabs, view_bridge])
+        song_send_btn.click(
+            song_send, inputs=[current_bridge],
+            outputs=[abc, cot, style, lyrics, score_input_accordion, tabs, cover_status,
+                     view_bridge])
+        song_library_btn.click(song_open_library, inputs=[current_bridge],
+                               outputs=library_outputs_for_flow + [view_bridge])
+        song_studio_btn.click(song_open_studio, inputs=[current_bridge],
+                              outputs=[tabs, view_bridge])
+        song_compare_btn.click(song_compare, inputs=[current_bridge],
+                               outputs=[song_compare_link, song_compare_status])
         cover_detect_btn.click(cover_detect_python, outputs=cover_status)
         busy_timer = gr.Timer(2.0)
         busy_timer.tick(busy_banner, outputs=busy_out)
@@ -3307,6 +3906,8 @@ def build_ui(defaults):
 
         gr.HTML(footer)
 
+    demo.bb_head = _head_html(view_mode)
+    demo.bb_view_mode = view_mode
     return demo
 
 
@@ -3322,7 +3923,10 @@ def main():
     parser.add_argument("--runs", default=None,
                         help="Directory for generated works (default: $YUE2_GROOVE_RUNS or ./runs)")
     parser.add_argument("--vae", default="standard", choices=["standard", "legacy"])
-    parser.add_argument("--tab", type=int, default=0, help="Start tab index 0..6")
+    parser.add_argument("--tab", type=int, default=None,
+                        help="Start on Studio tab 0..6 (an explicit --tab forces the Studio view)")
+    parser.add_argument("--view", choices=list(VIEW_CHOICES), default=None,
+                        help="Start in the SONG or STUDIO view (or set YUE2_GROOVE_VIEW)")
     parser.add_argument("--auth", default=os.environ.get("YUE2_GROOVE_AUTH", ""),
                         help="Login as user:password (or set YUE2_GROOVE_AUTH); recommended on a LAN")
     parser.add_argument("--sheetsage-python", default=None,
@@ -3349,10 +3953,11 @@ def main():
     dtype = args.dtype
     if dtype == "auto":
         dtype = "bfloat16" if device in ("cuda", "mps") else "float32"
+    view_mode, tab = resolve_view(args.view, args.tab, os.environ.get("YUE2_GROOVE_VIEW"))
     RUNS.mkdir(parents=True, exist_ok=True)
     atexit.register(sheetsage_adapter.stop_worker)   # no resident SheetSage2 after exit
     defaults = {"device": device, "dtype": dtype, "model": args.model, "vae": args.vae,
-                "tab": args.tab,
+                "tab": tab, "view_mode": view_mode,
                 "status": ("Model not loaded yet — it loads automatically on the first generation."
                            if args.no_preload else "Model is preloading in the background…")}
     demo = build_ui(defaults)
@@ -3368,7 +3973,7 @@ def main():
         threading.Thread(target=preload, daemon=True).start()
     demo.launch(server_name=args.host, server_port=args.port, theme=bb_theme(),
                 css=BEARBONE_CSS,
-                head=HEAD_HTML,
+                head=getattr(demo, "bb_head", HEAD_HTML),
                 allowed_paths=[str(config.STATIC_DIR), str(RUNS)],
                 auth=auth,
                 share=args.share, inbrowser=not args.share)
