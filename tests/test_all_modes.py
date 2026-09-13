@@ -78,7 +78,7 @@ def test_all_modes_runs_full_melody_off_and_builds_the_comparison(monkeypatch) -
     install_fakes(monkeypatch, state)
 
     yields = list(webui.generate_all_modes(*all_modes_args()))
-    assert all(len(chunk) == 6 for chunk in yields)          # matches the 6 wired outputs
+    assert all(len(chunk) == 7 for chunk in yields)          # matches the 6 wired outputs
     status, files, link, *_idle = yields[-1]
 
     assert [call["cot"] for call in state["calls"]] == ["full", "melody", "off"]
@@ -104,7 +104,7 @@ def test_all_modes_retains_a_failed_mode_and_compares_the_rest(monkeypatch) -> N
     install_fakes(monkeypatch, state)
 
     yields = list(webui.generate_all_modes(*all_modes_args()))
-    assert all(len(chunk) == 6 for chunk in yields)
+    assert all(len(chunk) == 7 for chunk in yields)
     status, _files, _link, *_idle = yields[-1]
 
     root = Path(state["calls"][0]["dir"]).parent
@@ -141,7 +141,7 @@ def test_all_modes_respects_the_running_lock() -> None:
     webui._RUNNING.acquire()
     try:
         yields = list(webui.generate_all_modes(*all_modes_args()))
-        assert all(len(chunk) == 6 for chunk in yields)
+        assert all(len(chunk) == 7 for chunk in yields)
         assert "already running" in yields[0][0]
     finally:
         webui._RUNNING.release()
