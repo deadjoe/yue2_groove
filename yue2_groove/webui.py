@@ -365,12 +365,12 @@ def generate(style, lyrics, cot, seed, cfg_scale, abc_text, out_id, preset,
         # A fast double-click can queue a second run before the button disables.
         # Keep the buttons as they are (the running job owns them).
         yield gr.update(), gr.update(), "Another job is already running — wait for it to finish", \
-            gr.update(), gr.update(), gr.update()
+            gr.update(), gr.update(), gr.update(), gr.skip()
         return
     busy = (gr.update(interactive=False), gr.update(interactive=False))
     idle = (gr.update(interactive=True), gr.update(interactive=True))
     try:
-        yield gr.update(), gr.update(), "Starting generation…", gr.update(), *busy
+        yield gr.update(), gr.update(), "Starting generation…", gr.update(), *busy, gr.skip()
         pipe, note = _get_pipe(device, dtype, backend, quantization, offload_ar, budget,
                                ode_steps, vae_core_frames, model, vae_choice, vae_custom,
                                revision, vae_revision, offline, progress)
@@ -382,12 +382,12 @@ def generate(style, lyrics, cot, seed, cfg_scale, abc_text, out_id, preset,
             progress=progress, note=note)
         yield str(outdir / "audio.flac"), (song.abc or ""), \
             _generation_status(song, result, outdir, elapsed, request, note), \
-            _artifact_files(outdir, bool(song.abc)), *idle
+            _artifact_files(outdir, bool(song.abc)), *idle, str(outdir)
     except InterruptedError as exc:
-        yield gr.update(), gr.update(), f"Cancelled: {exc}", gr.update(), *idle
+        yield gr.update(), gr.update(), f"Cancelled: {exc}", gr.update(), *idle, gr.skip()
     except Exception as exc:  # noqa: BLE001
         yield gr.update(), gr.update(), \
-            f"Generation failed: {type(exc).__name__}: {exc}", gr.update(), *idle
+            f"Generation failed: {type(exc).__name__}: {exc}", gr.update(), *idle, gr.skip()
     finally:
         _RUNNING.release()
 
@@ -1064,6 +1064,49 @@ def cover_send_to_generate(text, task, style, lyrics, keep_voice):
 
 
 # ───────────────── edit tab (see edit_flow.py) ─────────────────
+
+def _rel_of_run(value) -> str:
+    """Accept a run directory (absolute) or a Library rel and return the rel."""
+    text = (value or "").strip()
+    if not text:
+        raise gr.Error("Pick or generate a work first")
+    candidate = Path(text)
+    if candidate.is_absolute():
+        try:
+            return candidate.resolve().relative_to(RUNS.resolve()).as_posix()
+        except (ValueError, OSError):
+            raise gr.Error("That run is outside the runs directory") from None
+    return text
+
+
+def library_open_in_edit(active):
+    """Load the viewed/generated work into 03 EDIT and switch there."""
+    rel = _rel_of_run(active)
+    (style, lyrics, abc, baseline_abc, source_rel, check_state, baseline_state, info,
+     status) = edit_load(rel)
+    choices = gr.update(choices=[value for _label, value in
+                                 _library_choices(_library_mode("time", "desc"))[1]], value=rel)
+    return (style, lyrics, abc, baseline_abc, source_rel, check_state, baseline_state, info,
+            status, choices, gr.update(selected="edit"))
+
+
+def library_use_in_cover(active):
+    """Load the viewed/generated work into 02 COVER and switch there."""
+    rel = _rel_of_run(active)
+    abc, style, lyrics, status = cover_load(rel)
+    choices = gr.update(choices=[value for _label, value in
+                                 _library_choices(_library_mode("time", "desc"))[1]], value=rel)
+    return abc, style, lyrics, status, choices, gr.update(selected="cover")
+
+
+def open_last_in_library(active):
+    """Show a freshly generated run in 04 LIBRARY (list, details, player)."""
+    rel = _rel_of_run(active)
+    _items, choices = _library_choices(_library_mode("time", "desc"))
+    info, style, lyrics, abc, rename_box, rename_btn, status = _library_details([rel])
+    return (gr.update(choices=choices, value=[rel]), info, style, lyrics, abc, rename_box,
+            rename_btn, status, gr.update(selected="library"), rel)
+
 
 def edit_choices():
     _items, choices = _library_choices(_library_mode("time", "desc"))
@@ -2483,7 +2526,11 @@ def build_ui(defaults):
                         with gr.Accordion("ARTIFACTS", open=False):
                             files_out = gr.File(label="FILES", file_count="multiple", height=120,
                                                 elem_id="bb-files")
+                        with gr.Row():
+                            open_library_btn = gr.Button("OPEN IN LIBRARY", size="sm", scale=1)
+                            edit_run_btn = gr.Button("EDIT THIS RUN", size="sm", scale=1)
                         gen_status = gr.Textbox(label="STATUS", lines=6, interactive=False)
+                        gen_last_run = gr.State("")
 
                     # ───── 02 COVER ─────
                     with gr.Tab("02 // COVER", id="cover") as cover_tab:
@@ -2668,6 +2715,7 @@ def build_ui(defaults):
                         with gr.Row():
                             edit_compare_btn = gr.Button("BUILD COMPARISON // baseline vs edit",
                                                          size="sm", scale=2)
+                            edit_library_btn = gr.Button("OPEN IN LIBRARY", size="sm", scale=1)
                             edit_compare_file = gr.File(label="COMPARISON HTML",
                                                         file_types=[".html"], type="filepath",
                                                         scale=2)
@@ -2698,6 +2746,11 @@ def build_ui(defaults):
                                                                 scale=3, elem_id="bb-lib-rename-box")
                                     lib_rename_btn = gr.Button("RENAME", size="sm", scale=1,
                                                                interactive=False, elem_id="bb-lib-rename")
+                                with gr.Row():
+                                    lib_edit_btn = gr.Button("OPEN IN 03 EDIT", size="sm",
+                                                             scale=1, elem_id="bb-lib-edit")
+                                    lib_cover_btn = gr.Button("USE IN 02 COVER", size="sm",
+                                                              scale=1, elem_id="bb-lib-cover")
                                 lib_delete_btn = gr.Button("DELETE SELECTED", size="sm",
                                                            elem_id="bb-lib-delete")
                                 lib_confirm = gr.HTML("", elem_id="bb-lib-confirm")
@@ -2883,7 +2936,16 @@ def build_ui(defaults):
                       sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max] + model_args
         run_btn.click(generate, inputs=gen_common,
                       outputs=[audio_out, score_out, gen_status, files_out,
-                               run_btn, plan_btn])
+                               run_btn, plan_btn, gen_last_run])
+        library_outputs_for_flow = [lib_list, lib_info, lib_style, lib_lyrics, lib_abc,
+                                    lib_rename_box, lib_rename_btn, lib_status, tabs, lib_active]
+        edit_outputs_for_flow = [edit_style, edit_lyrics, edit_abc, edit_baseline_abc,
+                                 edit_source_rel, edit_check_state, edit_baseline_state,
+                                 edit_baseline_info, edit_status, edit_source, tabs]
+        open_library_btn.click(open_last_in_library, inputs=[gen_last_run],
+                               outputs=library_outputs_for_flow)
+        edit_run_btn.click(library_open_in_edit, inputs=[gen_last_run],
+                           outputs=edit_outputs_for_flow)
         plan_btn.click(plan_only,
                        inputs=[style, lyrics, cot, seed, cfg, out_id,
                                abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max]
@@ -3029,6 +3091,8 @@ def build_ui(defaults):
                      edit_run_btn, edit_check_btn, edit_freeze_btn, edit_load_btn,
                      edit_refresh_btn, edit_compare_btn, edit_last_run])
         edit_cancel_btn.click(cancel_run, outputs=edit_status)
+        edit_library_btn.click(open_last_in_library, inputs=[edit_last_run],
+                               outputs=library_outputs_for_flow)
         edit_compare_btn.click(edit_compare, inputs=[edit_source_rel, edit_last_run],
                                outputs=[edit_compare_file, edit_compare_link, edit_compare_status])
 
@@ -3055,6 +3119,11 @@ def build_ui(defaults):
                              inputs=[lib_active, lib_rename_box, lib_sort_key, lib_sort_dir, lib_list],
                              outputs=[lib_list, lib_info, lib_style, lib_lyrics, lib_abc,
                                       lib_rename_box, lib_rename_btn, lib_status, lib_active])
+        lib_edit_btn.click(library_open_in_edit, inputs=[lib_active],
+                           outputs=edit_outputs_for_flow)
+        lib_cover_btn.click(library_use_in_cover, inputs=[lib_active],
+                            outputs=[cover_abc, cover_style, cover_lyrics, cover_status,
+                                     cover_source, tabs])
         lib_delete_btn.click(library_delete_prepare,
                              inputs=[lib_list, lib_sort_key, lib_sort_dir],
                              outputs=[lib_confirm, lib_pending, lib_confirm_btn, lib_status])

@@ -567,3 +567,81 @@ def test_cover_generate_passes_melody_voices_through(monkeypatch, tmp_path) -> N
     score = abc_tools.parse_abc(captured["abc"])
     assert score.voices["Ins"].notes == []          # instrumental melody silenced
     assert score.voices["Vocal"].notes              # vocal melody kept
+
+
+def make_transcription(root, name: str = "transcriptions/20260901-130000-reference"):
+    d = root / name
+    d.mkdir(parents=True)
+    (d / "result.json").write_text(json.dumps({"task": "melody-full", "abc": "X:1"}),
+                                   encoding="utf-8")
+    (d / "score.abc").write_text(BASE_ABC, encoding="utf-8")
+    return d
+
+
+def test_library_flow_back_and_open_last_in_library(isolated_runs: Path) -> None:
+    make_work(isolated_runs)
+    make_transcription(isolated_runs)
+
+    outs = webui.library_open_in_edit("20260901-120000-source")
+    assert len(outs) == 11
+    assert outs[2]["value"].startswith("X:1")                     # EDITED ABC filled
+    assert outs[4] == "20260901-120000-source"                    # baseline state
+    assert outs[9]["value"] == "20260901-120000-source"           # visible dropdown synced
+    assert outs[10]["selected"] == "edit"
+
+    outs = webui.library_use_in_cover("transcriptions/20260901-130000-reference")
+    assert len(outs) == 6 and outs[0]["value"].startswith("X:1")
+    assert outs[4]["value"] == "transcriptions/20260901-130000-reference"
+    assert outs[5]["selected"] == "cover"
+
+    run = isolated_runs / "20260901-140000-fresh"
+    run.mkdir()
+    (run / "result.json").write_text(json.dumps({"status": "complete", "audio_seconds": 1.0}),
+                                     encoding="utf-8")
+    (run / "audio.flac").write_bytes(b"fLaC")
+    outs = webui.open_last_in_library(str(run))                   # absolute path accepted
+    assert len(outs) == 10 and outs[0]["value"] == ["20260901-140000-fresh"]
+    assert "bb-player" in outs[1] and outs[8]["selected"] == "library"
+
+    for call in (webui.library_open_in_edit, webui.library_use_in_cover,
+                 webui.open_last_in_library):
+        with pytest.raises(gr.Error, match="Pick or generate"):
+            call("")
+    with pytest.raises(gr.Error, match="outside the runs directory"):
+        webui.open_last_in_library("/tmp/somewhere-else")
+
+
+def generate_args(**overrides):
+    args = dict(  # noqa: C408 — test fixture builder
+        style="English jazz", lyrics="[Verse]\nla", cot="full", seed=1, cfg_scale=0,
+                abc_text=BASE_ABC, out_id="flow-back", preset="Quick test (~20 s)",
+                abc_temp=.7, abc_p=.9, abc_k=30, abc_rep=1.005, abc_win=100, abc_min=32,
+                abc_max=256, sem_temp=1.0, sem_p=.95, sem_k=100, sem_rep=1.2, sem_win=50,
+                sem_min=200, sem_max=512, device="cpu", dtype="float32", backend="torch",
+                quantization="none", offload_ar=False, budget=24, ode_steps=16,
+                vae_core_frames="auto", model="m-a-p/YuE2-3B", vae_choice="standard",
+                vae_custom="", revision="", vae_revision="", offline=False)
+    args.update(overrides)
+    return [args[name] for name in (
+        "style", "lyrics", "cot", "seed", "cfg_scale", "abc_text", "out_id", "preset",
+        "abc_temp", "abc_p", "abc_k", "abc_rep", "abc_win", "abc_min", "abc_max",
+        "sem_temp", "sem_p", "sem_k", "sem_rep", "sem_win", "sem_min", "sem_max",
+        "device", "dtype", "backend", "quantization", "offload_ar", "budget", "ode_steps",
+        "vae_core_frames", "model", "vae_choice", "vae_custom", "revision", "vae_revision",
+        "offline")]
+
+
+def test_generate_hands_the_run_to_the_flow_back_buttons(monkeypatch, isolated_runs) -> None:
+    def fake_run_generation(pipe, request, outdir, **kwargs):
+        Path(outdir).mkdir(parents=True, exist_ok=True)
+        (Path(outdir) / "audio.flac").write_bytes(b"fLaC")
+        return FakeSong(), {"audio_seconds": 1.0, "truncated": False}, 0.5
+
+    monkeypatch.setattr(webui, "_get_pipe", lambda *a, **k: (object(), "note"))
+    monkeypatch.setattr(webui, "_run_generation", fake_run_generation)
+    yields = list(webui.generate(*generate_args()))
+    assert all(len(chunk) == 7 for chunk in yields)               # 7 wired outputs
+    audio, abc, _status, _files, run_btn, plan_btn, last_run = yields[-1]
+    assert audio.endswith("audio.flac") and abc.startswith("X:1")
+    assert Path(last_run, "audio.flac").is_file()
+    assert run_btn["interactive"] is True and plan_btn["interactive"] is True
