@@ -2146,6 +2146,12 @@ span[data-testid="block-info"], .block-title, label > span.label-text {
 }
 /* inputs */
 input, textarea, select { font-family: inherit !important; letter-spacing: .01em; }
+/* upload drop zones (Audio / File): a hint, not a headline.  Gradio ships these
+   at 16px text and a 27px icon, the only text in the UI above the 13px body. */
+[data-testid="upload-text"] { font-size: 12px !important; line-height: 1.5 !important; }
+[data-testid="upload-text"] .or { font-size: 11px !important; }
+[data-testid="upload-icon"] { width: 24px !important; height: 24px !important; }
+[data-testid="upload-icon"] svg { width: 20px !important; height: 20px !important; }
 input:focus, textarea:focus, select:focus {
   border-color: var(--bb-line2) !important; box-shadow: none !important; outline: none !important;
 }

@@ -86,6 +86,13 @@ def test_action_bars_and_tool_rows_exist() -> None:
     assert sum("bb-tools" in c for c in classes) >= 5
 
 
+def test_upload_drop_zone_uses_the_hint_scale() -> None:
+    css = webui.BASE_CSS
+    assert '[data-testid="upload-text"] { font-size: 12px !important' in css
+    assert '[data-testid="upload-text"] .or { font-size: 11px' in css
+    assert '[data-testid="upload-icon"] svg { width: 20px' in css
+
+
 def test_song_starters_are_cards_with_small_buttons() -> None:
     demo = build()
     starts = [c for c in demo.blocks.values() if getattr(c, "value", None) == "START"]
