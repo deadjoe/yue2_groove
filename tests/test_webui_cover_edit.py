@@ -17,6 +17,7 @@ gr = pytest.importorskip("gradio")
 edit_flow = pytest.importorskip("yue2_groove.edit_flow")
 library = pytest.importorskip("yue2_groove.library")
 webui = pytest.importorskip("yue2_groove.webui")
+abc_tools = pytest.importorskip("yue2_groove.vendor.abc_tools")
 
 BASE_ABC = textwrap.dedent("""\
     X:1
@@ -68,7 +69,7 @@ def test_cover_strip_and_send_flow() -> None:
 
     (score_update, cot_update, style_update, lyrics_update, tab_update,
      status) = webui.cover_send_to_generate(BASE_ABC, "melody-full",
-                                            "English jazz", "[Verse]\nla")
+                                            "English jazz", "[Verse]\nla", "both")
     assert '"C"' not in score_update["value"] and score_update["value"].startswith("X:1")
     assert cot_update["value"] == "melody" and tab_update["selected"] == "gen"
     assert style_update["value"] == "English jazz" and lyrics_update["value"] == "[Verse]\nla"
@@ -76,13 +77,13 @@ def test_cover_strip_and_send_flow() -> None:
 
     # empty target fields do not wipe what 01 GENERATE already has
     (score_update, cot_update, style_update, lyrics_update, _tab,
-     status) = webui.cover_send_to_generate(BASE_ABC, "full", "", "  ")
+     status) = webui.cover_send_to_generate(BASE_ABC, "full", "", "  ", "both")
     assert '"C"' in score_update["value"] and cot_update["value"] == "full"
     assert "value" not in style_update and "value" not in lyrics_update
     assert "STYLE, LYRICS" not in status
 
     with pytest.raises(gr.Error, match="Cannot send"):
-        webui.cover_send_to_generate("   ", "melody-full", "", "")
+        webui.cover_send_to_generate("   ", "melody-full", "", "", "both")
 
 
 def test_cover_check_environment_reports_missing_configuration(monkeypatch) -> None:
@@ -344,16 +345,16 @@ def test_sampling_summary_mirrors_the_shared_sliders() -> None:
 def cover_generate_args(**overrides):
     args = dict(  # noqa: C408 — test fixture builder
         style="English jazz", lyrics="[Verse]\nla", abc_text=BASE_ABC,
-                task="melody-full", seed=831001, cfg_scale=0,
-                abc_temp=.7, abc_p=.9, abc_k=30, abc_rep=1.005, abc_win=100, abc_min=32,
-                abc_max=4096, sem_temp=1.0, sem_p=.95, sem_k=100, sem_rep=1.2, sem_win=50,
-                sem_min=200, sem_max=9000, device="cpu", dtype="float32", backend="torch",
-                quantization="none", offload_ar=False, budget=24, ode_steps=32,
-                vae_core_frames="auto", model="m-a-p/YuE2-3B", vae_choice="standard",
-                vae_custom="", revision="", vae_revision="", offline=False)
+        task="melody-full", keep_voice="both", seed=831001, cfg_scale=0,
+        abc_temp=.7, abc_p=.9, abc_k=30, abc_rep=1.005, abc_win=100, abc_min=32,
+        abc_max=4096, sem_temp=1.0, sem_p=.95, sem_k=100, sem_rep=1.2, sem_win=50,
+        sem_min=200, sem_max=9000, device="cpu", dtype="float32", backend="torch",
+        quantization="none", offload_ar=False, budget=24, ode_steps=32,
+        vae_core_frames="auto", model="m-a-p/YuE2-3B", vae_choice="standard",
+        vae_custom="", revision="", vae_revision="", offline=False)
     args.update(overrides)
     return [args[name] for name in (
-        "style", "lyrics", "abc_text", "task", "seed", "cfg_scale",
+        "style", "lyrics", "abc_text", "task", "keep_voice", "seed", "cfg_scale",
         "abc_temp", "abc_p", "abc_k", "abc_rep", "abc_win", "abc_min", "abc_max",
         "sem_temp", "sem_p", "sem_k", "sem_rep", "sem_win", "sem_min", "sem_max",
         "device", "dtype", "backend", "quantization", "offload_ar", "budget", "ode_steps",
@@ -528,3 +529,37 @@ def test_cover_choices_lists_works_and_transcriptions(isolated_runs: Path) -> No
     (d / "score.abc").write_text(BASE_ABC, encoding="utf-8")
     values = {value for _label, value in webui.cover_choices()["choices"]}
     assert {"20260901-120000-source", "transcriptions/20260901-130000-reference"} <= values
+
+
+def test_request_texts_requires_explicit_input() -> None:
+    with pytest.raises(gr.Error, match="STYLE and LYRICS empty"):
+        webui._request_texts("", "  ")
+    with pytest.raises(gr.Error, match="LYRICS empty"):
+        webui._request_texts("pop", "")
+    assert webui._request_texts("  pop ", " la ") == ("pop", "la")
+    style, lyrics = webui._request_texts("", "", fallback=True)
+    assert (style, lyrics) == (webui.EXAMPLE_STYLE, webui.EXAMPLE_LYRICS)
+
+
+def test_empty_style_is_refused_on_generate_paths() -> None:
+    with pytest.raises(gr.Error, match="STYLE empty"):
+        next(webui.cover_generate(*cover_generate_args(style="   ")))
+    with pytest.raises(gr.Error, match="STYLE empty"):
+        next(webui.edit_generate(*edit_generate_args(style="")))
+
+
+def test_cover_generate_passes_melody_voices_through(monkeypatch, tmp_path) -> None:
+    captured = {}
+
+    def fake_run_generation(pipe, request, outdir, **kwargs):
+        captured["abc"] = request.abc
+        Path(outdir).mkdir(parents=True, exist_ok=True)
+        (Path(outdir) / "audio.flac").write_bytes(b"fLaC")
+        return FakeSong(), {"audio_seconds": 1.0, "truncated": False}, 0.5
+
+    monkeypatch.setattr(webui, "_get_pipe", lambda *a, **k: (object(), "note"))
+    monkeypatch.setattr(webui, "_run_generation", fake_run_generation)
+    list(webui.cover_generate(*cover_generate_args(keep_voice="Vocal")))
+    score = abc_tools.parse_abc(captured["abc"])
+    assert score.voices["Ins"].notes == []          # instrumental melody silenced
+    assert score.voices["Vocal"].notes              # vocal melody kept

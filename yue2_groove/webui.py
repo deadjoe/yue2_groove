@@ -341,7 +341,7 @@ def generate(style, lyrics, cot, seed, cfg_scale, abc_text, out_id, preset,
              vae_core_frames, model, vae_choice, vae_custom, revision, vae_revision, offline,
              progress=gr.Progress()):
     """Generator: disables the action buttons until the run finishes."""
-    style, lyrics = _request_texts(style, lyrics)   # empty fields use the example
+    style, lyrics = _request_texts(style, lyrics)   # empty input is an error
     abc_sampling = _sampling(abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max, "ABC phase")
     sem_sampling = _sampling(sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max, "semantic phase")
     kwargs = {}
@@ -524,7 +524,7 @@ def plan_only(style, lyrics, cot, seed, cfg_scale, out_id,
               vae_core_frames, model, vae_choice, vae_custom, revision, vae_revision, offline,
               progress=gr.Progress()):
     """Generator: disables the action buttons until planning finishes."""
-    style, lyrics = _request_texts(style, lyrics)   # empty fields use the example
+    style, lyrics = _request_texts(style, lyrics)   # empty input is an error
     abc_sampling = _sampling(abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max, "ABC phase")
     kwargs = {}
     if (out_id or "").strip():
@@ -967,7 +967,7 @@ def cover_send_to_edit(abc_text, rel, style, lyrics):
             gr.update(selected="edit"))
 
 
-def cover_generate(style, lyrics, abc_text, task, seed, cfg_scale,
+def cover_generate(style, lyrics, abc_text, task, keep_voice, seed, cfg_scale,
                    abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
                    sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max,
                    device, dtype, backend, quantization, offload_ar, budget, ode_steps,
@@ -984,7 +984,7 @@ def cover_generate(style, lyrics, abc_text, task, seed, cfg_scale,
     style, lyrics = _request_texts(style, lyrics)
     try:
         request = cover.build_cover_request(style, lyrics, abc_text, task=task, seed=int(seed),
-                                            cfg_scale=cfg_scale,
+                                            cfg_scale=cfg_scale, keep_voice=keep_voice,
                                             request_factory=adapter.song_request)
     except (ValueError, TypeError) as exc:
         raise gr.Error(f"Invalid cover request: {exc}") from exc
@@ -1030,12 +1030,12 @@ def cover_strip(text, keep_voice):
                       f"verified unchanged.")
 
 
-def cover_send_to_generate(text, task, style, lyrics):
+def cover_send_to_generate(text, task, style, lyrics, keep_voice):
     """One click into 01 GENERATE: ABC, plan mode, and any target style/lyrics typed here."""
     try:
         cot = cover.cot_for_task(task)
         if cot == "melody":
-            prepared = cover.prepare_cover_abc(text)
+            prepared = cover.prepare_cover_abc(text, keep_voice=keep_voice)
         else:
             cover.inspect_abc(text)              # validate before handing it over
             prepared = cover.clean_abc(text)
@@ -1333,10 +1333,20 @@ def _load_project_example():
 EXAMPLE_STYLE, EXAMPLE_LYRICS = _load_project_example()
 
 
-def _request_texts(style, lyrics):
-    """The text boxes show the repository example as a placeholder; an empty
-    field falls back to it so Generate still works without typing anything."""
-    return ((style or "").strip() or EXAMPLE_STYLE, (lyrics or "").strip() or EXAMPLE_LYRICS)
+def _request_texts(style, lyrics, *, fallback: bool = False):
+    """Resolve STYLE/LYRICS; empty fields are an error unless *fallback* is set.
+
+    The repository example is never substituted silently: it stays a placeholder
+    and one E-button click away, but the request that runs is what the user typed.
+    """
+    style, lyrics = (style or "").strip(), (lyrics or "").strip()
+    if fallback:
+        return style or EXAMPLE_STYLE, lyrics or EXAMPLE_LYRICS
+    missing = [name for name, value in (("STYLE", style), ("LYRICS", lyrics)) if not value]
+    if missing:
+        raise gr.Error(f"{' and '.join(missing)} empty — type a target, or click E to fill the "
+                       f"repository example")
+    return style, lyrics
 
 
 # ─────────────────────── Bearbone DS v0.2, two scenes ───────────────────────
@@ -1906,7 +1916,8 @@ TIPS = {
     "FULL DECODE": "Decode the whole latent at once (faster, more memory). Tiled chunks are safer for long songs.",
     "JSONL REQUESTS": "One JSON request per line: id, style/tags, lyrics, cot, seed, cfg_scale, abc or abc_path, optional abc_sampling / semantic_sampling overrides.",
     "OUTPUT NAME": "Folder name for this batch.",
-    "KEEP VOICES": "Which voices survive the chord strip.",
+    "KEEP VOICES": "Which voices survive the chord strip (04 TOOLS checker).",
+    "MELODY VOICES": "Which melody voices a cover keeps: both (vocal + instrumental), Vocal only, or Ins only. Applies to STRIP CHORDS and to SEND / GENERATE COVER.",
     "AFTER // EDITED ABC": "The edited score; compared against the original above (05 TOOLS copy of the invariant check).",
     "COMPARE VOICES": "Which voices the invariant check compares.",
     "ALLOW TEMPO CHANGE": "Allow the quarter-note tempo to change without reporting it as a violation.",
@@ -2306,8 +2317,11 @@ EXAMPLE_JS = r"""(function () {
   function inject() {
     var examples = window.__BB_EXAMPLES__ || {};
     var tabs = document.querySelectorAll('.tabitem');
-    if (!tabs.length) return;
-    var first = tabs[0];                       // 01 GENERATE owns the editable fields
+    for (var tabIndex = 0; tabIndex < tabs.length; tabIndex++) {
+      injectTab(tabs[tabIndex], examples);
+    }
+  }
+  function injectTab(first, examples) {
     var nodes = first.querySelectorAll('span[data-testid="block-info"]');
     for (var i = 0; i < nodes.length; i++) {
       var info = nodes[i];
@@ -2317,7 +2331,8 @@ EXAMPLE_JS = r"""(function () {
       var block = info.closest('.block') || first;
       var host = block.querySelector('.input-container');
       var area = host ? host.querySelector('textarea') : null;
-      if (!host || !area || host.getAttribute('data-bb-eg') === '1') continue;
+      if (!host || !area || area.readOnly || area.disabled ||
+          host.getAttribute('data-bb-eg') === '1') continue;
       host.setAttribute('data-bb-eg', '1');
       host.classList.add('bb-eg-host');
       bindFocus(area);
@@ -2527,8 +2542,10 @@ def build_ui(defaults):
                                                "press TRANSCRIBE."),
                                 elem_id="bb-cover-score-panel")
                         with gr.Row():
-                            cover_keep = gr.Dropdown(choices=["both", "Vocal", "Ins"], value="both",
-                                                     label="KEEP VOICES", scale=1)
+                            cover_keep = gr.Dropdown(
+                                choices=["both", "Vocal", "Ins"], value="both",
+                                label="MELODY VOICES", scale=1,
+                                info="Which melodies survive STRIP and the cover generation")
                             cover_strip_btn = gr.Button("STRIP CHORDS", size="sm", scale=1)
                             cover_send_btn = gr.Button("SEND TO GENERATE", variant="primary",
                                                        size="sm", scale=2)
@@ -2536,7 +2553,10 @@ def build_ui(defaults):
                                           open=False) as cover_generate_accordion:
                             gr.Markdown(
                                 "Score-conditioned generation with the target style and lyrics; "
-                                "the submitted score appears as RESULT ABC below.",
+                                "the submitted score appears as RESULT ABC below. "
+                                "**SEND TO GENERATE** hands the score to 01 for fine control "
+                                "(sampling, model, ALL MODES); **GENERATE COVER** stays here for "
+                                "a quick take with the same shared sampling settings.",
                                 elem_classes=["bb-note"])
                             cover_style = gr.Textbox(label="STYLE", lines=2,
                                                      placeholder=EXAMPLE_STYLE)
@@ -2935,7 +2955,8 @@ def build_ui(defaults):
                                  cover_generate_accordion, cover_source])
         cover_generate_btn.click(
             cover_generate,
-            inputs=[cover_style, cover_lyrics, cover_abc, cover_task, cover_seed, cover_cfg,
+            inputs=[cover_style, cover_lyrics, cover_abc, cover_task, cover_keep, cover_seed,
+                    cover_cfg,
                     abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
                     sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max] + model_args,
             outputs=[cover_status, cover_result_audio, cover_result_abc, cover_gen_files,
@@ -2954,7 +2975,7 @@ def build_ui(defaults):
         cover_strip_btn.click(cover_strip, inputs=[cover_abc, cover_keep],
                               outputs=[cover_abc, cover_status])
         cover_send_btn.click(cover_send_to_generate,
-                             inputs=[cover_abc, cover_task, cover_style, cover_lyrics],
+                             inputs=[cover_abc, cover_task, cover_style, cover_lyrics, cover_keep],
                              outputs=[abc, cot, style, lyrics, tabs, cover_status])
 
         # ───── edit wiring (pure logic in edit_flow.py) ─────

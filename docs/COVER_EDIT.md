@@ -112,8 +112,8 @@ symbolic invariant check, regeneration from the edited score, and a listening co
    (SHA-256 of the source artifacts) and copies of `score.abc` / `request.json`. The original run
    directory is never touched; audio and latents stay where they are and remain the listening
    baseline. **CHECK INVARIANTS and GENERATE EDITED require the frozen record** — this is what
-   ties a verification result to an immutable source. `ALLOW MELODY/RHYTHM CHANGES` is the only
-   override and skips both the freeze gate and the check.
+   ties a verification result to an immutable source. `ALLOW MELODY/RHYTHM CHANGES` only lets a
+   *failing* check through for intentional adaptations — FREEZE and CHECK are always required.
 3. **Edit** the ABC (and style/lyrics if the arrangement changes). Keep the native dialect:
    the checker rejects unsupported notation rather than guessing.
 4. **CHECK INVARIANTS** — compares baseline and edit per voice. Chord-only edits pass; pitch,
