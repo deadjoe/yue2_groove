@@ -111,6 +111,23 @@ def test_default_view_is_song() -> None:
     assert "bb-view" in webui.HEAD_HTML  # the hidden bridge exists
 
 
+def test_view_bridge_is_hidden_by_css() -> None:
+    """Regression: the view bridge is a Textbox and must never be visible chrome.
+
+    The SONG tree walk cannot see it (it lives outside the SONG root), so pin the
+    CSS that hides it, like #bb-current-work.
+    """
+    assert "#bb-view { display: none !important; }" in webui.BASE_CSS
+
+
+def test_forced_view_does_not_write_the_remembered_choice() -> None:
+    boot = webui._head_html("studio")
+    assert "window.__BB_VIEW_FORCED__ = (mode === 'song' || mode === 'studio');" in boot
+    # the polling mirror only persists a choice when the launch was not forced
+    assert "if (!window.__BB_VIEW_FORCED__)" in webui.VIEW_JS
+    assert "__bbSetView" in webui.VIEW_JS   # a real click still remembers
+
+
 def test_explicit_view_mode_is_baked_into_the_page() -> None:
     demo = build(view_mode="studio")
     assert demo.bb_view_mode == "studio"
@@ -246,6 +263,27 @@ def test_song_edit_and_library_wrappers_open_studio(isolated_runs: Path) -> None
     assert gen_tab["selected"] == "library" and view["value"] == "studio"
 
 
+def test_song_compare_stays_in_song(isolated_runs: Path, monkeypatch) -> None:
+    make_song(isolated_runs, "20260913-120000-source")
+    edited = make_song(isolated_runs, "20260913-130000-edit")
+    (edited / "edit_manifest.json").write_text(json.dumps(
+        {"source": {"rel": "20260913-120000-source"}}), encoding="utf-8")
+    monkeypatch.setattr(webui, "make_comparison",
+                        lambda _paths: ("/tmp/c.html", "<a>OPEN</a>", "ready"))
+    link, status = webui.song_compare("20260913-130000-edit")
+    assert (link, status) == ("<a>OPEN</a>", "ready")
+    with pytest.raises(gr.Error, match="No baseline or source"):
+        webui.song_compare("20260913-120000-source")
+
+
+def test_family_heading_does_not_oversell_exact_matches() -> None:
+    html = webui._song_family([{"title": "Twin", "rel": "r", "path": "/p",
+                                "relations": ["same request id"], "confidence": "exact"}])
+    assert ">FAMILY<" in html and "POSSIBLY RELATED" not in html
+    assert "[exact]" in html
+    assert "data-bb-run=\"/p\"" in html
+
+
 # ── wiring ────────────────────────────────────────────────────────────────
 
 def _events(demo):
@@ -262,9 +300,12 @@ def test_song_action_wiring_matches_the_handlers() -> None:
     assert len(events["song_open_edit"].outputs) == 13
     assert len(events["song_open_library"].outputs) == 12
     assert len(events["song_open_studio"].outputs) == 2
-    assert len(events["song_compare"].outputs) == 3
+    assert len(events["song_compare"].outputs) == 2   # link + status, no view switch
     # both SEND TO GENERATE paths stay free of the current-work bridge
     current = next(c for c in demo.blocks.values()
                    if getattr(c, "elem_id", None) == "bb-current-work")
     assert current not in events["cover_send_to_generate"].outputs
     assert current not in events["song_send"].outputs
+    # BUILD COMPARISON must not hide SONG before the user can click the link
+    view = next(c for c in demo.blocks.values() if getattr(c, "elem_id", None) == "bb-view")
+    assert view not in events["song_compare"].outputs

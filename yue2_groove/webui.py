@@ -1293,8 +1293,8 @@ def _song_family(entries) -> str:
             f'{html.escape(entry["title"])}</b> '
             f'<span class="bb-family-rel">[{tag}] {relations}</span></div>'
         )
-    return ('<div id="bb-song-family"><div class="bb-score-title">'
-            'FAMILY // POSSIBLY RELATED</div><div class="bb-family-list">'
+    return ('<div id="bb-song-family"><div class="bb-score-title">FAMILY</div>'
+            '<div class="bb-family-list">'
             + "".join(rows) + "</div></div>")
 
 
@@ -1441,7 +1441,8 @@ def song_compare(active):
     if not source.is_dir():
         raise gr.Error("The source work for this comparison is missing")
     _path, link, status = make_comparison(f"{source}\n{Path(work['path']).resolve()}")
-    return link, status, gr.update(value="studio")
+    # stay in SONG: the link opens in a new tab and the status is readable here
+    return link, status
 
 
 def edit_choices():
@@ -2130,9 +2131,11 @@ table { border-color: var(--bb-line) !important; }
 /* the environment status is a hint, not content: same scale as the note below it */
 #bb-env-status textarea { font-size: 11.5px !important; line-height: 1.55 !important;
   letter-spacing: .04em; color: var(--bb-ink3) !important; }
-/* current work: a factual one-line band above the start strip, fed by a hidden
+/* current work: a factual one-line band above the view, fed by a hidden
    bridge that the client mirrors to localStorage (per browser, not per server) */
 #bb-current-work { display: none !important; }
+/* the view bridge is a hidden Textbox too: the view itself is an <html> class */
+#bb-view { display: none !important; }
 #bb-current-band-wrap { min-height: 0; }
 #bb-current-band {
   display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline;
@@ -2227,10 +2230,7 @@ html.bb-view-studio #bb-song-root { display: none !important; }
 #bb-song-family .bb-family-hit { cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
 #bb-song-family .bb-family-hit.bb-family-active { color: var(--bb-ink2); }
 
-/* first-run strip + global busy banner */
-#bb-start { align-items: center; gap: 8px; margin-bottom: 10px; }
-#bb-start .bb-note p { margin: 0; }
-#bb-start button { text-transform: uppercase !important; letter-spacing: .08em !important; }
+/* global busy banner */
 #bb-busy-wrap { min-height: 0; }
 #bb-busy {
   border: 1px solid var(--bb-line2); border-radius: 8px; padding: 7px 12px; margin-bottom: 10px;
@@ -2911,9 +2911,11 @@ VIEW_BOOT_JS = """<script>
 (function () {
   var mode = __BB_VIEW_MODE_JSON__;
   window.__BB_VIEW_MODE__ = mode;
+  // an explicit --view / --tab must not write through to the remembered choice
+  window.__BB_VIEW_FORCED__ = (mode === 'song' || mode === 'studio');
   try {
     var saved = localStorage.getItem('bb-view');
-    var view = (mode === 'song' || mode === 'studio') ? mode
+    var view = window.__BB_VIEW_FORCED__ ? mode
              : (saved === 'studio' ? 'studio' : 'song');
     document.documentElement.classList.add('bb-view-' + view);
   } catch (e) {
@@ -2978,7 +2980,11 @@ VIEW_JS = r"""(function () {
     boot();
     var el = area();
     if (!el || !el.value) return;
-    try { localStorage.setItem(KEY, el.value); } catch (e) {}
+    // a forced launch (--view / --tab) must not clobber the last stored choice;
+    // only a real click through __bbSetView remembers a new one
+    if (!window.__BB_VIEW_FORCED__) {
+      try { localStorage.setItem(KEY, el.value); } catch (e) {}
+    }
     apply(el.value);
   }, 400);
 })();"""
@@ -3760,7 +3766,7 @@ def build_ui(defaults):
         song_studio_btn.click(song_open_studio, inputs=[current_bridge],
                               outputs=[tabs, view_bridge])
         song_compare_btn.click(song_compare, inputs=[current_bridge],
-                               outputs=[song_compare_link, song_compare_status, view_bridge])
+                               outputs=[song_compare_link, song_compare_status])
         cover_detect_btn.click(cover_detect_python, outputs=cover_status)
         busy_timer = gr.Timer(2.0)
         busy_timer.tick(busy_banner, outputs=busy_out)
