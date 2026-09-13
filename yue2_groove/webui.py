@@ -48,7 +48,7 @@ Usage:
 The default view is SONG; ``YUE2_GROOVE_VIEW=song|studio`` or ``--view`` forces
 it for a launch, and the last choice is remembered per browser otherwise.
 
-Visual language: Bearbone Design System v0.2 (cool #11141C ground family + ivory ink,
+Visual language: Bearbone Design System v0.2 (warm near-black ground family + ivory ink,
 1px strokes, no shadows/gradients, monospace), with a dark and a bright scene.
 
 Model weights are CC BY-NC 4.0 (non-commercial); this UI is not affiliated with the
@@ -1743,7 +1743,7 @@ def _request_texts(style, lyrics, *, fallback: bool = False):
 
 
 # ─────────────────────── Bearbone DS v0.2, two scenes ───────────────────────
-# dark scene:   cool #11141C ground family + ivory #F1ECE2 ink (never pure black/white).
+# dark scene:   warm near-black #0B0A09 ground + ivory #F1ECE2 ink (never pure black/white).
 # bright scene: ivory #F1ECE2 ground + warm near-black #16140F ink; dark controls
 # (primary buttons, selected chips/checkboxes, sliders) share the #11141C family.
 # Shared grammar: 1px strokes, 10px panels, no shadows / gradients / glow, monospace, ops footer.
@@ -1752,10 +1752,10 @@ FONT_STACK = ["Berkeley Mono", "Sarasa Mono SC", "JetBrains Mono", "SF Mono",
               "Noto Sans Mono CJK SC", "ui-monospace", "Menlo", "monospace"]
 
 DARK = {
-    "bg": "#11141C", "bg_panel": "#161A24", "bg_input": "#1B202C", "bg_lift": "#212736",
-    "fg": "#F1ECE2", "fg2": "#B6BCC8", "fg3": "#7E8593", "fg4": "#575E6B",
-    "stroke": "#2B3244", "stroke2": "#667090",
-    "primary_fill": "#F1ECE2", "primary_hover": "#FBF8F2", "primary_text": "#11141C",
+    "bg": "#0B0A09", "bg_panel": "#12110F", "bg_input": "#171512", "bg_lift": "#1C1916",
+    "fg": "#F1ECE2", "fg2": "#B5AEA2", "fg3": "#7A746A", "fg4": "#57524A",
+    "stroke": "#2E2B27", "stroke2": "#8C8477",
+    "primary_fill": "#F1ECE2", "primary_hover": "#FBF8F2", "primary_text": "#16140F",
 }
 
 BRIGHT = {

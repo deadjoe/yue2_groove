@@ -42,6 +42,20 @@ def test_bright_dark_controls_share_the_cool_black() -> None:
     assert webui._bb_vars(webui.BRIGHT)["--bb-chip-bg"] == "#11141C"   # selected chips/rows
 
 
+def test_dark_scene_is_the_warm_black_ground() -> None:
+    """The dark scene is the warm near-black family again (reverted from #11141C)."""
+    assert webui.DARK["bg"] == "#0B0A09"
+    assert webui.DARK["bg_panel"] == "#12110F"
+    assert webui.DARK["bg_input"] == "#171512"
+    assert webui.DARK["bg_lift"] == "#1C1916"
+    assert webui.DARK["stroke"] == "#2E2B27" and webui.DARK["stroke2"] == "#8C8477"
+    assert webui.DARK["fg2"] == "#B5AEA2" and webui.DARK["primary_text"] == "#16140F"
+    values = webui._theme_values(webui.DARK)
+    assert values["background_fill_primary"] == "#0B0A09"
+    assert values["block_background_fill"] == "#12110F"
+    assert values["button_primary_background_fill"] == "#F1ECE2"
+
+
 def test_dark_scene_unchanged_by_the_bright_controls() -> None:
     values = webui._theme_values(webui.DARK)
     assert webui.DARK["primary_fill"] == "#F1ECE2"        # ivory on the cool ground
