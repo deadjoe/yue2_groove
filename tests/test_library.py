@@ -238,3 +238,10 @@ def test_library_js_binds_players_immediately_and_delegates_clicks() -> None:
     assert "bind(player);" in js and "button.click();" in js
     # a rejected play() must not be silent
     assert "playback blocked" in js
+
+
+def test_library_viz_draws_dashed_columns() -> None:
+    """The player spectrum is drawn as mirror-symmetric dashed columns (3 on / 3 off)."""
+    js = lib.LIBRARY_JS
+    assert "setLineDash([3, 3])" in js
+    assert "ctx.stroke()" in js and "setLineDash([])" in js   # restored after the frame
