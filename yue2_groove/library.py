@@ -512,7 +512,7 @@ def delete(root, rels):
         if path is None or path == root or not path.is_dir():
             errors.append(f"{rel}: not a work directory")
             continue
-        if not any((path / name).exists() for name in ARTIFACTS):
+        if not any((path / name).exists() for name in ARTIFACTS + (PENDING,)):
             errors.append(f"{rel}: no known artifacts")
             continue
         try:

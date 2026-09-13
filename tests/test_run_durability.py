@@ -103,6 +103,26 @@ def test_library_lists_a_run_that_only_has_the_marker(tmp_path) -> None:
     assert "INCOMPLETE" in library.label(items[0])
 
 
+def test_a_cancelled_pending_only_run_can_be_deleted(tmp_path) -> None:
+    runs = tmp_path / "runs"
+    run = runs / "20260914-013606-Grand_Piano_CFG15"
+    run.mkdir(parents=True)
+    (run / webui.PENDING_FILE).write_text('{"status": "cancelled"}', encoding="utf-8")
+    assert [item["rel"] for item in library.scan(runs)] == ["20260914-013606-Grand_Piano_CFG15"]
+
+    ok, message = library.delete(runs, ["20260914-013606-Grand_Piano_CFG15"])
+    assert ok is True and "Deleted 1" in message, message
+    assert not run.exists()
+
+
+def test_delete_still_refuses_a_directory_without_artifacts(tmp_path) -> None:
+    runs = tmp_path / "runs"
+    (runs / "junk").mkdir(parents=True)
+    ok, message = library.delete(runs, ["junk"])
+    assert ok is False and "no known artifacts" in message
+    assert (runs / "junk").is_dir()
+
+
 def test_edit_and_cover_choices_skip_incomplete_runs(tmp_path, monkeypatch) -> None:
     runs = tmp_path / "runs"
     monkeypatch.setattr(webui, "RUNS", runs)
