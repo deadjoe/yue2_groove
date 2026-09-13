@@ -67,6 +67,8 @@ def test_02_keeps_one_solid_primary_in_the_generate_area() -> None:
     assert any(c.size == "lg" and c.variant == "primary" for c in sends)
     generate_cover = by_id(demo, "bb-cover-generate")
     assert generate_cover.size == "sm" and generate_cover.variant == "secondary"
+    # outline Secondary does not depend on living inside an action bar
+    assert "bb-secondary" in generate_cover.elem_classes
 
 
 def test_destructive_confirm_is_the_only_solid_danger() -> None:
