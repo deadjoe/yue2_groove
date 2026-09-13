@@ -79,10 +79,10 @@ DTYPE_CHOICES = [
     ("float32 (cast at load; slower, 2x memory)", "float32"),
 ]
 
-ABC_DEFAULTS = dict(temperature=.7, top_p=.9, top_k=30, repetition_penalty=1.005,
-                    penalty_window=100, min_tokens=32, max_tokens=4096)
-SEM_DEFAULTS = dict(temperature=1.0, top_p=.95, top_k=100, repetition_penalty=1.2,
-                    penalty_window=50, min_tokens=200, max_tokens=9000)
+ABC_DEFAULTS = {"temperature": .7, "top_p": .9, "top_k": 30, "repetition_penalty": 1.005,
+                "penalty_window": 100, "min_tokens": 32, "max_tokens": 4096}
+SEM_DEFAULTS = {"temperature": 1.0, "top_p": .95, "top_k": 100, "repetition_penalty": 1.2,
+                "penalty_window": 50, "min_tokens": 200, "max_tokens": 9000}
 
 
 # ─────────────────────────── helpers ───────────────────────────
@@ -162,7 +162,7 @@ def unload_pipeline():
         if _PIPE is not None:
             try:
                 adapter.close_pipeline(_PIPE)
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001, S110 — closing must never raise
                 pass
         _PIPE, _PIPE_KEY = None, None
     if torch.backends.mps.is_available():
@@ -202,7 +202,7 @@ def _write_local_env(directory: Path, pipe, note: str = "") -> None:
         }
         (Path(directory) / "local_env.json").write_text(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    except Exception:  # noqa: BLE001 — provenance must never fail a run
+    except Exception:  # noqa: BLE001, S110 — provenance must never fail a run
         pass
 
 
@@ -763,7 +763,7 @@ def run_doctor(model, vae_choice, vae_custom, revision, vae_revision, offline, v
     vae_path, _ = resolve_vae(vae_choice, vae_custom)
     cmd = adapter.doctor_command(model, vae_path, revision=revision, vae_revision=vae_revision,
                                  offline=bool(offline), verify=bool(verify))
-    res = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+    res = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, check=False)
     return res.stdout.strip() or res.stderr.strip()
 
 
@@ -777,7 +777,7 @@ def make_comparison(paths_text, progress=gr.Progress()):
     outdir = RUNS / f"{time.strftime('%Y%m%d-%H%M%S')}-comparison"
     progress(0.2, desc="Building listening comparison…")
     cmd = [sys.executable, "-m", "yue2_groove.vendor.listen", *sources, "--output", str(outdir)]
-    res = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+    res = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, check=False)
     if res.returncode not in (0, 1):
         raise gr.Error(f"Build failed: {res.stderr.strip()}")
     html_path = outdir / "index.html"
@@ -1324,10 +1324,10 @@ def apply_preset(name):
 
 def _load_project_example():
     """Example request that feeds the placeholders and the "fill example" buttons."""
-    return ("English, warm piano pop, expressive female voice, acoustic piano, "
-            "rounded bass and light drums, 88 BPM",
-            "[Verse]\nNeon fades along the lane\nFootsteps keep the time of rain\n\n"
-            "[Chorus]\nLet the day come into view\nEvery road begins with you")
+    return (("English, warm piano pop, expressive female voice, acoustic piano, "
+             "rounded bass and light drums, 88 BPM"),
+            ("[Verse]\nNeon fades along the lane\nFootsteps keep the time of rain\n\n"
+             "[Chorus]\nLet the day come into view\nEvery road begins with you"))
 
 
 EXAMPLE_STYLE, EXAMPLE_LYRICS = _load_project_example()
@@ -2153,7 +2153,7 @@ SCORE_JS = """(function () {
 })();"""
 
 HEAD_HTML += (f'<script src="/gradio_api/file={ABCJS_FILE}"></script>'
-              + "<script>" + SCORE_JS + "</script>")
+              "<script>" + SCORE_JS + "</script>")
 
 ABC_FOLD_JS = """(function () {
   function init() {

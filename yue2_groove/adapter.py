@@ -18,7 +18,7 @@ import contextlib
 import inspect
 import sys
 import threading
-from typing import Callable
+from collections.abc import Callable
 
 INSTALL_HINT = (
     "The `yue2` package is not installed in this environment. Install YuE2 first, e.g.\n"
@@ -166,10 +166,11 @@ def _acoustic_progress(on_progress: StageProgress | None):
 def generate(pipe, request, *, abc_sampling, semantic_sampling, cancelled=None,
              on_token=None, on_progress: StageProgress | None = None):
     """Full song generation; ``on_progress(stage, done, total)`` with stage nar/vae."""
-    kwargs = dict(style=request.style, lyrics=request.lyrics, cot=request.cot,
-                  seed=request.seed, abc=request.abc, cfg_scale=request.cfg_scale,
-                  id=request.id, abc_sampling=abc_sampling, semantic_sampling=semantic_sampling,
-                  cancelled=cancelled, on_token=on_token)
+    kwargs = {"style": request.style, "lyrics": request.lyrics, "cot": request.cot,
+              "seed": request.seed, "abc": request.abc, "cfg_scale": request.cfg_scale,
+              "id": request.id, "abc_sampling": abc_sampling,
+              "semantic_sampling": semantic_sampling,
+              "cancelled": cancelled, "on_token": on_token}
     if on_progress is not None and supports_on_progress(pipe):
         return pipe(on_progress=on_progress, **kwargs)
     with _acoustic_progress(on_progress):

@@ -298,8 +298,14 @@ belongs in `yue2_groove/adapter.py`, the only module that imports `yue2`.
 
 ```bash
 uv pip install --python .venv/bin/python -e ".[test]" --overrides overrides/macos.txt
+.venv/bin/ruff check .                                    # the one lint gate (config in pyproject.toml)
+.venv/bin/python -m compileall -q yue2_groove tests scripts
 .venv/bin/python -m pytest -q
 ```
+
+The lint rule set lives in `[tool.ruff]` (pyproject.toml) so CI and local runs use the
+same gate; `yue2_groove/vendor/` is excluded because it is an upstream byte-identical
+copy (see NOTICE).
 
 - `yue2_groove/webui.py` — the Gradio app (all tabs, theme, client-side helpers).
 - `yue2_groove/library.py` — the Library backend; standard library only, reads run

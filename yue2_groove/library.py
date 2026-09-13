@@ -33,7 +33,7 @@ MAX_NAME = 80
 # ─────────────────────────────────────────────────────────────── helpers ──
 def format_seconds(value) -> str:
     try:
-        total = int(round(float(value)))
+        total = round(float(value))
     except (TypeError, ValueError):
         return "—"
     if total <= 0:
@@ -316,8 +316,8 @@ def render_info_html(item: dict, det: dict) -> str:
            '<div class="bb-lib-sub">' + " · ".join(html.escape(str(b)) for b in (
                item.get("created_label"), format_seconds(item.get("duration")),
                item.get("kind", "").upper()) if b) + '</div>',
-           f'<div class="bb-lib-sub bb-lib-dim">{html.escape(item.get("rel", ""))}'
-           f' · {html.escape(format_bytes(item.get("size")))}</div>']
+           (f'<div class="bb-lib-sub bb-lib-dim">{html.escape(item.get("rel", ""))}'
+            f' · {html.escape(format_bytes(item.get("size")))}</div>')]
 
     chips = []
     if request.get("cot"):

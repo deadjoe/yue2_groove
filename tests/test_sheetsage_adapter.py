@@ -145,7 +145,7 @@ def test_transcribe_without_result_json_fails_clearly(monkeypatch, tmp_path: Pat
     audio.write_bytes(b"RIFF")
     captured: dict = {}
     patch_command(monkeypatch, write_stub(tmp_path, "import sys; sys.exit(0)"), captured)
-    with pytest.raises(adapter.SheetsageFailed, match="result.json"):
+    with pytest.raises(adapter.SheetsageFailed, match=r"result\.json"):
         adapter.transcribe(audio, output_dir=tmp_path / "out")
 
 

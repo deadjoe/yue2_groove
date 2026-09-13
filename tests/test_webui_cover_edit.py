@@ -54,10 +54,6 @@ def make_work(root: Path, name: str = "20260901-120000-source") -> Path:
     return directory
 
 
-def updates(values):
-    return [v for v in values]
-
-
 # ── cover ────────────────────────────────────────────────────────────────
 
 def test_score_panel_marks_the_textarea_label() -> None:
