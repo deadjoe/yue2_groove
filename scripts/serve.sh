@@ -9,7 +9,8 @@
 #   bash scripts/serve.sh start [--port 7860] [--host 0.0.0.0] [--tab 0]
 #                               [--device auto|mps|cuda|cpu] [--dtype auto|bfloat16|float32]
 #                               [--model ID_OR_DIR] [--runs DIR]
-#                               [--auth user:password] [--no-preload] [-f]
+#                               [--auth user:password] [--sheetsage-python PATH]
+#                               [--no-preload] [-f]
 #   bash scripts/serve.sh stop
 #   bash scripts/serve.sh restart [same options as start]
 #   bash scripts/serve.sh status
@@ -21,6 +22,7 @@
 #   YUE2_GROOVE_PORT=7860
 #   YUE2_GROOVE_MODEL=m-a-p/YuE2-3B
 #   YUE2_GROOVE_RUNS=/somewhere/runs
+#   YUE2_GROOVE_SHEETSAGE_PYTHON=/path/to/.venv-sheetsage2/bin/python
 # The script sources that file automatically.
 #
 # The Python interpreter defaults to the repository's .venv; override with
@@ -51,7 +53,7 @@ if [ -f "$ROOT/.env" ]; then
   PY="${YUE2_GROOVE_PYTHON:-$PY}"
 fi
 
-usage() { sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 cmd="${1:-}"
 case "$cmd" in
@@ -69,6 +71,7 @@ while [ $# -gt 0 ]; do
     --model)    EXTRA_ARGS+=("--model" "$2"); shift 2 ;;
     --runs)     RUN_DIR="$2"; shift 2 ;;
     --auth)     YUE2_GROOVE_AUTH="$2"; shift 2 ;;
+    --sheetsage-python) EXTRA_ARGS+=("--sheetsage-python" "$2"); shift 2 ;;
     --no-preload) EXTRA_ARGS+=("--no-preload"); shift ;;
     -f|--foreground) FOREGROUND=1; shift ;;
     -h|--help)  usage ;;

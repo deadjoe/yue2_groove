@@ -16,3 +16,13 @@ upstream tag yue2-v0.1.6 (commit 9c6c4b3):
 This product includes abcjs (https://github.com/paulrosen/abcjs),
 Copyright (c) 2009-2024 Paul Rosen and Gregory Dyke, MIT License;
 see yue2_groove/static/abcjs.LICENSE.
+
+The file yue2_groove/sheetsage_driver.py is adapted from the YuE2 project's
+skills/yue2-music/scripts/transcribe.py (Apache License, Version 2.0,
+Copyright (c) 2026 the YuE2 authors). It is rewritten to run inside a separate
+SheetSage2 virtual environment and is invoked as a subprocess.
+
+SheetSage2 (m-a-p/SheetSage2) and its parent encoder MERT-v2-FullSong
+(m-a-p/MERT-v2-FullSong) are optional models downloaded at runtime for the
+06 COVER tab. Their weights are licensed CC BY-NC 4.0 (non-commercial); no
+model weights are shipped in this repository.

@@ -6,16 +6,25 @@ for one parameter.
 
   01 GENERATE   style + lyrics (+ optional ABC) → editable score plan → 48 kHz stereo song;
                 all sampling parameters of both the ABC and the semantic phase; plan mode
-                full/melody/off, seed, cfg_scale, custom id, cancel, live progress
-  02 DECODE     re-decode a saved latent.npy (source / standard / legacy / custom VAE,
-                full or tiled) without generating again; single .npy upload supported
-  03 BATCH      one JSON request per line (the equivalent of ``yue2 batch``), run in order
-  04 TOOLS      ABC validation / event export, chord stripping (cover melodies), edit
-                invariant check, environment doctor, listening-comparison page
-  05 LIBRARY    every generated work: sort, select, rename, confirmed delete; details with a
+                full/melody/off, seed, cfg_scale, custom id, cancel, live progress; ALL MODES
+                runs the same text request as full + melody + off and compares them
+  02 COVER      source audio → SheetSage2 transcription (separate venv) → editable ABC →
+                chord strip → SEND TO GENERATE or generate right on the tab
+  03 EDIT       load a work as a frozen baseline, edit its ABC, check exact melody/meter
+                invariants, regenerate from the edited score, compare baseline vs edit
+  04 LIBRARY    every generated work: sort, select, rename, confirmed delete; details with a
                 player (spectrum + transport), style / lyrics / ABC / score and run tables
+  05 TOOLS      ABC validation / event export, chord stripping (cover melodies), edit
+                invariant check, environment doctor, listening-comparison page
+  06 DECODE     re-decode a saved latent.npy (source / standard / legacy / custom VAE,
+                full or tiled) without generating again; single .npy upload supported
+  07 BATCH      one JSON request per line (the equivalent of ``yue2 batch``), run in order
   Settings rail model & runtime: device / dtype / backend / quantization / offload_ar /
                 memory budget / ODE steps / VAE core frames / revisions / offline; load & unload
+
+SheetSage2 (COVER) runs in its own virtual environment; set ``YUE2_GROOVE_SHEETSAGE_PYTHON``
+to its interpreter (see README, 'Cover from audio').  Nothing in this process imports
+``transformers``; the subprocess boundary lives in ``sheetsage_adapter.py``.
 
 Apple Silicon (MPS): bfloat16 works with torch >= 2.11.  The upstream pin (torch 2.10.0)
 hits pytorch/pytorch#174861 — the single-query SDPA kernel corrupts once the KV cache
@@ -24,7 +33,7 @@ run ``scripts/mps_sdpa_check.py`` to verify.  vLLM / FP8 need NVIDIA CUDA.
 
 Usage:
   python -m yue2_groove --port 7860             # opens the browser
-  python -m yue2_groove --tab 1                 # start on a given tab 0..4
+  python -m yue2_groove --tab 1                 # start on a given tab 0..6
   python -m yue2_groove --host 0.0.0.0 --auth user:pass   # LAN access (set a password)
   bash scripts/serve.sh start|stop|restart|status|log     # background service
 
@@ -37,6 +46,8 @@ YuE2 authors.
 from __future__ import annotations
 
 import argparse
+import atexit
+import html
 import json
 import os
 import subprocess
@@ -51,7 +62,7 @@ import numpy as np
 import soundfile as sf
 import torch
 
-from . import adapter, config, library
+from . import adapter, config, cover, edit_flow, library, sheetsage_adapter
 from .vendor import abc_tools
 
 # Where generated works are stored; main() may override it with --runs.
@@ -206,10 +217,16 @@ def _artifact_files(directory: Path, score: bool):
     return [str(directory / n) for n in names if (directory / n).exists()]
 
 
+def _looks_like_run(path: Path) -> bool:
+    return any((path / name).exists()
+               for name in ("latent.npy", "result.json", "plan.json", "decode.json"))
+
+
 def _scan_runs():
     if not RUNS.is_dir():
         return []
-    return [str(p) for p in sorted(RUNS.iterdir(), reverse=True) if p.is_dir()]
+    return [str(p) for p in sorted(RUNS.iterdir(), reverse=True)
+            if p.is_dir() and not p.name.startswith(".") and _looks_like_run(p)]
 
 
 def _update_run_choices():
@@ -217,12 +234,12 @@ def _update_run_choices():
 
 
 def _scan_batches():
-    """[(label, batch_dir)] for batch runs that contain saved songs with result.json."""
+    """[(label, batch_dir)] for batch or all-modes groups with saved songs."""
     out = []
     if not RUNS.is_dir():
         return out
     for d in sorted(RUNS.iterdir(), reverse=True):
-        if not d.is_dir() or "batch" not in d.name:
+        if not d.is_dir() or not ("batch" in d.name or "-allmodes-" in d.name):
             continue
         songs = [p for p in sorted(d.iterdir()) if p.is_dir() and (p / "result.json").is_file()]
         if songs:
@@ -267,6 +284,56 @@ def duration_text(tokens):
             f"({minutes:.1f} min) at {int(tokens)} semantic tokens")
 
 
+def _run_generation(pipe, request, outdir, *, abc_sampling, semantic_sampling, progress, note,
+                    extra_manifest=None):
+    """Generate one song into *outdir* and save its artifacts.
+
+    Shared by 01 GENERATE and 03 EDIT so both flows report progress identically.
+    ``extra_manifest`` (a dict) is written next to the run as ``edit_manifest.json``.
+    """
+    counts = {"abc": 0, "semantic": 0}
+    abc_budget = abc_sampling.max_tokens if request.cot != "off" else 0
+    sem_budget = semantic_sampling.max_tokens
+
+    def on_token(phase, token):
+        counts[phase] = counts.get(phase, 0) + 1
+        if request.cot == "off":
+            frac = 0.55 * min(1.0, counts["semantic"] / max(1, sem_budget))
+        else:
+            frac = (0.15 * min(1.0, counts["abc"] / max(1, abc_budget))
+                    + 0.40 * min(1.0, counts["semantic"] / max(1, sem_budget)))
+        progress(min(0.55, frac), desc=f"Generating {phase}: {counts[phase]} tokens")
+
+    def on_progress(stage, done, total):
+        if stage == "nar":
+            progress(0.55 + 0.40 * min(1.0, done / max(1, total)),
+                     desc=f"Synthesizing audio: step {done}/{total}")
+        elif stage == "vae":
+            progress(0.95 + 0.05 * min(1.0, done / max(1, total)),
+                     desc=f"Decoding audio: chunk {done}/{total}")
+
+    t0 = time.perf_counter()
+    song = adapter.generate(pipe, request, abc_sampling=abc_sampling,
+                            semantic_sampling=semantic_sampling, cancelled=_CANCEL.is_set,
+                            on_token=on_token, on_progress=on_progress)
+    progress(1.0, desc="Saving artifacts…")
+    result = song.save_artifacts(outdir)
+    if extra_manifest is not None:
+        (Path(outdir) / "edit_manifest.json").write_text(
+            json.dumps(extra_manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    _write_local_env(outdir, pipe, note)
+    return song, result, time.perf_counter() - t0
+
+
+def _generation_status(song, result, outdir, elapsed, request, note):
+    return (f"Done: {result['audio_seconds']:.1f}s audio in {elapsed:.0f}s\n"
+            f"truncated={result['truncated']}  seed={request.seed}  cfg={request.guidance}\n"
+            f"NAR={song.timing['nar_seconds']:.0f}s  VAE={song.timing['vae_seconds']:.0f}s  "
+            f"semantic={song.timing['semantic'].get('output_tps', 0):.1f} tok/s  "
+            f"ABC={song.timing['abc'].get('output_tokens', 0)} tokens\n"
+            f"run directory: {outdir}\n{note}")
+
+
 def generate(style, lyrics, cot, seed, cfg_scale, abc_text, out_id, preset,
              abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
              sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max,
@@ -307,51 +374,146 @@ def generate(style, lyrics, cot, seed, cfg_scale, abc_text, out_id, preset,
         pipe, note = _get_pipe(device, dtype, backend, quantization, offload_ar, budget,
                                ode_steps, vae_core_frames, model, vae_choice, vae_custom,
                                revision, vae_revision, offline, progress)
-        counts = {"abc": 0, "semantic": 0}
-        abc_budget = abc_sampling.max_tokens if cot != "off" else 0
-        sem_budget = sem_sampling.max_tokens
-
-        def on_token(phase, token):
-            counts[phase] = counts.get(phase, 0) + 1
-            if cot == "off":
-                frac = 0.55 * min(1.0, counts["semantic"] / max(1, sem_budget))
-            else:
-                frac = (0.15 * min(1.0, counts["abc"] / max(1, abc_budget))
-                        + 0.40 * min(1.0, counts["semantic"] / max(1, sem_budget)))
-            progress(min(0.55, frac), desc=f"Generating {phase}: {counts[phase]} tokens")
-
-        def on_progress(stage, done, total):
-            if stage == "nar":
-                progress(0.55 + 0.40 * min(1.0, done / max(1, total)),
-                         desc=f"Synthesizing audio: step {done}/{total}")
-            elif stage == "vae":
-                progress(0.95 + 0.05 * min(1.0, done / max(1, total)),
-                         desc=f"Decoding audio: chunk {done}/{total}")
-
         progress(0.02, desc="Starting generation…")
-        t0 = time.perf_counter()
-        song = adapter.generate(pipe, request, abc_sampling=abc_sampling,
-                                semantic_sampling=sem_sampling, cancelled=_CANCEL.is_set,
-                                on_token=on_token, on_progress=on_progress)
-        progress(1.0, desc="Saving artifacts…")
         outdir = RUNS / (f"{time.strftime('%Y%m%d-%H%M%S')}-"
                          f"{request.id if request.id != 'song' else _slug(style)}")
-        result = song.save_artifacts(outdir)
-        _write_local_env(outdir, pipe, note)
-        elapsed = time.perf_counter() - t0
-        status = (f"Done: {result['audio_seconds']:.1f}s audio in {elapsed:.0f}s\n"
-                  f"truncated={result['truncated']}  seed={request.seed}  cfg={request.guidance}\n"
-                  f"NAR={song.timing['nar_seconds']:.0f}s  VAE={song.timing['vae_seconds']:.0f}s  "
-                  f"semantic={song.timing['semantic'].get('output_tps', 0):.1f} tok/s  "
-                  f"ABC={song.timing['abc'].get('output_tokens', 0)} tokens\n"
-                  f"run directory: {outdir}\n{note}")
-        yield str(outdir / "audio.flac"), (song.abc or ""), status, \
+        song, result, elapsed = _run_generation(
+            pipe, request, outdir, abc_sampling=abc_sampling, semantic_sampling=sem_sampling,
+            progress=progress, note=note)
+        yield str(outdir / "audio.flac"), (song.abc or ""), \
+            _generation_status(song, result, outdir, elapsed, request, note), \
             _artifact_files(outdir, bool(song.abc)), *idle
     except InterruptedError as exc:
         yield gr.update(), gr.update(), f"Cancelled: {exc}", gr.update(), *idle
     except Exception as exc:  # noqa: BLE001
         yield gr.update(), gr.update(), \
             f"Generation failed: {type(exc).__name__}: {exc}", gr.update(), *idle
+    finally:
+        _RUNNING.release()
+
+
+ALL_MODES = ("full", "melody", "off")
+
+
+def generate_all_modes(style, lyrics, seed, cfg_scale, abc_text, out_id,
+                       abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
+                       sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max,
+                       device, dtype, backend, quantization, offload_ar, budget, ode_steps,
+                       vae_core_frames, model, vae_choice, vae_custom, revision, vae_revision,
+                       offline, progress=gr.Progress()):
+    """Generator: the same text request as full / melody / off, then a comparison.
+
+    Mirrors upstream's ``all-modes``: text-only input (``cot=off`` cannot accept an
+    ABC), one fresh directory per mode, a ``run.json`` summary at the group root,
+    failures retained as ``failure.json``, and a listening bundle of the modes that
+    completed.  Buttons are disabled while running; CANCEL stops after the current
+    mode.
+    """
+    if (abc_text or "").strip():
+        raise gr.Error("ALL MODES is text-only: cot=off cannot accept an ABC score. Clear "
+                       "ABC SCORE, or generate the modes one by one with their own ABC.")
+    style, lyrics = _request_texts(style, lyrics)
+    base_id = (out_id or "").strip() or _slug(style)
+    try:
+        adapter.song_request(style=style, lyrics=lyrics, cot="full", seed=int(seed), id=base_id)
+    except (ValueError, TypeError) as exc:
+        raise gr.Error(f"Invalid request: {exc}") from exc
+    abc_sampling = _sampling(abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max, "ABC phase")
+    sem_sampling = _sampling(sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max,
+                             "semantic phase")
+
+    _CANCEL.clear()
+    if not _RUNNING.acquire(blocking=False):
+        yield ("Another job is already running — wait for it to finish",
+               gr.update(), gr.update(), gr.update(), gr.update(), gr.update())
+        return
+    busy = (gr.update(interactive=False),) * 3
+    idle = (gr.update(interactive=True),) * 3
+    try:
+        yield ("Starting ALL MODES (full → melody → off)…",
+               gr.update(), gr.update(), *busy)
+        pipe, note = _get_pipe(device, dtype, backend, quantization, offload_ar, budget,
+                               ode_steps, vae_core_frames, model, vae_choice, vae_custom,
+                               revision, vae_revision, offline, progress)
+        root = RUNS / f"{time.strftime('%Y%m%d-%H%M%S')}-allmodes-{_slug(base_id)}"
+        results, files, done_dirs = [], [], []
+        for position, mode in enumerate(ALL_MODES):
+            mode_dir = root / mode
+            if _CANCEL.is_set():
+                results.append({"mode": mode, "status": "cancelled"})
+                break
+            kwargs = {"style": style, "lyrics": lyrics, "cot": mode, "seed": int(seed),
+                      "id": f"{base_id}_{mode}"}
+            if cfg_scale:
+                kwargs["cfg_scale"] = float(cfg_scale)
+            request = adapter.song_request(**kwargs)
+
+            def scoped(value, desc=None, position=position, mode=mode):
+                fraction = position + (0.0 if value is None else min(1.0, float(value)))
+                progress(min(1.0, fraction / len(ALL_MODES)),
+                         desc=f"[{mode}] {desc}" if desc else f"[{mode}]")
+
+            try:
+                mode_dir.mkdir(parents=True, exist_ok=True)
+                (mode_dir / "input.json").write_text(
+                    json.dumps(request.to_dict(), ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8")
+                song, receipt, elapsed = _run_generation(
+                    pipe, request, mode_dir, abc_sampling=abc_sampling,
+                    semantic_sampling=sem_sampling, progress=scoped, note=note)
+                results.append({"mode": mode, "status": "complete",
+                                "audio_seconds": receipt["audio_seconds"],
+                                "truncated": receipt["truncated"],
+                                "seconds": round(elapsed, 2)})
+                files += _artifact_files(mode_dir, bool(song.abc))
+                done_dirs.append(str(mode_dir))
+            except InterruptedError as exc:
+                record = {"mode": mode, "status": "cancelled", "error": str(exc)}
+                (mode_dir / "failure.json").write_text(
+                    json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                results.append(record)
+                break
+            except Exception as exc:  # noqa: BLE001 — keep going; the failure is retained
+                record = {"mode": mode, "status": "failed", "type": type(exc).__name__,
+                          "error": str(exc)}
+                mode_dir.mkdir(parents=True, exist_ok=True)
+                (mode_dir / "failure.json").write_text(
+                    json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                results.append(record)
+            progress((position + 1) / len(ALL_MODES), desc=f"{mode} finished")
+
+        root.mkdir(parents=True, exist_ok=True)
+        summary = {"action": "all-modes", "request": {"style": style, "lyrics": lyrics,
+                   "seed": int(seed), "cfg_scale": float(cfg_scale) if cfg_scale else None,
+                   "id": base_id}, "results": results}
+        (root / "run.json").write_text(
+            json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+        link, comparison = "", ""
+        if len(done_dirs) >= 2:
+            progress(0.98, desc="Building listening comparison…")
+            try:
+                _html, link, comparison = make_comparison("\n".join(done_dirs))
+            except gr.Error as exc:
+                comparison = f"comparison failed: {exc}"
+
+        lines = [f"ALL MODES finished: {root}", ""]
+        for record in results:
+            if record["status"] == "complete":
+                lines.append(f"  {record['mode']:<7} complete  {record['audio_seconds']:.1f}s "
+                             f"audio in {record['seconds']:.0f}s  truncated={record['truncated']}")
+            else:
+                lines.append(f"  {record['mode']:<7} {record['status']}  "
+                             f"{record.get('error', '')}")
+        lines += ["", note]
+        if comparison:
+            lines.append(comparison)
+        if len(done_dirs) < 2:
+            lines.append("(the comparison needs at least two completed modes)")
+        yield "\n".join(lines), files, link, *idle
+    except Exception as exc:  # noqa: BLE001
+        yield (f"ALL MODES failed: {type(exc).__name__}: {exc}",
+               gr.update(), gr.update(), *idle)
     finally:
         _RUNNING.release()
 
@@ -627,6 +789,417 @@ def make_comparison(paths_text, progress=gr.Progress()):
               f"  {served}\n"
               f"  file://{html_path}")
     return str(html_path), link, status
+
+
+# ───────────────── cover tab (see sheetsage_adapter.py / cover.py) ─────────────────
+
+def _score_panel(prefix: str, empty: str, elem_id: str = "") -> str:
+    """HTML for one abcjs score panel; SCORE_JS fills the .bb-score-inner div."""
+    panel_id = f' id="{html.escape(elem_id, quote=True)}"' if elem_id else ""
+    message = html.escape(empty)
+    return (f'<div class="bb-score-panel" data-bb-abc="{html.escape(prefix, quote=True)}" '
+            f'data-bb-empty="{message}"{panel_id}>'
+            f'<div class="bb-score-inner"><div class="bb-score-empty">{message}</div></div></div>')
+
+
+def _sampling_summary_pair(*args):
+    """``demo.load`` wrapper: one summary string per mirror output.
+
+    Gradio requires exactly one return value per output component, and the page
+    load updates both the EDIT and the COVER mirror.
+    """
+    text = _sampling_summary(*args)
+    return text, text
+
+
+def _sampling_summary(abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
+                      sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max) -> str:
+    """One-line view of the sampling parameters shared with 01 GENERATE."""
+    return (f"ABC  t={float(abc_temp):g}  p={float(abc_p):g}  k={int(abc_k)}  "
+            f"rep={float(abc_rep):g}  win={int(abc_win)}  min={int(abc_min)}  max={int(abc_max)}\n"
+            f"SEM  t={float(sem_temp):g}  p={float(sem_p):g}  k={int(sem_k)}  "
+            f"rep={float(sem_rep):g}  win={int(sem_win)}  min={int(sem_min)}  max={int(sem_max)}")
+
+
+def _transcription_files(directory) -> list[str]:
+    directory = Path(directory)
+    if not directory.is_dir():
+        return []
+    return [str(p) for p in sorted(directory.rglob("*")) if p.is_file()]
+
+
+def cover_check_environment():
+    """CHECK ENVIRONMENT: probe the SheetSage2 venv without loading any model."""
+    try:
+        return sheetsage_adapter.format_probe(sheetsage_adapter.probe())
+    except (sheetsage_adapter.SheetsageNotConfigured, sheetsage_adapter.SheetsageFailed) as exc:
+        return f"SheetSage2 environment not ready: {exc}"
+
+
+def cover_unload_worker():
+    """Drop the resident SheetSage2 worker (freeing its memory) if there is one."""
+    stopped = sheetsage_adapter.stop_worker()
+    return ("SheetSage2 worker unloaded; the next transcription loads the model again."
+            if stopped else "No resident SheetSage2 worker.")
+
+
+def cover_transcribe(audio_path, task, max_seconds, model, device, dtype, revision, base_model,
+                     keep_warm, offline, progress=gr.Progress()):
+    """Generator: transcription disables the TRANSCRIBE button while running."""
+    if not (audio_path or "").strip():
+        raise gr.Error("Upload a source audio file first")
+    if task not in sheetsage_adapter.TASKS:
+        raise gr.Error(f"Unknown transcription task: {task}")
+    _CANCEL.clear()
+    if not _RUNNING.acquire(blocking=False):
+        yield (gr.update(), gr.update(),
+               "Another job is already running — wait for it to finish",
+               *((gr.update(),) * 7), gr.update(), gr.update())
+        return
+    controls = (gr.update(interactive=False),) * 7
+    idle = (gr.update(interactive=True),) * 7
+    try:
+        yield gr.update(), gr.update(), "Starting SheetSage2 transcription…", *controls, \
+            gr.update(), gr.update()
+        outdir = config.transcriptions_dir(RUNS) / \
+            f"{time.strftime('%Y%m%d-%H%M%S')}-{_slug(Path(audio_path).stem)}"
+
+        def on_progress(value, text):
+            progress(value, desc=text)
+
+        record = sheetsage_adapter.transcribe(
+            audio_path, output_dir=outdir, task=task,
+            model=(model or "").strip() or None, revision=(revision or "").strip() or None,
+            base_model=(base_model or "").strip() or None, keep_warm=bool(keep_warm),
+            offline=bool(offline), device=device, dtype=dtype,
+            max_seconds=float(max_seconds) if max_seconds else None,
+            cancelled=_CANCEL.is_set, progress=on_progress)
+        abc = record.get("abc") or ""
+        warnings = record.get("warnings") or []
+        lines = [f"Transcribed (task={record.get('task')}) → {record['output_dir']}",
+                 (f"device={record.get('device')} dtype={record.get('dtype')}  "
+                  f"melody_only={record.get('melody_only')}"),
+                 "Review the ABC before covering; transcription can contain musical errors."]
+        if warnings:
+            lines.append("warnings: " + "; ".join(str(w) for w in warnings))
+        worker = sheetsage_adapter.worker_status()
+        if worker:
+            lines.append(f"SheetSage2 worker resident (pid {worker['pid']}) — reused by the next "
+                         f"transcription until UNLOAD or the idle timeout.")
+        # surface the direct-generation path now that there is a score to use,
+        # and select the new transcription as the reusable source
+        _items, choices = _library_choices(_library_mode("time", "desc"))
+        known = {value for _label, value in choices}
+        try:
+            rel = Path(record["output_dir"]).resolve().relative_to(RUNS.resolve()).as_posix()
+        except (ValueError, OSError):
+            rel = None
+        source_update = (gr.update(choices=choices, value=rel) if rel in known
+                         else gr.update(choices=choices))
+        yield (abc, _transcription_files(record["output_dir"]), "\n".join(lines),
+               *idle, gr.update(open=True), source_update)
+    except InterruptedError as exc:
+        note = (" The resident SheetSage2 worker was stopped; the next transcription reloads it."
+                if keep_warm else "")
+        yield gr.update(), gr.update(), f"Cancelled: {exc}.{note}", *idle, gr.update(), gr.update()
+    except Exception as exc:  # noqa: BLE001
+        yield gr.update(), gr.update(), \
+            f"Transcription failed: {type(exc).__name__}: {exc}", *idle, gr.update(), gr.update()
+    finally:
+        _RUNNING.release()
+
+
+def cover_choices():
+    """Choices for the COVER source dropdown (any saved work or transcription with an ABC)."""
+    _items, choices = _library_choices(_library_mode("time", "desc"))
+    return gr.update(choices=choices)
+
+
+def cover_load(rel):
+    """Fill COVER ABC (and STYLE/LYRICS when the source has them) from a saved work."""
+    if not (rel or "").strip():
+        raise gr.Error("Pick a SOURCE WORK first (press REFRESH if the list is empty)")
+    item, det = library.load(RUNS, rel)
+    if item is None or det is None:
+        raise gr.Error("That work no longer exists — press REFRESH")
+    abc = (det.get("abc") or "").strip()
+    if not abc:
+        raise gr.Error(f"{item['name']} has no ABC score to load")
+    request = det.get("request") or {}
+    style = request.get("style") or request.get("tags") or ""
+    lyrics = request.get("lyrics") or ""
+    return (gr.update(value=abc),
+            gr.update(value=style) if style.strip() else gr.update(),
+            gr.update(value=lyrics) if lyrics.strip() else gr.update(),
+            (f"Loaded {item['name']} ({item['kind']}) — {len(abc)} chars. Continue here or "
+             f"press SEND TO EDIT."))
+
+
+def cover_send_to_edit(abc_text, rel, style, lyrics):
+    """Hand the current COVER score to 03 EDIT, keeping the source as the freeze target."""
+    if not (abc_text or "").strip():
+        raise gr.Error("Transcribe or load a score first")
+    if not (rel or "").strip():
+        raise gr.Error("LOAD a source work (or transcribe) first — 03 EDIT freezes that source "
+                       "before it can check the edit")
+    item, det = library.load(RUNS, rel)
+    if item is None or det is None:
+        raise gr.Error("That source work no longer exists — refresh 02 COVER")
+    source_abc = (det.get("abc") or "").strip()
+    if not source_abc:
+        raise gr.Error(f"{item['name']} has no ABC to freeze as the edit baseline")
+    try:
+        current = edit_flow.validate_edited_abc(abc_text)
+    except ValueError as exc:
+        raise gr.Error(f"Cannot send this score to 03 EDIT: {exc}") from exc
+    request = det.get("request") or {}
+    style_value = (style or "").strip() or request.get("style") or request.get("tags") or ""
+    lyrics_value = (lyrics or "").strip() or request.get("lyrics") or ""
+    return (gr.update(value=current),          # EDITED ABC (what you see in COVER)
+            source_abc,                        # baseline ABC for CHECK INVARIANTS
+            gr.update(value=style_value) if style_value else gr.update(),
+            gr.update(value=lyrics_value) if lyrics_value else gr.update(),
+            rel,                               # SOURCE WORK in 03 EDIT
+            {},                                # check state reset
+            None,                              # not frozen yet: FREEZE BASELINE is required
+            f"From 02 COVER: baseline = {rel}. Press FREEZE BASELINE, then CHECK INVARIANTS.",
+            "Loaded from 02 COVER — FREEZE BASELINE is required before CHECK / GENERATE EDITED.",
+            gr.update(selected="edit"))
+
+
+def cover_generate(style, lyrics, abc_text, task, seed, cfg_scale,
+                   abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
+                   sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max,
+                   device, dtype, backend, quantization, offload_ar, budget, ode_steps,
+                   vae_core_frames, model, vae_choice, vae_custom, revision, vae_revision, offline,
+                   progress=gr.Progress()):
+    """Generator: generate directly from the score on 02 COVER (no tab detour).
+
+    Uses the same ``cover.build_cover_request`` as SEND TO GENERATE (melody tasks get a
+    chord-free score, full tasks keep the harmony) and the shared generation core.
+    """
+    if not (abc_text or "").strip():
+        raise gr.Error("Transcribe (or paste) an ABC score first — GENERATE COVER is "
+                       "score-conditioned and never plans a fresh melody")
+    style, lyrics = _request_texts(style, lyrics)
+    try:
+        request = cover.build_cover_request(style, lyrics, abc_text, task=task, seed=int(seed),
+                                            cfg_scale=cfg_scale,
+                                            request_factory=adapter.song_request)
+    except (ValueError, TypeError) as exc:
+        raise gr.Error(f"Invalid cover request: {exc}") from exc
+    abc_sampling = _sampling(abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max, "ABC phase")
+    sem_sampling = _sampling(sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max,
+                             "semantic phase")
+
+    _CANCEL.clear()
+    if not _RUNNING.acquire(blocking=False):
+        yield ("Another job is already running — wait for it to finish",
+               gr.update(), gr.update(), gr.update(), *((gr.update(),) * 7))
+        return
+    controls = (gr.update(interactive=False),) * 7
+    idle = (gr.update(interactive=True),) * 7
+    try:
+        yield "Starting cover generation…", gr.update(), gr.update(), gr.update(), *controls
+        pipe, note = _get_pipe(device, dtype, backend, quantization, offload_ar, budget,
+                               ode_steps, vae_core_frames, model, vae_choice, vae_custom,
+                               revision, vae_revision, offline, progress)
+        outdir = RUNS / (f"{time.strftime('%Y%m%d-%H%M%S')}-cover-"
+                         f"{_slug(request.id if request.id != 'song' else style)}")
+        song, result, elapsed = _run_generation(
+            pipe, request, outdir, abc_sampling=abc_sampling, semantic_sampling=sem_sampling,
+            progress=progress, note=note)
+        yield (_generation_status(song, result, outdir, elapsed, request, note),
+               str(outdir / "audio.flac"), (song.abc or ""),
+               _artifact_files(outdir, bool(song.abc)), *idle)
+    except InterruptedError as exc:
+        yield f"Cancelled: {exc}", gr.update(), gr.update(), gr.update(), *idle
+    except Exception as exc:  # noqa: BLE001
+        yield (f"Generation failed: {type(exc).__name__}: {exc}",
+               gr.update(), gr.update(), gr.update(), *idle)
+    finally:
+        _RUNNING.release()
+
+
+def cover_strip(text, keep_voice):
+    try:
+        stripped = cover.prepare_cover_abc(text, keep_voice=keep_voice)
+    except ValueError as exc:
+        raise gr.Error(f"Chord strip failed: {exc}") from exc
+    return stripped, (f"Chords removed (kept: {keep_voice}). Melody, meter and tempo were "
+                      f"verified unchanged.")
+
+
+def cover_send_to_generate(text, task, style, lyrics):
+    """One click into 01 GENERATE: ABC, plan mode, and any target style/lyrics typed here."""
+    try:
+        cot = cover.cot_for_task(task)
+        if cot == "melody":
+            prepared = cover.prepare_cover_abc(text)
+        else:
+            cover.inspect_abc(text)              # validate before handing it over
+            prepared = cover.clean_abc(text)
+        if not prepared.strip():
+            raise ValueError("There is no ABC score to send")
+    except ValueError as exc:
+        raise gr.Error(f"Cannot send this score to GENERATE: {exc}") from exc
+    copied = []
+    style_update = gr.update()
+    lyrics_update = gr.update()
+    if (style or "").strip():
+        style_update = gr.update(value=style.strip())
+        copied.append("STYLE")
+    if (lyrics or "").strip():
+        lyrics_update = gr.update(value=lyrics.strip())
+        copied.append("LYRICS")
+    what = f" and the {', '.join(copied)} typed here" if copied else ""
+    status = (f"Sent to 01 GENERATE: PLAN MODE={cot.upper()}, the ABC score{what}. "
+              f"Add anything still missing there, then press GENERATE.")
+    return (gr.update(value=prepared), gr.update(value=cot), style_update, lyrics_update,
+            gr.update(selected="gen"), status)
+
+
+# ───────────────── edit tab (see edit_flow.py) ─────────────────
+
+def edit_choices():
+    _items, choices = _library_choices(_library_mode("time", "desc"))
+    return gr.update(choices=choices)
+
+
+def edit_load(rel):
+    """Load one saved work as the edit source; its ABC becomes the baseline."""
+    if not (rel or "").strip():
+        raise gr.Error("Pick a source work first")
+    item, det = library.load(RUNS, rel)
+    if item is None or det is None:
+        raise gr.Error("That work no longer exists — press REFRESH")
+    abc = (det.get("abc") or "").strip()
+    if not abc:
+        raise gr.Error(f"{item['name']} has no ABC score to edit")
+    request = det.get("request") or {}
+    style = request.get("style") or request.get("tags") or ""
+    info = (f"{item['name']} · {rel}\n"
+            "baseline not frozen yet — FREEZE BASELINE is required before CHECK INVARIANTS "
+            "and GENERATE EDITED (the original run directory is never modified).")
+    return (gr.update(value=style),
+            gr.update(value=request.get("lyrics", "") or ""),
+            gr.update(value=abc), abc, rel, {}, None, info,
+            f"Loaded {item['name']} as the edit source.")
+
+
+def edit_freeze(source_rel):
+    if not (source_rel or "").strip():
+        raise gr.Error("Load a source work first")
+    try:
+        record = edit_flow.freeze_baseline(RUNS, source_rel)
+    except (ValueError, OSError) as exc:
+        raise gr.Error(f"Freeze failed: {exc}") from exc
+    info = (f"{source_rel} → {record['baseline']['rel']}\n"
+            f"recorded {len(record['hashes'])} file hash(es) + copies of score.abc/request.json; "
+            "the original run directory is untouched.")
+    return record, info, f"Baseline frozen: {record['baseline']['rel']}"
+
+
+def edit_check(baseline_abc, abc_text, voices, allow_tempo, baseline_state):
+    if not (baseline_abc or "").strip():
+        raise gr.Error("Load a source work first — the check compares against its baseline ABC")
+    if not baseline_state:
+        raise gr.Error("Freeze the baseline first (FREEZE BASELINE) — the check is recorded "
+                       "against that frozen record")
+    try:
+        result = edit_flow.check_invariants(baseline_abc, abc_text, voices=voices,
+                                            allow_tempo_change=bool(allow_tempo))
+    except ValueError as exc:
+        raise gr.Error(f"Invariant check failed: {exc}") from exc
+    state = {"sha256": edit_flow.sha256_text(edit_flow.clean_abc(abc_text)),
+             "match": bool(result["match"]), "result": result,
+             "voices": voices, "allow_tempo_change": bool(allow_tempo)}
+    return json.dumps(result, ensure_ascii=False, indent=2), state
+
+
+def edit_generate(style, lyrics, cot, seed, cfg_scale, abc_text, baseline_abc, source_rel,
+                  check_state, allow_changes, baseline_state,
+                  abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
+                  sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max,
+                  device, dtype, backend, quantization, offload_ar, budget, ode_steps,
+                  vae_core_frames, model, vae_choice, vae_custom, revision, vae_revision, offline,
+                  progress=gr.Progress()):
+    """Generator: regenerate from the edited score; never silently drops the edit."""
+    try:
+        abc = edit_flow.validate_edited_abc(abc_text)
+    except ValueError as exc:
+        raise gr.Error(f"The edited ABC cannot be used: {exc}") from exc
+    if not (baseline_abc or "").strip():
+        raise gr.Error("Load a source work first — 03 EDIT regenerates a saved work from its "
+                       "edited score; use 01 GENERATE for a fresh song")
+    if not baseline_state:
+        raise gr.Error("Freeze the baseline first (FREEZE BASELINE) — the edit manifest must "
+                       "point at the frozen source")
+    if not check_state or check_state.get("sha256") != edit_flow.sha256_text(abc):
+        raise gr.Error("Run CHECK INVARIANTS on the current edited ABC before generating")
+    if not check_state.get("match") and not allow_changes:
+        differences = "; ".join((check_state.get("result") or {}).get("differences", [])[:3])
+        raise gr.Error("CHECK INVARIANTS did not pass: " + (differences or "scores differ") +
+                       " — enable ALLOW MELODY/RHYTHM CHANGES if the change is intentional")
+    style, lyrics = _request_texts(style, lyrics)
+    abc_sampling = _sampling(abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max, "ABC phase")
+    sem_sampling = _sampling(sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max,
+                             "semantic phase")
+    try:
+        request = edit_flow.build_edit_request(style, lyrics, abc, cot=cot, seed=int(seed),
+                                               cfg_scale=cfg_scale,
+                                               request_factory=adapter.song_request)
+    except (ValueError, TypeError) as exc:
+        raise gr.Error(f"Invalid request: {exc}") from exc
+
+    _CANCEL.clear()
+    if not _RUNNING.acquire(blocking=False):
+        yield (gr.update(), gr.update(), gr.update(),
+               "Another job is already running — wait for it to finish",
+               *((gr.update(),) * 6), gr.update())
+        return
+    busy = (gr.update(interactive=False),) * 6
+    idle = (gr.update(interactive=True),) * 6
+    try:
+        yield gr.update(), gr.update(), gr.update(), "Starting edit generation…", *busy, \
+            gr.update()
+        pipe, note = _get_pipe(device, dtype, backend, quantization, offload_ar, budget,
+                               ode_steps, vae_core_frames, model, vae_choice, vae_custom,
+                               revision, vae_revision, offline, progress)
+        outdir = RUNS / (f"{time.strftime('%Y%m%d-%H%M%S')}-edit-"
+                         f"{_slug(request.id if request.id != 'song' else style)}")
+        manifest = edit_flow.build_edit_manifest(
+            source_rel=source_rel or "", before_abc=baseline_abc or "", after_abc=abc,
+            cot=cot, seed=int(seed), cfg_scale=float(cfg_scale) if cfg_scale else None,
+            invariants=(check_state or {}).get("result"),
+            voices=(check_state or {}).get("voices", "both"),
+            allow_tempo_change=bool((check_state or {}).get("allow_tempo_change")),
+            allow_changes=bool(allow_changes), baseline=baseline_state)
+        song, result, elapsed = _run_generation(
+            pipe, request, outdir, abc_sampling=abc_sampling, semantic_sampling=sem_sampling,
+            progress=progress, note=note, extra_manifest=manifest)
+        status = _generation_status(song, result, outdir, elapsed, request, note) + \
+            "\nedit_manifest.json records the source/edit hashes and the invariant result."
+        yield str(outdir / "audio.flac"), (song.abc or ""), \
+            _artifact_files(outdir, bool(song.abc)), status, *idle, str(outdir)
+    except InterruptedError as exc:
+        yield gr.update(), gr.update(), gr.update(), f"Cancelled: {exc}", *idle, gr.update()
+    except Exception as exc:  # noqa: BLE001
+        yield gr.update(), gr.update(), gr.update(), \
+            f"Generation failed: {type(exc).__name__}: {exc}", *idle, gr.update()
+    finally:
+        _RUNNING.release()
+
+
+def edit_compare(source_rel, last_run):
+    if not (source_rel or "").strip():
+        raise gr.Error("Load a source work first")
+    if not (last_run or "").strip():
+        raise gr.Error("Generate an edited version first")
+    _item, det = library.load(RUNS, source_rel)
+    if det is None:
+        raise gr.Error("The source work no longer exists")
+    return make_comparison(f"{det['path']}\n{last_run}")
 
 
 # ───────────────── library tab (see library.py) ─────────
@@ -1080,15 +1653,15 @@ table { border-color: var(--bb-line) !important; }
   font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase;
   color: var(--bb-ink3); margin: 2px 0 6px;
 }
-#bb-score-view {
+.bb-score-panel {
   display: block !important;
   margin-top: 2px; border: 1px solid var(--bb-line); border-radius: 8px;
   background: var(--bb-panel); padding: 14px 10px; min-height: 96px;
   max-height: 460px !important; overflow: auto !important;
 }
-#bb-score-inner { display: block; }
-#bb-score-inner svg { max-width: 100%; }
-#bb-score-view svg { max-width: 100%; height: auto; }
+.bb-score-inner { display: block; }
+.bb-score-inner svg { max-width: 100%; }
+.bb-score-panel svg { max-width: 100%; height: auto; }
 .bb-score-empty, .bb-score-error {
   color: var(--bb-ink3); font-size: 11px; letter-spacing: .1em;
   text-transform: uppercase; padding: 8px 4px;
@@ -1134,7 +1707,8 @@ table { border-color: var(--bb-line) !important; }
 #bb-env-status textarea { font-size: 11.5px !important; line-height: 1.55 !important;
   letter-spacing: .04em; color: var(--bb-ink3) !important; }
 /* listening comparison link */
-#bb-compare-link a {
+#bb-compare-link a,
+#bb-allmodes-link a {
   display: inline-block; margin-top: 4px; color: var(--bb-ink) !important;
   font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
   text-decoration: underline; text-underline-offset: 3px;
@@ -1177,8 +1751,8 @@ button:disabled, button[disabled] { opacity: .4 !important; cursor: not-allowed 
 /* ── phones ──────────────────────────────────────────────────────────────
    Gradio 6 hides overflowing tabs behind a tiny ⋯ menu and the theme button
    is absolutely positioned over the title. Below 700px: tighter frame, theme
-   button parked in the header corner with reserved room, and the four tabs
-   wrap 2×2 (the overflow containers become display:contents so every tab is
+   button parked in the header corner with reserved room, and the tabs
+   wrap (the overflow containers become display:contents so every tab is
    always visible instead of hidden in the dropdown). */
 @media (max-width: 700px) {
   .gradio-container { padding: 14px 10px 6px !important; }
@@ -1201,9 +1775,30 @@ button:disabled, button[disabled] { opacity: .4 !important; cursor: not-allowed 
     flex: 1 1 44% !important; min-height: 40px; padding: 10px 6px !important;
     font-size: 10.5px !important; letter-spacing: .08em !important;
   }
-  #bb-score-view { max-height: 60vh !important; }
+  .bb-score-panel { max-height: 60vh !important; }
 }
 @media (max-width: 360px) { #bb-header h1 { font-size: 16px; } }
+
+/* ── tablets / narrow laptops ────────────────────────────────────────────
+   Below ~1024px the two-column workspace would squeeze the main column; the
+   settings rail wraps underneath instead, and the tabs wrap four-up so Gradio's
+   overflow menu does not hide them behind a ⋯ button. */
+@media (max-width: 1024px) {
+  .bb-workspace { flex-wrap: wrap !important; }
+  .bb-workspace #bb-rail { flex-basis: 100% !important; min-width: 0 !important; }
+}
+@media (min-width: 701px) and (max-width: 1024px) {
+  .tabs .tab-wrapper { display: flex !important; flex-wrap: wrap !important; height: auto !important; }
+  .tabs .tab-container[role="tablist"],
+  .tabs .overflow-menu,
+  .tabs .overflow-dropdown { display: contents !important; }
+  .tabs .overflow-menu > button { display: none !important; }
+  .tabs .tab-container[role="tablist"] > button,
+  .tabs .overflow-dropdown > button {
+    flex: 1 1 22% !important; min-height: 38px; padding: 9px 6px !important;
+    font-size: 10.5px !important; letter-spacing: .08em !important;
+  }
+}
 
 /* ── touch devices ────────────────────────────────────────────────────────
    16px inputs stop iOS Safari from zooming the page on focus; the ⓘ and the
@@ -1279,7 +1874,7 @@ TIPS = {
     "JSONL REQUESTS": "One JSON request per line: id, style/tags, lyrics, cot, seed, cfg_scale, abc or abc_path, optional abc_sampling / semantic_sampling overrides.",
     "OUTPUT NAME": "Folder name for this batch.",
     "KEEP VOICES": "Which voices survive the chord strip.",
-    "EDITED ABC": "The edited score; compared against the original above.",
+    "AFTER // EDITED ABC": "The edited score; compared against the original above (05 TOOLS copy of the invariant check).",
     "COMPARE VOICES": "Which voices the invariant check compares.",
     "ALLOW TEMPO CHANGE": "Allow the quarter-note tempo to change without reporting it as a violation.",
     "RUN DIRECTORIES": "One saved run directory per line; each must contain result.json.",
@@ -1303,6 +1898,21 @@ TIPS = {
     "ORDER": "Sort order: DESC = newest / Z→A first, ASC = oldest / A→Z first.",
     "RENAME TO": "New name for the work being viewed; the timestamp prefix is kept.",
     "LIBRARY STATUS": "Result of the last library action.",
+    "SOURCE AUDIO": "Reference recording for the cover (wav/mp3/flac). SheetSage2 decodes it to mono 24 kHz; the melody becomes the symbolic condition.",
+    "TRANSCRIPTION TASK": "MELODY // VOCAL keeps only the sung line; MELODY // VOCAL+INST keeps vocal and instrumental melodies (chord-free, best for covers); FULL SCORE adds chords for cot=full regeneration.",
+    "MAX SECONDS (0 = WHOLE FILE)": "Deliberately crop the transcript to the first N seconds; 0 processes the whole file. Long files take longer and use more GPU memory.",
+    "SHEETSAGE2 MODEL / DIR": "Hugging Face id (m-a-p/SheetSage2) or the path of a downloaded snapshot. MERT-v2-FullSong loads automatically as its parent encoder.",
+    "BASE MODEL / MERT SNAPSHOT": "Optional local path of the MERT-v2-FullSong snapshot; passed as base_model_path so a fully offline adapter load does not need the Hub cache.",
+    "KEEP SHEETSAGE2 WARM": "Keep one SheetSage2 process resident and reuse its loaded model between transcriptions (faster repeats) until UNLOAD SHEETSAGE2 or the idle timeout. Off: every transcription starts a fresh process and frees all memory on exit. Locked while a transcription runs; changes apply from the next request.",
+    "COVER ABC": "The transcription, editable. Fix wrong notes/meter before covering; STRIP CHORDS removes harmony for cot=melody, SEND TO GENERATE fills 01 GENERATE and sets the plan mode.",
+    "SOURCE WORK": "A saved work with a score.abc (generated plan or an earlier edit); its ABC becomes the frozen baseline.",
+    "BASELINE": "Record of the frozen source: hashes plus copies of score.abc/request.json. The original run directory is never modified.",
+    "EDITED ABC": "Your edit of the baseline score. It is validated and submitted explicitly — generation never falls back to a fresh plan.",
+    "RESULT ABC": "The score actually submitted for the last generation (chord-stripped when the plan mode requires it). The editor above stays untouched.",
+    "SAMPLING // FROM 01 GENERATE": "Read-only mirror of 01 GENERATE → ADVANCED // SAMPLING. Both flows share those sliders; change them there.",
+    "ALLOW MELODY/RHYTHM CHANGES": "Permit generating even when CHECK INVARIANTS reports differences (intentional adaptations). It does not skip FREEZE BASELINE or the check itself.",
+    "CHECK RESULT": "Exact sounding-note / meter comparison of baseline vs edit. Chord-only edits pass; pitch or rhythm changes are reported by voice.",
+    "COMPARISON": "Baseline vs edited render: a local listening page built from both run directories.",
 }
 
 TIP_JS = """(function () {
@@ -1424,22 +2034,34 @@ HEAD_HTML += ("<script>window.__BB_TIPS__ = " + json.dumps(TIPS, ensure_ascii=Fa
 
 # ── abcjs score rendering (bundled under yue2_groove/static, served via allowed_paths) ──
 ABCJS_FILE = config.STATIC_DIR / "abcjs-basic-min.js"
+# ── abcjs score rendering (bundled under yue2_groove/static, served via allowed_paths) ──
+# Every score panel declares data-bb-abc="<label prefix of its ABC textbox>"; the
+# script finds the matching textarea and renders into the panel's .bb-score-inner.
+ABCJS_FILE = config.STATIC_DIR / "abcjs-basic-min.js"
 SCORE_JS = """(function () {
-  function scoreArea() {
-    var labels = document.querySelectorAll('span[data-testid=\"block-info\"]');
-    for (var i = 0; i < labels.length; i++) {
-      if ((labels[i].textContent || '').trim().indexOf('ABC SCORE') === 0) {
+  // Look for the textarea whose block label starts with `prefix`, preferring the
+  // panel's own tab (so identical labels in different tabs cannot cross-render).
+  function findArea(prefix, panel) {
+    var root = (panel && panel.closest && panel.closest('.tabitem')) || document;
+    var areas = [];
+    function scan(scope) {
+      var labels = scope.querySelectorAll('span[data-testid="block-info"]');
+      for (var i = 0; i < labels.length; i++) {
+        var label = (labels[i].textContent || '').trim();
+        if (label.indexOf(prefix) !== 0) continue;
         var block = labels[i].closest('.block') || labels[i].parentElement;
         var ta = block && block.querySelector('textarea');
-        if (ta) return ta;
+        if (ta) areas.push(ta);
       }
     }
-    return null;
+    scan(root);
+    if (!areas.length && root !== document) scan(document);
+    return areas.length ? areas[0] : null;
   }
-  function render() {
-    var box = document.getElementById('bb-score-inner');
+  function renderPanel(panel) {
+    var box = panel.querySelector('.bb-score-inner');
     if (!box) return;
-    var ta = scoreArea();
+    var ta = findArea(panel.getAttribute('data-bb-abc') || 'ABC SCORE', panel);
     var abc = ta ? (ta.value || '') : '';
     var ink = getComputedStyle(document.documentElement).getPropertyValue('--bb-ink').trim() || '#F1ECE2';
     var key = ink + '|' + abc;
@@ -1450,7 +2072,8 @@ SCORE_JS = """(function () {
     if (box.getAttribute('data-bb-key') === key && (hasSvg || !abc.trim())) return;
     box.setAttribute('data-bb-key', key);
     if (!abc.trim()) {
-      box.innerHTML = '<div class=\"bb-score-empty\">No score yet — generate with PLAN MODE = FULL / MELODY, or run PLAN ONLY.</div>';
+      var empty = panel.getAttribute('data-bb-empty') || 'No score yet.';
+      box.innerHTML = '<div class=\"bb-score-empty\">' + empty + '</div>';
       return;
     }
     box.innerHTML = '';
@@ -1472,13 +2095,17 @@ SCORE_JS = """(function () {
         + String(e && e.message ? e.message : e).slice(0, 180) + '</div>';
     }
   }
+  function render() {
+    var panels = document.querySelectorAll('[data-bb-abc]');
+    for (var i = 0; i < panels.length; i++) renderPanel(panels[i]);
+  }
   // re-render on rotation/resize so the staff width follows the new panel width
   var bbResizeTimer = null;
   function bbRelayout() {
     if (bbResizeTimer) clearTimeout(bbResizeTimer);
     bbResizeTimer = setTimeout(function () {
-      var box = document.getElementById('bb-score-inner');
-      if (box) box.removeAttribute('data-bb-key');
+      var boxes = document.querySelectorAll('.bb-score-inner');
+      for (var i = 0; i < boxes.length; i++) boxes[i].removeAttribute('data-bb-key');
     }, 250);
   }
   window.addEventListener('resize', bbRelayout);
@@ -1711,10 +2338,11 @@ def build_ui(defaults):
         with gr.Row(elem_id="bb-topbtns"):
             rail_btn = gr.Button("", size="sm", elem_id="bb-rail-btn")
             theme_btn = gr.Button("THEME // DARK", size="sm", elem_id="bb-theme-btn")
-        with gr.Row(equal_height=False):
+        with gr.Row(equal_height=False, elem_classes=["bb-workspace"]):
             # ═══════════ main work area ═══════════
-            with gr.Column(scale=5, min_width=640):
-                with gr.Tabs(selected=("gen", "decode", "batch", "tools", "library")[int(defaults.get("tab", 0)) % 5]):
+            with gr.Column(scale=5, min_width=520):
+                with gr.Tabs(selected=("gen", "cover", "edit", "library", "tools", "decode", "batch")
+                               [int(defaults.get("tab", 0)) % 7]) as tabs:
                     # ───── 01 GENERATE ─────
                     with gr.Tab("01 // GENERATE", id="gen"):
                         style = gr.Textbox(label="STYLE", lines=3, placeholder=EXAMPLE_STYLE)
@@ -1740,8 +2368,11 @@ def build_ui(defaults):
                             run_btn = gr.Button("GENERATE", variant="primary", size="lg", scale=3,
                                                 elem_id="bb-run")
                             plan_btn = gr.Button("PLAN ONLY", size="lg", scale=2, elem_id="bb-plan")
+                            allmodes_btn = gr.Button("ALL MODES", size="lg", scale=2,
+                                                     elem_id="bb-allmodes")
                             cancel_btn = gr.Button("CANCEL", variant="stop", size="lg", scale=1,
                                                    elem_id="bb-cancel")
+                        allmodes_link = gr.HTML(elem_id="bb-allmodes-link")
                         with gr.Accordion("SCORE INPUT (optional)", open=False):
                             abc = gr.Textbox(label="ABC SCORE", lines=8,
                                              placeholder="Leave empty to let the model plan")
@@ -1781,121 +2412,207 @@ def build_ui(defaults):
                         score_out = gr.Textbox(label="ABC SCORE", lines=8, max_lines=24,
                                                elem_id="bb-abc-source", elem_classes=["bb-output"])
                         gr.HTML('<div class="bb-score-title">SCORE VIEW</div>'
-                                '<div id="bb-score-view"><div id="bb-score-inner">'
-                                '<div class="bb-score-empty">'
-                                'No score yet — generate with PLAN MODE = FULL / MELODY, '
-                                'or run PLAN ONLY.</div></div></div>',
+                                + _score_panel("ABC SCORE",
+                                               "No score yet — generate with PLAN MODE = FULL / "
+                                               "MELODY, or run PLAN ONLY."),
                                 elem_id="bb-score-panel")
                         with gr.Accordion("ARTIFACTS", open=False):
                             files_out = gr.File(label="FILES", file_count="multiple", height=120,
                                                 elem_id="bb-files")
                         gen_status = gr.Textbox(label="STATUS", lines=6, interactive=False)
 
-                    # ───── 02 DECODE ─────
-                    with gr.Tab("02 // DECODE", id="decode"):
+                    # ───── 02 COVER ─────
+                    with gr.Tab("02 // COVER", id="cover") as cover_tab:
                         gr.Markdown(
-                            "Re-decode a saved **latent.npy** without generating again "
-                            "(same as the upstream skill script `run_yue2.py decode`). "
-                            "Typical use: compare `standard` and `legacy` decoders on the same song.",
-                            elem_classes=["bb-note"],
-                        )
+                            "**Audio → ABC → cover.** Transcribe a recording with SheetSage2, "
+                            "polish the score, then generate it in a new style — right here or in "
+                            "**01 GENERATE**. SheetSage2 runs in its own environment (README, "
+                            "⌜Cover from audio⌝); CHECK ENVIRONMENT says whether it is ready.",
+                            elem_classes=["bb-note"])
+                        cover_audio = gr.Audio(label="SOURCE AUDIO", sources=["upload"],
+                                               type="filepath", elem_id="bb-cover-audio")
                         with gr.Row():
-                            source_dir = gr.Dropdown(label="RUN DIRECTORY", choices=_scan_runs(),
-                                                     interactive=True, scale=4)
-                            refresh_btn = gr.Button("RELOAD", size="sm", scale=1)
+                            cover_task = gr.Radio(
+                                choices=[("MELODY // VOCAL", "melody-vocal"),
+                                         ("MELODY // VOCAL+INST", "melody-full"),
+                                         ("FULL SCORE // + CHORDS", "full")],
+                                value="melody-full", label="TRANSCRIPTION TASK", scale=3)
+                            cover_max_seconds = gr.Number(value=0,
+                                                          label="MAX SECONDS (0 = WHOLE FILE)",
+                                                          precision=0, scale=1)
+                        with gr.Accordion("SHEETSAGE2 OPTIONS", open=False):
+                            cover_model = gr.Textbox(value=config.default_sheetsage_model(),
+                                                     label="SHEETSAGE2 MODEL / DIR")
+                            cover_base_model = gr.Textbox(
+                                value=config.default_sheetsage_base_model(),
+                                label="BASE MODEL / MERT SNAPSHOT",
+                                placeholder="Optional local MERT-v2-FullSong path for offline loads")
+                            with gr.Row():
+                                cover_device = gr.Dropdown(choices=["auto", "cuda", "mps", "cpu"],
+                                                           value=config.default_sheetsage_device(),
+                                                           label="DEVICE", scale=1)
+                                cover_dtype = gr.Dropdown(
+                                    choices=[("auto", "auto"), ("bf16", "bf16"),
+                                             ("fp32", "fp32")],
+                                    value="auto", label="DTYPE", scale=1)
+                                cover_revision = gr.Textbox(label="MODEL REVISION", max_lines=1,
+                                                            scale=1)
+                                cover_offline = gr.Checkbox(value=False, label="OFFLINE", scale=1)
                         with gr.Row():
-                            latent_upload = gr.UploadButton("UPLOAD LATENT .NPY", size="sm",
-                                                            file_count="single", type="filepath",
-                                                            file_types=[".npy"], scale=0)
-                            dec_vae_choice = gr.Radio(choices=[("SOURCE", "keep"),
-                                                               ("STANDARD", "standard"),
-                                                               ("LEGACY", "legacy"),
-                                                               ("CUSTOM", "custom")],
-                                                      value="standard", label="DECODER VAE", scale=3)
-                        with gr.Accordion("ADVANCED // DECODE OPTIONS", open=False):
-                            with gr.Row():
-                                dec_vae_custom = gr.Textbox(label="CUSTOM VAE PATH / HF ID", max_lines=1)
-                                dec_vae_revision = gr.Textbox(label="VAE REVISION", max_lines=1)
-                            with gr.Row():
-                                full_decode = gr.Checkbox(value=False, label="FULL DECODE")
-                                decode_reset_btn = gr.Button("RESET", size="sm", scale=0,
-                                                             elem_id="bb-reset-decode")
-                        decode_btn = gr.Button("RE-DECODE", variant="primary", size="lg",
-                                               elem_id="bb-decode")
-                        decode_audio = gr.Audio(label="RESULT", type="filepath")
-                        decode_status = gr.Textbox(label="STATUS", lines=6, interactive=False)
-
-                    # ───── 03 BATCH ─────
-                    with gr.Tab("03 // BATCH", id="batch"):
-                        gr.Markdown(
-                            "One JSON request per line (same as `yue2 batch`): "
-                            "`id` (required, unique), `style`/`tags`, `lyrics`, `cot`, `seed`, "
-                            "`cfg_scale`, `abc`, `abc_path` (relative to the uploaded file), optional "
-                            "`abc_sampling` / `semantic_sampling` overrides. Fields you omit use the "
-                            "sampling settings above. One request runs at a time.",
-                            elem_classes=["bb-note"],
-                        )
-                        batch_file = gr.UploadButton("UPLOAD .JSONL", size="sm", file_count="single",
-                                                     type="filepath", file_types=[".jsonl", ".txt"])
-                        batch_text = gr.Textbox(label="JSONL REQUESTS", lines=8,
-                                                placeholder='{"id":"pop1","style":"English piano pop","lyrics":"...","cot":"full"}\n'
-                                                            '{"id":"jazz1","style":"English jazz","lyrics":"...","cot":"melody","seed":7}')
+                            cover_btn = gr.Button("TRANSCRIBE", variant="primary", size="lg",
+                                                  scale=3, elem_id="bb-cover-run")
+                            cover_cancel_btn = gr.Button("CANCEL", variant="stop", size="lg", scale=1)
                         with gr.Row():
-                            batch_id = gr.Textbox(label="OUTPUT NAME", value="batch", max_lines=1, scale=2)
-                            batch_btn = gr.Button("RUN BATCH", variant="primary", size="lg", scale=1,
-                                                  elem_id="bb-batch")
-                        batch_table = gr.Dataframe(headers=["id", "status", "audio", "seconds", "artifacts"],
-                                                   label="RESULTS", wrap=True)
-                        batch_status = gr.Textbox(label="STATUS", lines=4, interactive=False)
-
-                    # ───── 04 TOOLS ─────
-                    with gr.Tab("04 // TOOLS", id="tools"):
-                        with gr.Accordion("ABC TOOLS", open=True):
-                            abc_tool_text = gr.Textbox(label="ABC", lines=6,
-                                                       value=(config.EXAMPLES_DIR / "melody.abc").read_text(encoding="utf-8")
-                                                       if (config.EXAMPLES_DIR / "melody.abc").exists() else "")
+                            cover_keep_warm = gr.Checkbox(
+                                value=config.sheetsage_keep_warm(), label="KEEP SHEETSAGE2 WARM",
+                                info="Reuse one resident model process between transcriptions until "
+                                     "UNLOAD or the idle timeout", scale=3)
+                            cover_env_btn = gr.Button("CHECK ENVIRONMENT", size="sm", scale=1)
+                            cover_unload_btn = gr.Button("UNLOAD SHEETSAGE2", size="sm", scale=1)
+                        with gr.Row():
+                            cover_source = gr.Dropdown(
+                                label="SOURCE WORK", scale=4,
+                                choices=[rel for _label, rel in _library_choices(
+                                    _library_mode("time", "desc"))[1]],
+                                info="A saved work or transcription with a score.abc",
+                                interactive=True)
+                            cover_source_refresh = gr.Button("REFRESH", size="sm", scale=1)
+                            cover_load_btn = gr.Button("LOAD ABC", size="sm", scale=1)
+                            cover_send_edit_btn = gr.Button("SEND TO EDIT", size="sm", scale=1)
+                        cover_abc = gr.Textbox(label="COVER ABC", lines=10, max_lines=24,
+                                               elem_id="bb-cover-abc")
+                        gr.HTML('<div class="bb-score-title">SCORE VIEW</div>'
+                                + _score_panel("COVER ABC",
+                                               "No transcription yet — upload audio and "
+                                               "press TRANSCRIBE."),
+                                elem_id="bb-cover-score-panel")
+                        with gr.Row():
+                            cover_keep = gr.Dropdown(choices=["both", "Vocal", "Ins"], value="both",
+                                                     label="KEEP VOICES", scale=1)
+                            cover_strip_btn = gr.Button("STRIP CHORDS", size="sm", scale=1)
+                            cover_send_btn = gr.Button("SEND TO GENERATE", variant="primary",
+                                                       size="sm", scale=2)
+                        with gr.Accordion("GENERATE COVER // direct from this score",
+                                          open=False) as cover_generate_accordion:
+                            gr.Markdown(
+                                "Score-conditioned generation with the target style and lyrics; "
+                                "the submitted score appears as RESULT ABC below.",
+                                elem_classes=["bb-note"])
+                            cover_style = gr.Textbox(label="STYLE", lines=2,
+                                                     placeholder=EXAMPLE_STYLE)
+                            cover_lyrics = gr.Textbox(label="LYRICS", lines=5,
+                                                      placeholder=EXAMPLE_LYRICS)
                             with gr.Row():
-                                inspect_btn = gr.Button("VALIDATE / EXPORT EVENTS", size="sm")
-                                strip_btn = gr.Button("STRIP CHORDS (cover melody)", size="sm")
-                                strip_voice = gr.Dropdown(choices=["both", "Vocal", "Ins"], value="both",
-                                                          label="KEEP VOICES", scale=0)
-                            abc_result = gr.Textbox(label="RESULT", lines=10)
-                            gr.Markdown("**Edit invariant check** — confirm the sounding notes and "
-                                        "meter are unchanged after editing.",
+                                cover_seed = gr.Number(value=831001, label="SEED", precision=0,
+                                                       scale=1)
+                                cover_cfg = gr.Number(value=0, label="CFG SCALE", scale=1)
+                                cover_generate_btn = gr.Button("GENERATE COVER", variant="primary",
+                                                               size="lg", scale=2,
+                                                               elem_id="bb-cover-generate")
+                            cover_sampling_note = gr.Textbox(
+                                label="SAMPLING // FROM 01 GENERATE", lines=2,
+                                interactive=False, elem_id="bb-cover-sampling")
+                            gr.Markdown("Sampling parameters are shared with **01 GENERATE → "
+                                        "ADVANCED // SAMPLING**; change them there.",
                                         elem_classes=["bb-note"])
-                            abc_after = gr.Textbox(label="EDITED ABC", lines=6)
-                            with gr.Row():
-                                compare_voice = gr.Dropdown(choices=["both", "Vocal", "Ins"], value="both",
-                                                            label="COMPARE VOICES", scale=1)
-                                allow_tempo = gr.Checkbox(value=False, label="ALLOW TEMPO CHANGE", scale=1)
-                                compare_abc_btn = gr.Button("COMPARE BEFORE/AFTER", size="sm", scale=1)
-                            abc_compare_out = gr.Textbox(label="COMPARE RESULT", lines=6)
-                        with gr.Accordion("LISTENING COMPARISON (static HTML)", open=False):
-                            with gr.Row():
-                                batch_pick = gr.Dropdown(label="FILL FROM BATCH RUN",
-                                                         choices=[c for c, _ in _scan_batches()],
-                                                         interactive=True, scale=4,
-                                                         elem_id="bb-batch-pick")
-                                batch_refresh = gr.Button("REFRESH LIST", size="sm", scale=1,
-                                                          elem_id="bb-refresh-batches")
-                            fill_btn = gr.Button("▾ FILL RUN DIRECTORIES FROM BATCH", size="sm",
-                                                 elem_id="bb-fill-batch")
-                            compare_paths = gr.Textbox(label="RUN DIRECTORIES", lines=3,
-                                                       elem_id="bb-compare-paths")
-                            compare_btn = gr.Button("BUILD COMPARISON", size="sm",
-                                                    elem_id="bb-build-compare")
-                            compare_file = gr.File(label="COMPARISON HTML", file_types=[".html"],
-                                                   type="filepath")
-                            compare_link = gr.HTML(elem_id="bb-compare-link")
-                            compare_status = gr.Textbox(label="STATUS", lines=4, interactive=False,
-                                                        elem_id="bb-compare-status")
-                        with gr.Accordion("DOCTOR // ENVIRONMENT", open=False):
-                            verify_hashes = gr.Checkbox(value=False, label="VERIFY WEIGHT HASHES")
-                            doctor_btn = gr.Button("RUN DOCTOR", size="sm")
-                            doctor_out = gr.Textbox(label="REPORT", lines=14)
+                            cover_result_audio = gr.Audio(label="RESULT", type="filepath")
+                            cover_result_abc = gr.Textbox(label="RESULT ABC", lines=6, max_lines=18,
+                                                          interactive=False,
+                                                          elem_classes=["bb-output"])
+                            gr.HTML('<div class="bb-score-title">SCORE VIEW // RESULT</div>'
+                                    + _score_panel("RESULT ABC", "No cover generated yet."),
+                                    elem_id="bb-cover-result-score-panel")
+                            with gr.Accordion("GENERATED FILES", open=False):
+                                cover_gen_files = gr.File(label="FILES", file_count="multiple",
+                                                          height=120)
+                        with gr.Accordion("TRANSCRIPTION ARTIFACTS", open=False):
+                            cover_files = gr.File(label="FILES", file_count="multiple", height=120,
+                                                  elem_id="bb-cover-files")
+                        cover_status = gr.Textbox(label="STATUS", lines=5, interactive=False)
 
-                    # ───── 05 LIBRARY ─────
-                    with gr.Tab("05 // LIBRARY", id="library") as library_tab:
+                    # ───── 03 EDIT ─────
+                    with gr.Tab("03 // EDIT", id="edit") as edit_tab:
+                        gr.Markdown(
+                            "**Load → FREEZE BASELINE → edit → CHECK INVARIANTS → GENERATE EDITED "
+                            "→ compare.** The edited ABC is always submitted explicitly, so an edit "
+                            "can never silently degrade into a fresh plan; chord-only edits pass the "
+                            "exact note/meter check. FREEZE and CHECK are always required — "
+                            "ALLOW MELODY/RHYTHM CHANGES only lets a *failing* check through for "
+                            "intentional adaptations.",
+                            elem_classes=["bb-note"])
+                        with gr.Row():
+                            edit_source = gr.Dropdown(
+                                label="SOURCE WORK",
+                                choices=[rel for _label, rel in _library_choices(
+                                    _library_mode("time", "desc"))[1]],
+                                interactive=True, scale=4)
+                            edit_refresh_btn = gr.Button("REFRESH", size="sm", scale=1)
+                            edit_load_btn = gr.Button("LOAD", size="sm", scale=1)
+                        with gr.Row():
+                            edit_freeze_btn = gr.Button("FREEZE BASELINE", size="sm", scale=1)
+                            edit_baseline_info = gr.Textbox(label="BASELINE", lines=3,
+                                                            interactive=False, scale=3)
+                        edit_style = gr.Textbox(label="STYLE", lines=2)
+                        edit_lyrics = gr.Textbox(label="LYRICS", lines=5)
+                        edit_abc = gr.Textbox(label="EDITED ABC", lines=10, max_lines=24,
+                                              elem_id="bb-edit-abc")
+                        gr.HTML('<div class="bb-score-title">SCORE VIEW</div>'
+                                + _score_panel("EDITED ABC",
+                                               "Load a source work to start editing."),
+                                elem_id="bb-edit-score-panel")
+                        with gr.Row():
+                            edit_cot = gr.Radio(choices=[("FULL // melody+chords", "full"),
+                                                         ("MELODY // chord-free", "melody")],
+                                                value="full", label="PLAN MODE", scale=2)
+                            edit_seed = gr.Number(value=831001, label="SEED", precision=0, scale=1)
+                            edit_cfg = gr.Number(value=0, label="CFG SCALE", scale=1)
+                        with gr.Accordion("INVARIANT CHECK", open=True):
+                            with gr.Row():
+                                edit_voice = gr.Dropdown(choices=["both", "Vocal", "Ins"],
+                                                         value="both", label="COMPARE VOICES",
+                                                         scale=1)
+                                edit_allow_tempo = gr.Checkbox(value=False,
+                                                               label="ALLOW TEMPO CHANGE", scale=1)
+                                edit_allow_changes = gr.Checkbox(
+                                    value=False, label="ALLOW MELODY/RHYTHM CHANGES", scale=1)
+                                edit_check_btn = gr.Button("CHECK INVARIANTS", size="sm", scale=1)
+                            edit_check_out = gr.Textbox(label="CHECK RESULT", lines=7,
+                                                        interactive=False)
+                        with gr.Row():
+                            edit_run_btn = gr.Button("GENERATE EDITED", variant="primary",
+                                                     size="lg", scale=3, elem_id="bb-edit-run")
+                            edit_cancel_btn = gr.Button("CANCEL", variant="stop", size="lg", scale=1)
+                        edit_sampling_note = gr.Textbox(label="SAMPLING // FROM 01 GENERATE",
+                                                        lines=2, interactive=False,
+                                                        elem_id="bb-edit-sampling")
+                        gr.Markdown("Sampling parameters are shared with **01 GENERATE → ADVANCED "
+                                    "// SAMPLING**; change them there.", elem_classes=["bb-note"])
+                        edit_audio = gr.Audio(label="RESULT", type="filepath")
+                        edit_result_abc = gr.Textbox(label="RESULT ABC", lines=8, max_lines=24,
+                                                     interactive=False, elem_classes=["bb-output"],
+                                                     elem_id="bb-edit-result-abc")
+                        gr.HTML('<div class="bb-score-title">SCORE VIEW // RESULT</div>'
+                                + _score_panel("RESULT ABC", "No edit generated yet."),
+                                elem_id="bb-edit-result-score-panel")
+                        with gr.Accordion("ARTIFACTS", open=False):
+                            edit_files = gr.File(label="FILES", file_count="multiple", height=120)
+                        with gr.Row():
+                            edit_compare_btn = gr.Button("BUILD COMPARISON // baseline vs edit",
+                                                         size="sm", scale=2)
+                            edit_compare_file = gr.File(label="COMPARISON HTML",
+                                                        file_types=[".html"], type="filepath",
+                                                        scale=2)
+                        edit_compare_link = gr.HTML(elem_id="bb-edit-compare-link")
+                        edit_compare_status = gr.Textbox(label="COMPARISON", lines=3,
+                                                         interactive=False)
+                        edit_status = gr.Textbox(label="STATUS", lines=6, interactive=False)
+                        edit_baseline_abc = gr.State("")
+                        edit_source_rel = gr.State("")
+                        edit_check_state = gr.State({})
+                        edit_baseline_state = gr.State(None)
+                        edit_last_run = gr.State("")
+                    # ───── 04 LIBRARY ─────
+                    with gr.Tab("04 // LIBRARY", id="library") as library_tab:
                         with gr.Row():
                             with gr.Column(scale=2, min_width=260):
                                 lib_sort_key = gr.Radio(
@@ -1943,6 +2660,110 @@ def build_ui(defaults):
                                         '<div id="bb-lib-score"><div id="bb-lib-score-inner">'
                                         '<div class="bb-score-empty">Select a work to view its score.</div>'
                                         '</div></div>', elem_id="bb-lib-score-panel")
+
+                    # ───── 05 TOOLS ─────
+                    with gr.Tab("05 // TOOLS", id="tools"):
+                        with gr.Accordion("ABC TOOLS", open=True):
+                            abc_tool_text = gr.Textbox(label="ABC", lines=6,
+                                                       value=(config.EXAMPLES_DIR / "melody.abc").read_text(encoding="utf-8")
+                                                       if (config.EXAMPLES_DIR / "melody.abc").exists() else "")
+                            with gr.Row():
+                                inspect_btn = gr.Button("VALIDATE / EXPORT EVENTS", size="sm")
+                                strip_btn = gr.Button("STRIP CHORDS (cover melody)", size="sm")
+                                strip_voice = gr.Dropdown(choices=["both", "Vocal", "Ins"], value="both",
+                                                          label="KEEP VOICES", scale=0)
+                            abc_result = gr.Textbox(label="RESULT", lines=10)
+                            gr.Markdown("**Edit invariant check** — confirm the sounding notes and "
+                                        "meter are unchanged after editing.",
+                                        elem_classes=["bb-note"])
+                            abc_after = gr.Textbox(label="AFTER // EDITED ABC", lines=6)
+                            with gr.Row():
+                                compare_voice = gr.Dropdown(choices=["both", "Vocal", "Ins"], value="both",
+                                                            label="COMPARE VOICES", scale=1)
+                                allow_tempo = gr.Checkbox(value=False, label="ALLOW TEMPO CHANGE", scale=1)
+                                compare_abc_btn = gr.Button("COMPARE BEFORE/AFTER", size="sm", scale=1)
+                            abc_compare_out = gr.Textbox(label="COMPARE RESULT", lines=6)
+                        with gr.Accordion("LISTENING COMPARISON (static HTML)", open=False):
+                            with gr.Row():
+                                batch_pick = gr.Dropdown(label="FILL FROM GROUP RUN (BATCH / ALL MODES)",
+                                                         choices=[c for c, _ in _scan_batches()],
+                                                         interactive=True, scale=4,
+                                                         elem_id="bb-batch-pick")
+                                batch_refresh = gr.Button("REFRESH LIST", size="sm", scale=1,
+                                                          elem_id="bb-refresh-batches")
+                            fill_btn = gr.Button("▾ FILL RUN DIRECTORIES FROM BATCH", size="sm",
+                                                 elem_id="bb-fill-batch")
+                            compare_paths = gr.Textbox(label="RUN DIRECTORIES", lines=3,
+                                                       elem_id="bb-compare-paths")
+                            compare_btn = gr.Button("BUILD COMPARISON", size="sm",
+                                                    elem_id="bb-build-compare")
+                            compare_file = gr.File(label="COMPARISON HTML", file_types=[".html"],
+                                                   type="filepath")
+                            compare_link = gr.HTML(elem_id="bb-compare-link")
+                            compare_status = gr.Textbox(label="STATUS", lines=4, interactive=False,
+                                                        elem_id="bb-compare-status")
+                        with gr.Accordion("DOCTOR // ENVIRONMENT", open=False):
+                            verify_hashes = gr.Checkbox(value=False, label="VERIFY WEIGHT HASHES")
+                            doctor_btn = gr.Button("RUN DOCTOR", size="sm")
+                            doctor_out = gr.Textbox(label="REPORT", lines=14)
+
+                    # ───── 06 DECODE ─────
+                    with gr.Tab("06 // DECODE", id="decode"):
+                        gr.Markdown(
+                            "Re-decode a saved **latent.npy** without generating again "
+                            "(same as the upstream skill script `run_yue2.py decode`). "
+                            "Typical use: compare `standard` and `legacy` decoders on the same song.",
+                            elem_classes=["bb-note"],
+                        )
+                        with gr.Row():
+                            source_dir = gr.Dropdown(label="RUN DIRECTORY", choices=_scan_runs(),
+                                                     interactive=True, scale=4)
+                            refresh_btn = gr.Button("RELOAD", size="sm", scale=1)
+                        with gr.Row():
+                            latent_upload = gr.UploadButton("UPLOAD LATENT .NPY", size="sm",
+                                                            file_count="single", type="filepath",
+                                                            file_types=[".npy"], scale=0)
+                            dec_vae_choice = gr.Radio(choices=[("SOURCE", "keep"),
+                                                               ("STANDARD", "standard"),
+                                                               ("LEGACY", "legacy"),
+                                                               ("CUSTOM", "custom")],
+                                                      value="standard", label="DECODER VAE", scale=3)
+                        with gr.Accordion("ADVANCED // DECODE OPTIONS", open=False):
+                            with gr.Row():
+                                dec_vae_custom = gr.Textbox(label="CUSTOM VAE PATH / HF ID", max_lines=1)
+                                dec_vae_revision = gr.Textbox(label="VAE REVISION", max_lines=1)
+                            with gr.Row():
+                                full_decode = gr.Checkbox(value=False, label="FULL DECODE")
+                                decode_reset_btn = gr.Button("RESET", size="sm", scale=0,
+                                                             elem_id="bb-reset-decode")
+                        decode_btn = gr.Button("RE-DECODE", variant="primary", size="lg",
+                                               elem_id="bb-decode")
+                        decode_audio = gr.Audio(label="RESULT", type="filepath")
+                        decode_status = gr.Textbox(label="STATUS", lines=6, interactive=False)
+
+                    # ───── 07 BATCH ─────
+                    with gr.Tab("07 // BATCH", id="batch"):
+                        gr.Markdown(
+                            "One JSON request per line (same as `yue2 batch`): "
+                            "`id` (required, unique), `style`/`tags`, `lyrics`, `cot`, `seed`, "
+                            "`cfg_scale`, `abc`, `abc_path` (relative to the uploaded file), optional "
+                            "`abc_sampling` / `semantic_sampling` overrides. Fields you omit use the "
+                            "sampling settings above. One request runs at a time.",
+                            elem_classes=["bb-note"],
+                        )
+                        batch_file = gr.UploadButton("UPLOAD .JSONL", size="sm", file_count="single",
+                                                     type="filepath", file_types=[".jsonl", ".txt"])
+                        batch_text = gr.Textbox(label="JSONL REQUESTS", lines=8,
+                                                placeholder='{"id":"pop1","style":"English piano pop","lyrics":"...","cot":"full"}\n'
+                                                            '{"id":"jazz1","style":"English jazz","lyrics":"...","cot":"melody","seed":7}')
+                        with gr.Row():
+                            batch_id = gr.Textbox(label="OUTPUT NAME", value="batch", max_lines=1, scale=2)
+                            batch_btn = gr.Button("RUN BATCH", variant="primary", size="lg", scale=1,
+                                                  elem_id="bb-batch")
+                        batch_table = gr.Dataframe(headers=["id", "status", "audio", "seconds", "artifacts"],
+                                                   label="RESULTS", wrap=True)
+                        batch_status = gr.Textbox(label="STATUS", lines=4, interactive=False)
+
 
             # ═══════════ runtime rail ═══════════
             with gr.Column(scale=2, min_width=300, elem_id="bb-rail"):
@@ -1999,6 +2820,13 @@ def build_ui(defaults):
                                abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max]
                               + model_args,
                        outputs=[score_out, gen_status, files_out, run_btn, plan_btn])
+        allmodes_btn.click(generate_all_modes,
+                           inputs=[style, lyrics, seed, cfg, abc, out_id,
+                                   abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
+                                   sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max]
+                                  + model_args,
+                           outputs=[gen_status, files_out, allmodes_link,
+                                    run_btn, plan_btn, allmodes_btn])
         # Cooperative cancel only: do NOT use cancels=[...] here, because Gradio would
         # tear down the running generator event and drop its final "re-enable buttons" yield.
         cancel_btn.click(cancel_run, outputs=gen_status)
@@ -2056,6 +2884,82 @@ def build_ui(defaults):
         theme_btn.click(fn=None, js=THEME_TOGGLE_JS, outputs=theme_btn)
         rail_btn.click(fn=None, js=RAIL_TOGGLE_JS, outputs=rail_btn)
 
+        # ───── cover wiring (SheetSage2 lives in sheetsage_adapter.py) ─────
+        cover_controls = [cover_btn, cover_strip_btn, cover_send_btn, cover_generate_btn,
+                          cover_env_btn, cover_unload_btn, cover_keep_warm]
+        cover_btn.click(cover_transcribe,
+                        inputs=[cover_audio, cover_task, cover_max_seconds, cover_model,
+                                cover_device, cover_dtype, cover_revision, cover_base_model,
+                                cover_keep_warm, cover_offline],
+                        outputs=[cover_abc, cover_files, cover_status, *cover_controls,
+                                 cover_generate_accordion, cover_source])
+        cover_generate_btn.click(
+            cover_generate,
+            inputs=[cover_style, cover_lyrics, cover_abc, cover_task, cover_seed, cover_cfg,
+                    abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
+                    sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max] + model_args,
+            outputs=[cover_status, cover_result_audio, cover_result_abc, cover_gen_files,
+                     *cover_controls])
+        cover_cancel_btn.click(cancel_run, outputs=cover_status)
+        cover_env_btn.click(cover_check_environment, outputs=cover_status)
+        cover_unload_btn.click(cover_unload_worker, outputs=cover_status)
+        cover_source_refresh.click(cover_choices, outputs=cover_source)
+        cover_load_btn.click(cover_load, inputs=[cover_source],
+                             outputs=[cover_abc, cover_style, cover_lyrics, cover_status])
+        cover_send_edit_btn.click(
+            cover_send_to_edit,
+            inputs=[cover_abc, cover_source, cover_style, cover_lyrics],
+            outputs=[edit_abc, edit_baseline_abc, edit_style, edit_lyrics, edit_source_rel,
+                     edit_check_state, edit_baseline_state, edit_baseline_info, edit_status, tabs])
+        cover_strip_btn.click(cover_strip, inputs=[cover_abc, cover_keep],
+                              outputs=[cover_abc, cover_status])
+        cover_send_btn.click(cover_send_to_generate,
+                             inputs=[cover_abc, cover_task, cover_style, cover_lyrics],
+                             outputs=[abc, cot, style, lyrics, tabs, cover_status])
+
+        # ───── edit wiring (pure logic in edit_flow.py) ─────
+        edit_tab.select(edit_choices, outputs=edit_source)
+        edit_refresh_btn.click(edit_choices, outputs=edit_source)
+        edit_tab.select(_sampling_summary,
+                        inputs=[abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
+                                sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max],
+                        outputs=edit_sampling_note)
+        cover_tab.select(_sampling_summary,
+                         inputs=[abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
+                                 sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max],
+                         outputs=cover_sampling_note)
+        cover_tab.select(cover_choices, outputs=cover_source)
+        # the mirror lives in a closed accordion (not mounted until expanded)
+        cover_generate_accordion.expand(
+            _sampling_summary,
+            inputs=[abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
+                    sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max],
+            outputs=cover_sampling_note)
+        edit_load_btn.click(
+            edit_load, inputs=[edit_source],
+            outputs=[edit_style, edit_lyrics, edit_abc, edit_baseline_abc, edit_source_rel,
+                     edit_check_state, edit_baseline_state, edit_baseline_info, edit_status])
+        edit_freeze_btn.click(edit_freeze, inputs=[edit_source_rel],
+                              outputs=[edit_baseline_state, edit_baseline_info, edit_status])
+        edit_check_btn.click(
+            edit_check,
+            inputs=[edit_baseline_abc, edit_abc, edit_voice, edit_allow_tempo,
+                    edit_baseline_state],
+            outputs=[edit_check_out, edit_check_state])
+        edit_run_btn.click(
+            edit_generate,
+            inputs=[edit_style, edit_lyrics, edit_cot, edit_seed, edit_cfg, edit_abc,
+                    edit_baseline_abc, edit_source_rel, edit_check_state, edit_allow_changes,
+                    edit_baseline_state,
+                    abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
+                    sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max] + model_args,
+            outputs=[edit_audio, edit_result_abc, edit_files, edit_status,
+                     edit_run_btn, edit_check_btn, edit_freeze_btn, edit_load_btn,
+                     edit_refresh_btn, edit_compare_btn, edit_last_run])
+        edit_cancel_btn.click(cancel_run, outputs=edit_status)
+        edit_compare_btn.click(edit_compare, inputs=[edit_source_rel, edit_last_run],
+                               outputs=[edit_compare_file, edit_compare_link, edit_compare_status])
+
         # ───── library wiring (toolkit in library.py) ─────
         library_outputs = [lib_list, lib_info, lib_style, lib_lyrics, lib_abc,
                            lib_rename_box, lib_rename_btn, lib_status]
@@ -2093,6 +2997,11 @@ def build_ui(defaults):
                              outputs=[lib_confirm, lib_pending, lib_confirm_btn, lib_status])
         demo.load(library_refresh, inputs=[lib_sort_key, lib_sort_dir, lib_list, lib_active],
                   outputs=library_outputs)
+        demo.load(edit_choices, outputs=edit_source)
+        demo.load(_sampling_summary_pair,
+                  inputs=[abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
+                          sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max],
+                  outputs=[edit_sampling_note, cover_sampling_note])
 
         gr.HTML(footer)
 
@@ -2111,14 +3020,19 @@ def main():
     parser.add_argument("--runs", default=None,
                         help="Directory for generated works (default: $YUE2_GROOVE_RUNS or ./runs)")
     parser.add_argument("--vae", default="standard", choices=["standard", "legacy"])
-    parser.add_argument("--tab", type=int, default=0, help="Start tab index 0..4")
+    parser.add_argument("--tab", type=int, default=0, help="Start tab index 0..6")
     parser.add_argument("--auth", default=os.environ.get("YUE2_GROOVE_AUTH", ""),
                         help="Login as user:password (or set YUE2_GROOVE_AUTH); recommended on a LAN")
+    parser.add_argument("--sheetsage-python", default=None,
+                        help="Python of the separate SheetSage2 venv (or set "
+                             "YUE2_GROOVE_SHEETSAGE_PYTHON) for the 02 COVER tab")
     parser.add_argument("--no-preload", action="store_true", help="Do not preload the model at startup")
     args = parser.parse_args()
     global RUNS
     if args.runs:
         RUNS = Path(args.runs).expanduser().resolve()
+    if args.sheetsage_python:
+        os.environ["YUE2_GROOVE_SHEETSAGE_PYTHON"] = args.sheetsage_python
 
     auth = None
     if args.auth:
@@ -2134,6 +3048,7 @@ def main():
     if dtype == "auto":
         dtype = "bfloat16" if device in ("cuda", "mps") else "float32"
     RUNS.mkdir(parents=True, exist_ok=True)
+    atexit.register(sheetsage_adapter.stop_worker)   # no resident SheetSage2 after exit
     defaults = {"device": device, "dtype": dtype, "model": args.model, "vae": args.vae,
                 "tab": args.tab,
                 "status": ("Model not loaded yet — it loads automatically on the first generation."
