@@ -120,6 +120,30 @@ def test_view_bridge_is_hidden_by_css() -> None:
     assert "#bb-view { display: none !important; }" in webui.BASE_CSS
 
 
+def test_view_toggle_is_flat_compact_chrome() -> None:
+    """Regression: a Row inside the chrome Row stretched and wrapped the buttons.
+
+    Gradio gives a nested Row's children the 160px min-width and lets it wrap, so
+    the toggle now sits flat next to the rail/theme buttons and the CSS targets
+    the <button> elements (where the elem_id actually lands).
+    """
+    demo = build()
+    ids = {getattr(c, "elem_id", None) for c in demo.blocks.values()}
+    assert "bb-view-toggle" not in ids            # no Row inside the chrome Row
+    assert {"bb-view-song-btn", "bb-view-studio-btn"} <= ids
+    css = webui.BASE_CSS
+    assert "#bb-view-song-btn button" not in css   # the id is on the button itself
+    assert "#bb-view-song-btn, #bb-view-studio-btn {" in css
+    assert "#bb-topbtns { flex-wrap: nowrap !important; }" in css
+
+
+def test_rail_toggle_is_disabled_in_song_view() -> None:
+    """The settings rail lives inside STUDIO, so its toggle is dead in SONG."""
+    assert "rail.disabled = songView" in webui.VIEW_JS
+    assert "__bbApplyRail" in webui.VIEW_JS and "__bbApplyRail" in webui.HEAD_HTML
+    assert "Settings live in STUDIO" in webui.VIEW_JS
+
+
 def test_forced_view_does_not_write_the_remembered_choice() -> None:
     boot = webui._head_html("studio")
     assert "window.__BB_VIEW_FORCED__ = (mode === 'song' || mode === 'studio');" in boot

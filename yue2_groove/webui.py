@@ -2152,21 +2152,25 @@ table { border-color: var(--bb-line) !important; }
 html.bb-view-song #bb-studio-root { display: none !important; }
 html.bb-view-studio #bb-song-root { display: none !important; }
 #bb-song-root { display: block; min-height: 200px; }
-/* the view toggle is chrome, the same weight as the theme / rail buttons */
-#bb-view-toggle { display: flex !important; align-items: center; gap: 4px; }
-#bb-view-toggle .bb-view-label {
+/* the view toggle is chrome, the same weight as the theme / rail buttons.
+   The buttons sit flat in #bb-topbtns (a Row inside a Row makes Gradio stretch
+   them to its 160px min-width and wrap); the elem_id is on the <button>. */
+#bb-topbtns { flex-wrap: nowrap !important; }
+#bb-topbtns .bb-view-label {
   font-size: 10px; letter-spacing: .14em; color: var(--bb-ink4);
-  text-transform: uppercase; margin-right: 2px;
+  text-transform: uppercase; white-space: nowrap; margin-right: 2px;
 }
-#bb-view-song-btn button, #bb-view-studio-btn button {
-  min-width: 0 !important; padding: 4px 9px !important;
-  font-size: 10px !important; letter-spacing: .12em !important; line-height: 1.4;
-  color: var(--bb-ink3) !important; border-color: transparent !important;
+#bb-view-song-btn, #bb-view-studio-btn {
+  min-width: 0 !important; width: auto !important; flex: 0 0 auto !important;
+  padding: 4px 9px !important; font-size: 10px !important;
+  letter-spacing: .12em !important; line-height: 1.4;
+  color: var(--bb-ink3) !important; border-color: var(--bb-line) !important;
   background: transparent !important;
 }
-#bb-view-song-btn button:hover, #bb-view-studio-btn button:hover { color: var(--bb-ink) !important; }
-#bb-view-song-btn button.bb-active, #bb-view-studio-btn button.bb-active {
+#bb-view-song-btn:hover, #bb-view-studio-btn:hover { color: var(--bb-ink) !important; }
+#bb-view-song-btn.bb-active, #bb-view-studio-btn.bb-active {
   color: var(--bb-ink) !important; border-color: var(--bb-line2) !important;
+  background: var(--bb-lift) !important;
 }
 /* SONG: empty state */
 #bb-song-empty {
@@ -2569,11 +2573,16 @@ HEAD_HTML = """<meta name="color-scheme" content="dark light">
     var railWrap = document.getElementById('bb-rail-btn');
     var railBtn = railWrap && (railWrap.tagName === 'BUTTON' ? railWrap : railWrap.querySelector('button'));
     if (railBtn) {
-      var hidden = document.documentElement.classList.contains('bb-rail-hidden');
-      railBtn.classList.toggle('bb-on', !hidden);
-      var label = hidden ? 'Show the settings rail' : 'Hide the settings rail';
-      railBtn.title = label;
-      railBtn.setAttribute('aria-label', label);
+      // the rail lives inside STUDIO; VIEW_JS disables the toggle in SONG
+      if (window.__bbApplyRail) {
+        window.__bbApplyRail();
+      } else {
+        var hidden = document.documentElement.classList.contains('bb-rail-hidden');
+        railBtn.classList.toggle('bb-on', !hidden);
+        var label = hidden ? 'Show the settings rail' : 'Hide the settings rail';
+        railBtn.title = label;
+        railBtn.setAttribute('aria-label', label);
+      }
     }
   }
   sync();
@@ -2941,8 +2950,25 @@ VIEW_JS = r"""(function () {
     var wrap = document.getElementById(id);
     return wrap ? (wrap.tagName === 'BUTTON' ? wrap : wrap.querySelector('button')) : null;
   }
+  function applyRail(view) {
+    // the settings rail sits inside the STUDIO root, so the toggle is a dead
+    // control in SONG; disable it there and label it honestly
+    var rail = button('bb-rail-btn');
+    if (!rail) return;
+    var songView = norm(view) !== 'studio';
+    var hidden = document.documentElement.classList.contains('bb-rail-hidden');
+    rail.disabled = songView;
+    rail.classList.toggle('bb-on', !songView && !hidden);
+    var label = songView ? 'Settings live in STUDIO'
+              : (hidden ? 'Show the settings rail' : 'Hide the settings rail');
+    rail.title = label;
+    rail.setAttribute('aria-label', label);
+  }
+  var currentView = 'song';
+  window.__bbApplyRail = function () { applyRail(currentView); };
   function apply(view) {
     view = norm(view);
+    currentView = view;
     var root = document.documentElement;
     root.classList.toggle('bb-view-song', view !== 'studio');
     root.classList.toggle('bb-view-studio', view === 'studio');
@@ -2950,6 +2976,7 @@ VIEW_JS = r"""(function () {
     var studio = button('bb-view-studio-btn');
     if (song) song.classList.toggle('bb-active', view !== 'studio');
     if (studio) studio.classList.toggle('bb-active', view === 'studio');
+    applyRail(view);
   }
   window.__bbSetView = function (view) {
     view = norm(view);
@@ -3079,10 +3106,9 @@ def build_ui(defaults):
                                  elem_classes=["bb-output"])
         busy_out = gr.HTML("", elem_id="bb-busy-wrap")
         with gr.Row(elem_id="bb-topbtns"):
-            with gr.Row(elem_id="bb-view-toggle"):
-                gr.HTML('<span class="bb-view-label">VIEW //</span>')
-                view_song_btn = gr.Button("SONG", size="sm", elem_id="bb-view-song-btn")
-                view_studio_btn = gr.Button("STUDIO", size="sm", elem_id="bb-view-studio-btn")
+            gr.HTML('<span class="bb-view-label">VIEW //</span>')
+            view_song_btn = gr.Button("SONG", size="sm", elem_id="bb-view-song-btn")
+            view_studio_btn = gr.Button("STUDIO", size="sm", elem_id="bb-view-studio-btn")
             rail_btn = gr.Button("", size="sm", elem_id="bb-rail-btn")
             theme_btn = gr.Button("", size="sm", elem_id="bb-theme-btn")
 
