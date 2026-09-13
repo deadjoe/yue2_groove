@@ -96,8 +96,8 @@ def test_cover_check_environment_reports_missing_configuration(monkeypatch) -> N
 def test_cover_transcribe_yields_result_and_frees_the_lock(monkeypatch, tmp_path: Path) -> None:
     audio = tmp_path / "ref.wav"
     audio.write_bytes(b"RIFF")
-    transcript = tmp_path / "transcript"
-    transcript.mkdir()
+    transcript = webui.RUNS / "transcriptions" / "reference"
+    transcript.mkdir(parents=True)
     (transcript / "score.abc").write_text(CHORD_FREE, encoding="utf-8")
     seen = {}
 
@@ -110,12 +110,14 @@ def test_cover_transcribe_yields_result_and_frees_the_lock(monkeypatch, tmp_path
     monkeypatch.setattr(webui.sheetsage_adapter, "transcribe", fake_transcribe)
     yields = list(webui.cover_transcribe(str(audio), "melody-full", 0, "m-a-p/SheetSage2",
                                          "auto", "auto", "", "/mert-snapshot", False, False))
-    assert all(len(chunk) == 11 for chunk in yields)         # matches the 11 wired outputs
-    abc, files, status, *buttons = yields[-1]
-    assert buttons[-1]["open"] is True                       # GENERATE COVER surfaced
+    assert all(len(chunk) == 12 for chunk in yields)         # matches the 12 wired outputs
+    abc, files, status, *controls = yields[-1]
+    assert len(controls) == 9
+    assert controls[7]["open"] is True                       # GENERATE COVER surfaced
+    assert controls[8]["value"] == "transcriptions/reference"  # new transcription preselected
     assert abc == CHORD_FREE and files and str(transcript / "score.abc") in files
-    assert "low confidence" in status and len(buttons) == 8
-    assert all(button["interactive"] is True for button in buttons[:-1])   # controls re-enabled
+    assert "low confidence" in status
+    assert all(button["interactive"] is True for button in controls[:7])   # controls re-enabled
     assert seen["cancelled"] is not None and seen["base_model"] == "/mert-snapshot"
     assert seen["keep_warm"] is False
     assert seen["output_dir"].parent == webui.RUNS / "transcriptions"
@@ -465,3 +467,62 @@ def test_baselines_are_not_library_works(isolated_runs: Path) -> None:
     assert rels == {"20260901-120000-source"}          # no baseline entries
     assert all(not rel.startswith("baselines/") for rel in
                (rel for _label, rel in webui.edit_choices()["choices"]))
+
+
+def test_cover_load_fills_from_a_work_and_from_a_transcription(isolated_runs: Path) -> None:
+    make_work(isolated_runs)
+    abc_update, style_update, lyrics_update, status = webui.cover_load("20260901-120000-source")
+    assert abc_update["value"] == BASE_ABC.strip()
+    assert style_update["value"].startswith("English") and lyrics_update["value"].startswith("[Verse]")
+    assert "Loaded" in status
+
+    d = isolated_runs / "transcriptions" / "20260901-130000-reference"
+    d.mkdir(parents=True)
+    (d / "result.json").write_text(json.dumps({"task": "melody-full", "abc": "X:1"}),
+                                   encoding="utf-8")
+    (d / "score.abc").write_text(CHORD_FREE, encoding="utf-8")
+    abc_update, style_update, lyrics_update, status = webui.cover_load(
+        "transcriptions/20260901-130000-reference")
+    assert abc_update["value"] == CHORD_FREE.strip()
+    assert "value" not in style_update and "value" not in lyrics_update   # nothing to copy
+    assert "TRANSCRIPTION" in status or "transcription" in status
+
+    with pytest.raises(gr.Error, match="Pick a SOURCE WORK"):
+        webui.cover_load("")
+    with pytest.raises(gr.Error, match="no ABC"):
+        empty = isolated_runs / "20260901-140000-empty"
+        empty.mkdir()
+        (empty / "result.json").write_text("{}", encoding="utf-8")
+        webui.cover_load("20260901-140000-empty")
+
+
+def test_cover_send_to_edit_hands_over_the_source(isolated_runs: Path) -> None:
+    make_work(isolated_runs)
+    edited = BASE_ABC.replace('"C"E2G2A2G2E2D2C4', '"C"F2G2A2G2E2D2C4')
+    (abc_update, baseline, style_update, lyrics_update, rel, check_state, baseline_state,
+     info, status, tab_update) = webui.cover_send_to_edit(edited, "20260901-120000-source",
+                                                          "jazz", "")
+    assert abc_update["value"] == edited.strip()
+    assert baseline == BASE_ABC.strip()               # checked against the frozen source
+    assert rel == "20260901-120000-source" and check_state == {} and baseline_state is None
+    assert style_update["value"] == "jazz"            # COVER wins...
+    assert lyrics_update["value"].startswith("[Verse]")   # ...source fills the rest
+    assert "FREEZE BASELINE" in status and "FREEZE BASELINE" in info
+    assert tab_update["selected"] == "edit"
+
+    with pytest.raises(gr.Error, match="Transcribe or load"):
+        webui.cover_send_to_edit("  ", "20260901-120000-source", "", "")
+    with pytest.raises(gr.Error, match="LOAD a source work"):
+        webui.cover_send_to_edit(BASE_ABC, "", "", "")
+    with pytest.raises(gr.Error, match="no longer exists"):
+        webui.cover_send_to_edit(BASE_ABC, "does-not-exist", "", "")
+
+
+def test_cover_choices_lists_works_and_transcriptions(isolated_runs: Path) -> None:
+    make_work(isolated_runs)
+    d = isolated_runs / "transcriptions" / "20260901-130000-reference"
+    d.mkdir(parents=True)
+    (d / "result.json").write_text(json.dumps({"task": "melody-full"}), encoding="utf-8")
+    (d / "score.abc").write_text(BASE_ABC, encoding="utf-8")
+    values = {value for _label, value in webui.cover_choices()["choices"]}
+    assert {"20260901-120000-source", "transcriptions/20260901-130000-reference"} <= values

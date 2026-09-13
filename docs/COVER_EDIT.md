@@ -66,6 +66,10 @@ tab reports a configuration error and every other tab keeps working.
 ## 2. 02 COVER — audio to a cover song
 
 1. **SOURCE AUDIO** — upload a reference recording (wav/mp3/flac; decoded to mono 24 kHz).
+   Already have a score? SKIP the audio: **SOURCE WORK → REFRESH → LOAD ABC** fills COVER ABC
+   (and STYLE/LYRICS when the source has them) from any saved work or transcription, so a
+   transcription survives a page reload; **SEND TO EDIT** hands the current score to 03 EDIT with
+   that source as the freeze target.
 2. **TRANSCRIPTION TASK**
    - `MELODY // VOCAL` — only the sung line; best when the cover should keep the vocal melody;
    - `MELODY // VOCAL+INST` — vocal and instrumental melodies, chord-free (the default);
@@ -85,6 +89,9 @@ tab reports a configuration error and every other tab keeps working.
    there, press the button, and the result appears with its own RESULT audio, RESULT ABC (the
    score actually submitted — chord-stripped for melody tasks) and GENERATED FILES. Both routes
    run the identical `cover.build_cover_request` + generation core.
+7. **SEND TO EDIT** — pushes the score shown in COVER ABC into 03 EDIT and selects the source
+   work in the SOURCE WORK dropdown (LOAD a work first, or transcribe; EDIT needs that source to
+   freeze the baseline). EDIT then requires FREEZE BASELINE + CHECK INVARIANTS as usual.
 
 While a transcription runs, every action button on the tab (including STRIP CHORDS and the two
 GENERATE buttons) is disabled; CANCEL stays active and terminates the subprocess.

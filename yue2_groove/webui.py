@@ -854,13 +854,13 @@ def cover_transcribe(audio_path, task, max_seconds, model, device, dtype, revisi
     if not _RUNNING.acquire(blocking=False):
         yield (gr.update(), gr.update(),
                "Another job is already running — wait for it to finish",
-               *((gr.update(),) * 7), gr.update())
+               *((gr.update(),) * 7), gr.update(), gr.update())
         return
     controls = (gr.update(interactive=False),) * 7
     idle = (gr.update(interactive=True),) * 7
     try:
         yield gr.update(), gr.update(), "Starting SheetSage2 transcription…", *controls, \
-            gr.update()
+            gr.update(), gr.update()
         outdir = config.transcriptions_dir(RUNS) / \
             f"{time.strftime('%Y%m%d-%H%M%S')}-{_slug(Path(audio_path).stem)}"
 
@@ -886,18 +886,85 @@ def cover_transcribe(audio_path, task, max_seconds, model, device, dtype, revisi
         if worker:
             lines.append(f"SheetSage2 worker resident (pid {worker['pid']}) — reused by the next "
                          f"transcription until UNLOAD or the idle timeout.")
-        # surface the direct-generation path now that there is a score to use
+        # surface the direct-generation path now that there is a score to use,
+        # and select the new transcription as the reusable source
+        _items, choices = _library_choices(_library_mode("time", "desc"))
+        known = {value for _label, value in choices}
+        try:
+            rel = Path(record["output_dir"]).resolve().relative_to(RUNS.resolve()).as_posix()
+        except (ValueError, OSError):
+            rel = None
+        source_update = (gr.update(choices=choices, value=rel) if rel in known
+                         else gr.update(choices=choices))
         yield (abc, _transcription_files(record["output_dir"]), "\n".join(lines),
-               *idle, gr.update(open=True))
+               *idle, gr.update(open=True), source_update)
     except InterruptedError as exc:
         note = (" The resident SheetSage2 worker was stopped; the next transcription reloads it."
                 if keep_warm else "")
-        yield gr.update(), gr.update(), f"Cancelled: {exc}.{note}", *idle, gr.update()
+        yield gr.update(), gr.update(), f"Cancelled: {exc}.{note}", *idle, gr.update(), gr.update()
     except Exception as exc:  # noqa: BLE001
         yield gr.update(), gr.update(), \
-            f"Transcription failed: {type(exc).__name__}: {exc}", *idle, gr.update()
+            f"Transcription failed: {type(exc).__name__}: {exc}", *idle, gr.update(), gr.update()
     finally:
         _RUNNING.release()
+
+
+def cover_choices():
+    """Choices for the COVER source dropdown (any saved work or transcription with an ABC)."""
+    _items, choices = _library_choices(_library_mode("time", "desc"))
+    return gr.update(choices=choices)
+
+
+def cover_load(rel):
+    """Fill COVER ABC (and STYLE/LYRICS when the source has them) from a saved work."""
+    if not (rel or "").strip():
+        raise gr.Error("Pick a SOURCE WORK first (press REFRESH if the list is empty)")
+    item, det = library.load(RUNS, rel)
+    if item is None or det is None:
+        raise gr.Error("That work no longer exists — press REFRESH")
+    abc = (det.get("abc") or "").strip()
+    if not abc:
+        raise gr.Error(f"{item['name']} has no ABC score to load")
+    request = det.get("request") or {}
+    style = request.get("style") or request.get("tags") or ""
+    lyrics = request.get("lyrics") or ""
+    return (gr.update(value=abc),
+            gr.update(value=style) if style.strip() else gr.update(),
+            gr.update(value=lyrics) if lyrics.strip() else gr.update(),
+            f"Loaded {item['name']} ({item['kind']}) — {len(abc)} chars. Continue here or "
+            f"press SEND TO EDIT.")
+
+
+def cover_send_to_edit(abc_text, rel, style, lyrics):
+    """Hand the current COVER score to 03 EDIT, keeping the source as the freeze target."""
+    if not (abc_text or "").strip():
+        raise gr.Error("Transcribe or load a score first")
+    if not (rel or "").strip():
+        raise gr.Error("LOAD a source work (or transcribe) first — 03 EDIT freezes that source "
+                       "before it can check the edit")
+    item, det = library.load(RUNS, rel)
+    if item is None or det is None:
+        raise gr.Error("That source work no longer exists — refresh 02 COVER")
+    source_abc = (det.get("abc") or "").strip()
+    if not source_abc:
+        raise gr.Error(f"{item['name']} has no ABC to freeze as the edit baseline")
+    try:
+        current = edit_flow.validate_edited_abc(abc_text)
+    except ValueError as exc:
+        raise gr.Error(f"Cannot send this score to 03 EDIT: {exc}") from exc
+    request = det.get("request") or {}
+    style_value = (style or "").strip() or request.get("style") or request.get("tags") or ""
+    lyrics_value = (lyrics or "").strip() or request.get("lyrics") or ""
+    return (gr.update(value=current),          # EDITED ABC (what you see in COVER)
+            source_abc,                        # baseline ABC for CHECK INVARIANTS
+            gr.update(value=style_value) if style_value else gr.update(),
+            gr.update(value=lyrics_value) if lyrics_value else gr.update(),
+            rel,                               # SOURCE WORK in 03 EDIT
+            {},                                # check state reset
+            None,                              # not frozen yet: FREEZE BASELINE is required
+            f"From 02 COVER: baseline = {rel}. Press FREEZE BASELINE, then CHECK INVARIANTS.",
+            "Loaded from 02 COVER — FREEZE BASELINE is required before CHECK / GENERATE EDITED.",
+            gr.update(selected="edit"))
 
 
 def cover_generate(style, lyrics, abc_text, task, seed, cfg_scale,
@@ -2402,6 +2469,16 @@ def build_ui(defaults):
                                      "UNLOAD or the idle timeout", scale=3)
                             cover_env_btn = gr.Button("CHECK ENVIRONMENT", size="sm", scale=1)
                             cover_unload_btn = gr.Button("UNLOAD SHEETSAGE2", size="sm", scale=1)
+                        with gr.Row():
+                            cover_source = gr.Dropdown(
+                                label="SOURCE WORK", scale=4,
+                                choices=[rel for _label, rel in _library_choices(
+                                    _library_mode("time", "desc"))[1]],
+                                info="A saved work or transcription with a score.abc",
+                                interactive=True)
+                            cover_source_refresh = gr.Button("REFRESH", size="sm", scale=1)
+                            cover_load_btn = gr.Button("LOAD ABC", size="sm", scale=1)
+                            cover_send_edit_btn = gr.Button("SEND TO EDIT", size="sm", scale=1)
                         cover_abc = gr.Textbox(label="COVER ABC", lines=10, max_lines=24,
                                                elem_id="bb-cover-abc")
                         gr.HTML('<div class="bb-score-title">SCORE VIEW</div>'
@@ -2815,7 +2892,7 @@ def build_ui(defaults):
                                 cover_device, cover_dtype, cover_revision, cover_base_model,
                                 cover_keep_warm, cover_offline],
                         outputs=[cover_abc, cover_files, cover_status, *cover_controls,
-                                 cover_generate_accordion])
+                                 cover_generate_accordion, cover_source])
         cover_generate_btn.click(
             cover_generate,
             inputs=[cover_style, cover_lyrics, cover_abc, cover_task, cover_seed, cover_cfg,
@@ -2826,6 +2903,14 @@ def build_ui(defaults):
         cover_cancel_btn.click(cancel_run, outputs=cover_status)
         cover_env_btn.click(cover_check_environment, outputs=cover_status)
         cover_unload_btn.click(cover_unload_worker, outputs=cover_status)
+        cover_source_refresh.click(cover_choices, outputs=cover_source)
+        cover_load_btn.click(cover_load, inputs=[cover_source],
+                             outputs=[cover_abc, cover_style, cover_lyrics, cover_status])
+        cover_send_edit_btn.click(
+            cover_send_to_edit,
+            inputs=[cover_abc, cover_source, cover_style, cover_lyrics],
+            outputs=[edit_abc, edit_baseline_abc, edit_style, edit_lyrics, edit_source_rel,
+                     edit_check_state, edit_baseline_state, edit_baseline_info, edit_status, tabs])
         cover_strip_btn.click(cover_strip, inputs=[cover_abc, cover_keep],
                               outputs=[cover_abc, cover_status])
         cover_send_btn.click(cover_send_to_generate,
@@ -2843,6 +2928,7 @@ def build_ui(defaults):
                          inputs=[abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
                                  sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max],
                          outputs=cover_sampling_note)
+        cover_tab.select(cover_choices, outputs=cover_source)
         # the mirror lives in a closed accordion (not mounted until expanded)
         cover_generate_accordion.expand(
             _sampling_summary,

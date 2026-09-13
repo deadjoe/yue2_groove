@@ -208,7 +208,9 @@ More on the Apple Silicon story, with measurements: [docs/MACOS_MPS.md](docs/MAC
 **02 // COVER** turns a recording into a cover: upload audio → SheetSage2 transcribes it to ABC
 (melody-only or full score) → review/edit the score, strip chords → **SEND TO GENERATE** fills
 the ABC and the right plan mode, or **GENERATE COVER** generates right on the COVER tab with its
-own style/lyrics → the normal YuE2 generation path runs unchanged.
+own style/lyrics → the normal YuE2 generation path runs unchanged. A previously saved score or
+transcription can be reused after a page reload with **SOURCE WORK → LOAD ABC** (optionally then
+**SEND TO EDIT**).
 
 SheetSage2 pins different torch/transformers versions than YuE2, so it runs in its **own
 virtual environment** and the UI talks to it over a subprocess boundary: nothing in the groove
