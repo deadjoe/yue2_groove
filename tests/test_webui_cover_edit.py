@@ -707,7 +707,7 @@ def test_publish_current_returns_band_then_bridge(isolated_runs: Path) -> None:
     make_work(isolated_runs)
     path = str((isolated_runs / "20260901-120000-source").resolve())
     band, bridge = webui.publish_current(path)
-    assert "CURRENT" in band and "AUDIO" in band        # the band is the first return value
+    assert "CURRENT" in band and "<b>source</b>" in band  # the band is the first return value
     assert "value" not in bridge                        # bridge untouched on a valid path
     band, bridge = webui.publish_current(str(isolated_runs / "missing"))
     assert band == "" and bridge["value"] == ""        # stale path clears both
