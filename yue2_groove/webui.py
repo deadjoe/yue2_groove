@@ -1553,7 +1553,28 @@ footer, #footer, .built-with, .show-api, .api-links { display: none !important; 
   gap: 8px; z-index: 60;
 }
 #bb-topbtns > * { width: auto !important; flex: 0 0 auto !important; }
-#bb-theme-btn { width: auto !important; min-width: 156px; }
+/* theme toggle: a CSS-drawn icon button, same grammar as the rail toggle.
+   Dark scene shows a crescent moon, the bright scene a ring-and-rays sun;
+   both are 1px currentColor strokes with no background dependency. */
+#bb-theme-btn {
+  position: relative; width: 28px !important; height: 28px; min-width: 28px !important;
+  padding: 0 !important; color: var(--bb-ink3) !important; line-height: 1;
+}
+#bb-theme-btn:hover { color: var(--bb-ink) !important; }
+/* Gradio 6 scopes custom CSS to `.gradio-container... .contain <selector>`, so a
+   scene class on <html> cannot win against the scoped base rule. The JS toggles
+   `bb-bright` on the button itself, which keeps the variant selector scope-safe. */
+#bb-theme-btn::before {
+  content: ""; position: absolute; left: 8px; top: 8px; width: 12px; height: 12px;
+  border-radius: 50%;
+  box-shadow: inset -3px -1px 0 0 currentColor;   /* crescent moon */
+}
+#bb-theme-btn.bb-bright::before {
+  left: 50%; top: 50%; width: 12px; height: 12px; margin: -6px 0 0 -6px;
+  border: 1px solid currentColor;
+  box-shadow: 0 -8px 0 -5px currentColor, 0 8px 0 -5px currentColor,
+              -8px 0 0 -5px currentColor, 8px 0 0 -5px currentColor;
+}
 /* settings-rail toggle: a CSS-drawn sidebar icon */
 #bb-rail-btn {
   position: relative; width: 28px !important; height: 28px; min-width: 28px !important;
@@ -1763,8 +1784,8 @@ button:disabled, button[disabled] { opacity: .4 !important; cursor: not-allowed 
                 width: 100% !important; margin: 0 0 10px 0 !important; }
   #bb-topbtns > * { flex: 0 0 auto !important; }
   #bb-rail-btn { width: 46px !important; min-width: 46px !important; height: 32px; }
-  #bb-theme-btn { flex: 1 1 auto !important; width: auto !important; min-width: 0 !important;
-                  margin: 0 !important; }
+  #bb-theme-btn { flex: 0 0 auto !important; width: 46px !important; min-width: 46px !important;
+                  height: 32px; margin: 0 !important; }
   .tabs .tab-wrapper { display: flex !important; flex-wrap: wrap !important; height: auto !important; min-height: 32px; }
   .tabs .tab-container[role="tablist"],
   .tabs .overflow-menu,
@@ -1831,8 +1852,13 @@ THEME_TOGGLE_JS = """() => {
   try { localStorage.setItem('bb-theme', on ? 'bright' : 'dark'); } catch (e) {}
   const wrap = document.getElementById('bb-theme-btn');
   const btn = wrap && (wrap.tagName === 'BUTTON' ? wrap : wrap.querySelector('button'));
-  if (btn) btn.textContent = on ? 'THEME // BRIGHT' : 'THEME // DARK';
-  return on ? 'THEME // BRIGHT' : 'THEME // DARK';
+  if (btn) {
+    btn.classList.toggle('bb-bright', on);
+    const label = on ? 'Switch to the dark scene' : 'Switch to the bright scene';
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+  }
+  return '';
 }"""
 
 RAIL_TOGGLE_JS = """() => {
@@ -2014,7 +2040,12 @@ HEAD_HTML = """<meta name="color-scheme" content="dark light">
     var on = document.documentElement.classList.contains('bb-bright');
     var wrap = document.getElementById('bb-theme-btn');
     var btn = wrap && (wrap.tagName === 'BUTTON' ? wrap : wrap.querySelector('button'));
-    if (btn) btn.textContent = on ? 'THEME // BRIGHT' : 'THEME // DARK';
+    if (btn) {
+      btn.classList.toggle('bb-bright', on);
+      var label = on ? 'Switch to the dark scene' : 'Switch to the bright scene';
+      btn.title = label;
+      btn.setAttribute('aria-label', label);
+    }
     var railWrap = document.getElementById('bb-rail-btn');
     var railBtn = railWrap && (railWrap.tagName === 'BUTTON' ? railWrap : railWrap.querySelector('button'));
     if (railBtn) {
@@ -2025,6 +2056,7 @@ HEAD_HTML = """<meta name="color-scheme" content="dark light">
       railBtn.setAttribute('aria-label', label);
     }
   }
+  sync();
   [300, 1000, 2500, 5000].forEach(function (t) { setTimeout(sync, t); });
 })();
 </script>"""
@@ -2337,7 +2369,7 @@ def build_ui(defaults):
         gr.HTML(header)
         with gr.Row(elem_id="bb-topbtns"):
             rail_btn = gr.Button("", size="sm", elem_id="bb-rail-btn")
-            theme_btn = gr.Button("THEME // DARK", size="sm", elem_id="bb-theme-btn")
+            theme_btn = gr.Button("", size="sm", elem_id="bb-theme-btn")
         with gr.Row(equal_height=False, elem_classes=["bb-workspace"]):
             # ═══════════ main work area ═══════════
             with gr.Column(scale=5, min_width=520):
