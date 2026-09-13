@@ -62,7 +62,7 @@ import numpy as np
 import soundfile as sf
 import torch
 
-from . import __version__, adapter, config, cover, edit_flow, library, sheetsage_adapter
+from . import __version__, adapter, config, cover, edit_flow, library, sheetsage_adapter, workflow
 from .vendor import abc_tools
 
 # Where generated works are stored; main() may override it with --runs.
@@ -1093,6 +1093,21 @@ def cover_detect_python():
     return f"Using {found} for this session — add it to .env (or --sheetsage-python) to persist."
 
 
+def _abs_of_run(value) -> str:
+    """Absolute path of a run given an absolute path, a Library rel or empty."""
+    if not (value or "").strip():
+        return ""
+    return str((RUNS / _rel_of_run(value)).resolve())
+
+
+def publish_current(path):
+    """Band for the hidden current-work bridge; clears an invalid stored path once."""
+    text = workflow.band(RUNS, path)
+    if (path or "").strip() and not text:
+        return gr.update(value=""), ""      # stale localStorage entry: drop it, then settle
+    return gr.update(), text
+
+
 def _rel_of_run(value) -> str:
     """Accept a run directory (absolute) or a Library rel and return the rel."""
     text = (value or "").strip()
@@ -1822,6 +1837,18 @@ table { border-color: var(--bb-line) !important; }
 /* the environment status is a hint, not content: same scale as the note below it */
 #bb-env-status textarea { font-size: 11.5px !important; line-height: 1.55 !important;
   letter-spacing: .04em; color: var(--bb-ink3) !important; }
+/* current work: a factual one-line band above the start strip, fed by a hidden
+   bridge that the client mirrors to localStorage (per browser, not per server) */
+#bb-current-work { display: none !important; }
+#bb-current-band-wrap { min-height: 0; }
+#bb-current-band {
+  display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline;
+  border: 1px solid var(--bb-line); border-radius: 8px; background: var(--bb-panel);
+  padding: 7px 12px; margin-bottom: 10px;
+  font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--bb-ink2);
+}
+#bb-current-band b { color: var(--bb-ink); font-weight: 500; }
+
 /* first-run strip + global busy banner */
 #bb-start { align-items: center; gap: 8px; margin-bottom: 10px; }
 #bb-start .bb-note p { margin: 0; }
@@ -2457,6 +2484,36 @@ HEAD_HTML += ("<script>window.__BB_EXAMPLES__ = "
 HEAD_HTML += "<script>" + EXAMPLE_JS + "</script>"
 HEAD_HTML += "<script>" + library.LIBRARY_JS + "</script>"
 
+CURRENT_WORK_JS = r"""(function () {
+  var KEY = 'bb-current';
+  function area() {
+    var box = document.getElementById('bb-current-work');
+    return box ? box.querySelector('textarea') : null;
+  }
+  function setNative(el, value) {
+    var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+    setter.call(el, value);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  var restored = false;
+  setInterval(function () {
+    var el = area();
+    if (!el) return;
+    var stored = '';
+    try { stored = localStorage.getItem(KEY) || ''; } catch (e) {}
+    if (!restored) {
+      restored = true;
+      if (!el.value && stored) setNative(el, stored);   // ask the server to validate it
+      return;
+    }
+    if (el.value && el.value !== stored) {
+      try { localStorage.setItem(KEY, el.value); } catch (e) {}   // server-set: remember it
+    }
+  }, 500);
+})();"""
+HEAD_HTML += "<script>" + CURRENT_WORK_JS + "</script>"
+
 
 def bb_theme():
     """Bearbone dark scene at startup; bright is switched at runtime via CSS variables."""
@@ -2487,6 +2544,9 @@ def build_ui(defaults):
 
     with gr.Blocks(title="YUE2 // GROOVE") as demo:
         gr.HTML(header)
+        current_band = gr.HTML("", elem_id="bb-current-band-wrap")
+        current_bridge = gr.Textbox(value="", elem_id="bb-current-work",
+                                    elem_classes=["bb-output"])
         with gr.Row(elem_id="bb-start"):
             gr.Markdown("START →", elem_classes=["bb-note"])
             start_song_btn = gr.Button("NEW SONG", size="sm", scale=1)
@@ -3081,6 +3141,8 @@ def build_ui(defaults):
                          outputs=doctor_out)
         load_btn.click(lambda *a: load_pipeline(*a)[1], inputs=model_args, outputs=env_status)
         unload_btn.click(lambda: (unload_pipeline(), "Model unloaded")[1], outputs=env_status)
+        current_bridge.change(publish_current, inputs=[current_bridge],
+                              outputs=[current_band, current_bridge])
         start_song_btn.click(lambda: gr.update(selected="gen"), outputs=tabs)
         start_cover_btn.click(lambda: gr.update(selected="cover"), outputs=tabs)
         start_edit_btn.click(lambda: gr.update(selected="edit"), outputs=tabs)
