@@ -111,9 +111,10 @@ def test_cover_transcribe_yields_result_and_frees_the_lock(monkeypatch, tmp_path
     monkeypatch.setattr(webui.sheetsage_adapter, "transcribe", fake_transcribe)
     yields = list(webui.cover_transcribe(str(audio), "melody-full", 0, "m-a-p/SheetSage2",
                                          "auto", "auto", "", "/mert-snapshot", False, False))
-    assert all(len(chunk) == 12 for chunk in yields)         # matches the 12 wired outputs
+    assert all(len(chunk) == 13 for chunk in yields)         # + current_bridge
     abc, files, status, *controls = yields[-1]
-    assert len(controls) == 9
+    assert len(controls) == 10
+    assert controls[9] == str(transcript)                    # transcription sets current work
     assert controls[7]["open"] is True                       # GENERATE COVER surfaced
     assert controls[8]["value"] == "transcriptions/reference"  # new transcription preselected
     assert abc == CHORD_FREE and files and str(transcript / "score.abc") in files
