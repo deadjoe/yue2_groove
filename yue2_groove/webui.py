@@ -2172,13 +2172,15 @@ button.stop { text-transform: uppercase !important; }
 .bb-actionbar { align-items: center !important; gap: 8px !important; flex-wrap: nowrap !important; }
 .bb-actionbar > * { flex: 0 0 auto !important; width: auto !important; min-width: 0 !important; }
 .bb-actionbar .bb-push-right { margin-left: auto !important; }
-.bb-actionbar button.sm.secondary {
+.bb-actionbar button.sm.secondary,
+button.sm.secondary.bb-secondary {
   height: 30px !important; min-height: 30px !important; padding: 0 14px !important;
   font-size: 11.5px !important; font-weight: 500 !important; letter-spacing: .12em !important;
   background: transparent !important; border: 1px solid var(--bb-line) !important;
   color: var(--bb-ink2) !important;
 }
-.bb-actionbar button.sm.secondary:hover {
+.bb-actionbar button.sm.secondary:hover,
+button.sm.secondary.bb-secondary:hover {
   border-color: var(--bb-line2) !important; color: var(--bb-ink) !important;
   background: transparent !important;
 }
@@ -3489,9 +3491,10 @@ def build_ui(defaults):
                                     _library_mode("time", "desc"))[1]],
                                 info="A saved work or transcription with a score.abc",
                                 interactive=True)
-                            cover_source_refresh = gr.Button("REFRESH", size="sm", scale=1)
-                            cover_load_btn = gr.Button("LOAD ABC", size="sm", scale=1)
-                            cover_send_edit_btn = gr.Button("SEND TO EDIT", size="sm", scale=1)
+                        with gr.Row(elem_classes=["bb-tools"]):
+                            cover_source_refresh = gr.Button("REFRESH", size="sm")
+                            cover_load_btn = gr.Button("LOAD ABC", size="sm")
+                            cover_send_edit_btn = gr.Button("SEND TO EDIT", size="sm")
                         cover_abc = gr.Textbox(label="COVER ABC", lines=10, max_lines=24,
                                                elem_id="bb-cover-abc")
                         gr.HTML('<div class="bb-score-title">SCORE VIEW</div>'
@@ -3526,6 +3529,7 @@ def build_ui(defaults):
                                 cover_cfg = gr.Number(value=0, label="CFG SCALE", scale=1)
                                 cover_generate_btn = gr.Button("GENERATE COVER", size="sm",
                                                                scale=2,
+                                                               elem_classes=["bb-secondary"],
                                                                elem_id="bb-cover-generate")
                                 cover_open_library_btn = gr.Button("OPEN IN LIBRARY", size="sm",
                                                                    scale=1)
