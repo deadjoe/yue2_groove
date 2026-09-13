@@ -148,7 +148,8 @@ upstream's tools).
 
 ## Configuration
 
-Create a `.env` file in the repository root (ignored by git); `scripts/serve.sh` reads it:
+Create a `.env` file in the repository root (ignored by git). Both `scripts/serve.sh`
+and the app itself read it, so the settings apply however you launch:
 
 ```bash
 YUE2_GROOVE_AUTH=alice:my-secret     # login for the web UI; set this before exposing it on a LAN
@@ -166,7 +167,21 @@ YUE2_GROOVE_SHEETSAGE_DEVICE=auto              # auto | cuda | mps | cpu
 YUE2_GROOVE_SHEETSAGE_KEEP_WARM=1             # reuse a resident SheetSage2 worker (faster repeats)
 YUE2_GROOVE_SHEETSAGE_IDLE_SECONDS=900        # resident worker idle lifetime
 YUE2_GROOVE_TRANSCRIPTIONS=/path/to/transcriptions   # wins over <runs>/transcriptions
+
+# Apple Silicon memory guard: cap PyTorch's MPS allocator so it cannot drive the
+# machine into swap.  Defaults are 1.7 (HIGH) / 1.4 (LOW) of the recommended
+# working set; 1.7 can exceed physical RAM on a 64 GB Mac (1.7 x 51.8 GiB = 88 GiB)
+# and has caused a kernel panic.  Set BOTH: PyTorch rejects a HIGH below the
+# default LOW unless LOW is lowered too.  Never use HIGH=0.0 on a shared machine:
+# it *disables* the cap (it does not mean zero memory).
+PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.8
+PYTORCH_MPS_LOW_WATERMARK_RATIO=0.5
 ```
+
+On Apple Silicon, run `bash scripts/watch_memory.sh` (or `--once` for one
+snapshot) in a second terminal while a generation runs: it shows free memory,
+kernel pressure, swap, compressor pages and swapfiles, and turns WARN/CRIT well
+before the panic state. Keep SWAP and COMPR near zero.
 
 The same things are available as command-line flags:
 
