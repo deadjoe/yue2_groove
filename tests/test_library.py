@@ -241,7 +241,8 @@ def test_library_js_binds_players_immediately_and_delegates_clicks() -> None:
 
 
 def test_library_viz_draws_dashed_columns() -> None:
-    """The player spectrum is drawn as mirror-symmetric dashed columns (3 on / 3 off)."""
+    """The player spectrum is drawn as mirror-symmetric dashed columns (6 on / 6 off)."""
     js = lib.LIBRARY_JS
-    assert "setLineDash([3, 3])" in js
+    assert "var step = 10, barW = 3;" in js
+    assert "setLineDash([6, 6])" in js
     assert "ctx.stroke()" in js and "setLineDash([])" in js   # restored after the frame

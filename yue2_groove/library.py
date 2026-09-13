@@ -680,14 +680,14 @@ LIBRARY_JS = r"""(function () {
     }
     state.analyser.getByteFrequencyData(state.data);
     var bins = state.data.length;
-    var step = 6, barW = 3;
+    var step = 10, barW = 3;
     var bars = Math.max(1, Math.floor(w / step));
     var usable = Math.max(1, Math.floor(bins * 0.85));
     // dashed columns: one mirror-symmetric dashed stroke per band (3 on / 3 off),
     // aligned to the half pixel so a 3 px line stays crisp.
     ctx.strokeStyle = state.ink;
     ctx.lineWidth = barW;
-    ctx.setLineDash([3, 3]);
+    ctx.setLineDash([6, 6]);
     ctx.globalAlpha = 0.9;
     for (var i = 0; i < bars; i++) {
       // log-ish bin mapping: give the low end more bars, like a real analyser
