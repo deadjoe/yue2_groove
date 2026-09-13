@@ -276,7 +276,7 @@ matrix is:
 
 | yue2-groove | YuE2 (`yue2-infer`) | Notes |
 |---|---|---|
-| 0.1.x | `yue2-v0.1.6` | NAR/VAE progress via an internal hook; a [pull request](https://github.com/multimodal-art-projection/YuE/pull/173) adds a public `on_progress` callback that the UI uses automatically once merged |
+| 0.8.x | `yue2-v0.1.6` | NAR/VAE progress via an internal hook; a [pull request](https://github.com/multimodal-art-projection/YuE/pull/173) adds a public `on_progress` callback that the UI uses automatically once merged |
 
 SheetSage2 is used only by 02 COVER, through its Transformers interface
 (`AutoModel.from_pretrained(..., trust_remote_code=True)` then `transcribe(..., melody_only=True)`).

@@ -62,7 +62,7 @@ import numpy as np
 import soundfile as sf
 import torch
 
-from . import adapter, config, cover, edit_flow, library, sheetsage_adapter
+from . import __version__, adapter, config, cover, edit_flow, library, sheetsage_adapter
 from .vendor import abc_tools
 
 # Where generated works are stored; main() may override it with --runs.
@@ -1728,6 +1728,12 @@ table { border-color: var(--bb-line) !important; }
 /* the environment status is a hint, not content: same scale as the note below it */
 #bb-env-status textarea { font-size: 11.5px !important; line-height: 1.55 !important;
   letter-spacing: .04em; color: var(--bb-ink3) !important; }
+/* footer credit link */
+#bb-footer a {
+  color: var(--bb-ink2) !important; text-decoration: underline; text-underline-offset: 3px;
+}
+#bb-footer a:hover { color: var(--bb-ink) !important; }
+
 /* listening comparison link */
 #bb-compare-link a,
 #bb-allmodes-link a {
@@ -2361,9 +2367,10 @@ def build_ui(defaults):
 <div id="bb-header">
   <h1>YUE2<span class="bb-slash">//</span>GROOVE</h1>
 </div>"""
-    footer = """
+    footer = f"""
 <div id="bb-footer">
-  <span>YUE2-INFER 0.1.6 · MODEL WEIGHTS CC BY-NC 4.0 (NON-COMMERCIAL)</span>
+  <span>YUE2-INFER 0.1.6 · GROOVE {__version__} · MODEL WEIGHTS CC BY-NC 4.0 (NON-COMMERCIAL)</span>
+  <span>Developed by DEADJOE@GITHUB(<a href="https://github.com/deadjoe/yue2_groove" target="_blank" rel="noopener">yue2_groove</a>)</span>
 </div>"""
 
     with gr.Blocks(title="YUE2 // GROOVE") as demo:
