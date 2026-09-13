@@ -1853,6 +1853,7 @@ DARK = {
     "fg": "#F1ECE2", "fg2": "#B5AEA2", "fg3": "#7A746A", "fg4": "#57524A",
     "stroke": "#2E2B27", "stroke2": "#8C8477",
     "primary_fill": "#F1ECE2", "primary_hover": "#FBF8F2", "primary_text": "#16140F",
+    "danger": "#D08A8A",
 }
 
 BRIGHT = {
@@ -1860,6 +1861,7 @@ BRIGHT = {
     "fg": "#16140F", "fg2": "#4A463F", "fg3": "#7A746A", "fg4": "#A69D8D",
     "stroke": "#C4BBA8", "stroke2": "#7E7462",
     "primary_fill": "#11141C", "primary_hover": "#2B3244", "primary_text": "#F1ECE2",
+    "danger": "#B23B3B",
 }
 
 
@@ -1916,7 +1918,12 @@ def _theme_values(p):
         "button_large_radius": "9px",
         "button_medium_radius": "9px",
         "button_small_radius": "8px",
+        "button_large_text_size": "12px",
         "button_large_text_weight": "600",
+        "button_large_padding": "8px 18px",
+        "button_small_text_size": "11px",
+        "button_small_text_weight": "500",
+        "button_small_padding": "4px 10px",
         "button_primary_background_fill": p["primary_fill"],
         "button_primary_background_fill_hover": p["primary_hover"],
         "button_primary_border_color": p["primary_fill"],
@@ -1998,6 +2005,7 @@ def _bb_vars(p):
         "--bb-primary-bg": p["primary_fill"],
         "--bb-primary-bg-hover": p["primary_hover"],
         "--bb-primary-fg": p["primary_text"],
+        "--bb-danger": p["danger"],
         "--bb-chip-bg": p["stroke"] if p is not BRIGHT else p["primary_fill"],
         "--bb-chip-fg": p["fg"] if p is not BRIGHT else p["primary_text"],
     }
@@ -2142,10 +2150,69 @@ input:focus, textarea:focus, select:focus {
   border-color: var(--bb-line2) !important; box-shadow: none !important; outline: none !important;
 }
 *:focus, *:focus-visible { box-shadow: none !important; outline: none !important; }
-/* buttons */
-button.primary { text-transform: uppercase !important; letter-spacing: .1em !important; }
+/* buttons: Bearbone ops scale (11–12px, wide tracking) instead of Gradio's
+   16px display scale.  Primary is the only filled action; alternatives are
+   outline; utilities are quiet and content-width. */
+button.lg {
+  height: 34px !important; min-height: 34px !important; padding: 0 18px !important;
+  font-size: 12px !important; font-weight: 600 !important; letter-spacing: .14em !important;
+  text-transform: uppercase !important; border-radius: 8px !important;
+  white-space: nowrap !important;
+}
+button.sm {
+  height: 27px !important; min-height: 27px !important; padding: 0 10px !important;
+  font-size: 11px !important; font-weight: 500 !important; letter-spacing: .10em !important;
+  text-transform: uppercase !important; border-radius: 8px !important;
+  white-space: nowrap !important;
+}
+button.primary { text-transform: uppercase !important; letter-spacing: .14em !important; }
 button.primary:hover { background: var(--bb-primary-bg-hover) !important; }
-button.stop { text-transform: uppercase !important; letter-spacing: .1em !important; }
+button.stop { text-transform: uppercase !important; }
+/* an action bar: one filled focus, lighter alternatives, a ghost escape */
+.bb-actionbar { align-items: center !important; gap: 8px !important; flex-wrap: nowrap !important; }
+.bb-actionbar > * { flex: 0 0 auto !important; width: auto !important; min-width: 0 !important; }
+.bb-actionbar .bb-push-right { margin-left: auto !important; }
+.bb-actionbar button.sm.secondary {
+  height: 30px !important; min-height: 30px !important; padding: 0 14px !important;
+  font-size: 11.5px !important; font-weight: 500 !important; letter-spacing: .12em !important;
+  background: transparent !important; border: 1px solid var(--bb-line) !important;
+  color: var(--bb-ink2) !important;
+}
+.bb-actionbar button.sm.secondary:hover {
+  border-color: var(--bb-line2) !important; color: var(--bb-ink) !important;
+  background: transparent !important;
+}
+.bb-actionbar button.sm.stop {
+  height: 30px !important; min-height: 30px !important; padding: 0 10px !important;
+  font-size: 11.5px !important; font-weight: 500 !important; letter-spacing: .10em !important;
+  background: transparent !important; border: 1px solid transparent !important;
+  color: var(--bb-ink3) !important; box-shadow: none !important;
+}
+.bb-actionbar button.sm.stop:hover {
+  color: var(--bb-ink) !important; background: transparent !important;
+  border-color: transparent !important;
+}
+/* tool rows: content-width, quiet, border on hover only */
+.bb-tools { align-items: center !important; gap: 8px !important; flex-wrap: wrap !important; }
+.bb-tools > * { flex: 0 0 auto !important; width: auto !important; min-width: 0 !important; }
+.bb-tools button.sm {
+  background: transparent !important; border: 1px solid transparent !important;
+  color: var(--bb-ink3) !important;
+}
+.bb-tools button.sm:hover {
+  border-color: var(--bb-line) !important; color: var(--bb-ink) !important;
+  background: transparent !important;
+}
+.bb-tools button.sm.stop { color: var(--bb-ink3) !important; }
+.bb-tools button.sm.stop:hover {
+  color: var(--bb-danger) !important; border-color: var(--bb-danger) !important;
+}
+/* the destructive confirmation is the only solid danger in the UI */
+button.sm.stop.bb-danger-solid {
+  background: var(--bb-danger) !important; border-color: var(--bb-danger) !important;
+  color: var(--bb-primary-fg) !important;
+}
+button.sm.stop.bb-danger-solid:hover { filter: brightness(1.08); }
 /* scrollbar / selection */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--bb-line); border-radius: 6px; }
@@ -2219,6 +2286,8 @@ table { border-color: var(--bb-line) !important; }
   .bb-eg { width: 24px; height: 24px; font-size: 11px; }
   .bb-pback, .bb-pbtn, .bb-pend { width: 26px; height: 26px; }
   .bb-pjump { width: 40px; height: 26px; font-size: 10.5px; }
+  /* touch targets stay comfortable even at the ops scale */
+  button.sm { height: 32px !important; min-height: 32px !important; }
 }
 /* static footnote-style notes (matches the sub-label / footer scale, not body text) */
 .bb-note p { font-size: 11px !important; line-height: 1.55; letter-spacing: .04em;
@@ -2282,11 +2351,21 @@ html.bb-view-studio #bb-song-root { display: none !important; }
   color: var(--bb-ink);
 }
 #bb-song-empty p.bb-song-sub { font-size: 12px; color: var(--bb-ink3); margin: 0 0 6px; }
-#bb-song-cards { align-items: stretch; gap: 10px; margin-top: 18px; }
-#bb-song-cards .bb-song-card { border: 1px solid var(--bb-line) !important;
-  border-radius: 10px !important; background: var(--bb-field) !important; padding: 4px !important; }
-#bb-song-cards button { text-transform: uppercase !important; letter-spacing: .1em !important;
-  min-height: 64px; }
+#bb-song-cards { gap: 10px !important; align-items: stretch !important; margin-top: 18px; }
+#bb-song-cards .bb-song-card {
+  border: 1px solid var(--bb-line) !important; border-radius: 10px !important;
+  background: var(--bb-field) !important; padding: 14px 16px 12px !important;
+  display: flex !important; flex-direction: column !important; justify-content: space-between !important;
+  gap: 10px !important;
+}
+#bb-song-cards .bb-card-title {
+  font-size: 13px; font-weight: 600; letter-spacing: .06em; color: var(--bb-ink);
+  text-transform: uppercase;
+}
+#bb-song-cards .bb-card-sub {
+  font-size: 11px; letter-spacing: .04em; color: var(--bb-ink3); margin-top: 4px;
+}
+#bb-song-cards .bb-song-card button { width: 100% !important; }
 /* SONG: current work */
 #bb-song-work { gap: 12px; }
 #bb-song-identity {
@@ -2395,6 +2474,9 @@ button:disabled, button[disabled] { opacity: .4 !important; cursor: not-allowed 
    always visible instead of hidden in the dropdown). */
 @media (max-width: 700px) {
   .gradio-container { padding: 14px 10px 6px !important; }
+  /* action bars and tool rows wrap instead of running off the screen */
+  .bb-actionbar, .bb-tools { flex-wrap: wrap !important; }
+  .bb-actionbar .bb-push-right { margin-left: 0 !important; }
   #bb-header { padding: 16px 12px 12px; contain: inline-size; }
   #bb-header h1 { font-size: 18px; margin: 8px 0 6px; overflow-wrap: anywhere; }
   /* phones: rail toggle + theme button share one row */
@@ -3221,11 +3303,17 @@ def build_ui(defaults):
                         'then SONG shows its stage and the next step. Knobs live in STUDIO.</p>')
                 with gr.Row(elem_id="bb-song-cards"):
                     with gr.Column(elem_classes=["bb-song-card"]):
-                        song_new_btn = gr.Button("NEW SONG", size="lg")
+                        gr.HTML('<div class="bb-card-title">NEW SONG</div>'
+                                '<div class="bb-card-sub">Style + lyrics → a new work</div>')
+                        song_new_btn = gr.Button("START", size="sm")
                     with gr.Column(elem_classes=["bb-song-card"]):
-                        song_cover_start_btn = gr.Button("COVER A RECORDING", size="lg")
+                        gr.HTML('<div class="bb-card-title">COVER A RECORDING</div>'
+                                '<div class="bb-card-sub">Audio → ABC → a new song</div>')
+                        song_cover_start_btn = gr.Button("START", size="sm")
                     with gr.Column(elem_classes=["bb-song-card"]):
-                        song_edit_start_btn = gr.Button("EDIT A WORK", size="lg")
+                        gr.HTML('<div class="bb-card-title">EDIT A WORK</div>'
+                                '<div class="bb-card-sub">Load a saved work and revise it</div>')
+                        song_edit_start_btn = gr.Button("START", size="sm")
             with gr.Column(elem_id="bb-song-work", visible=False) as song_work:
                 song_identity = gr.HTML("")
                 song_stage = gr.HTML("")
@@ -3281,14 +3369,15 @@ def build_ui(defaults):
                             out_id = gr.Textbox(value="", label="OUTPUT ID", max_lines=1, scale=1)
                             request_reset_btn = gr.Button("RESET", size="sm", scale=1,
                                                           elem_id="bb-reset-request")
-                        with gr.Row():
-                            run_btn = gr.Button("GENERATE", variant="primary", size="lg", scale=3,
+                        with gr.Row(elem_classes=["bb-actionbar"]):
+                            run_btn = gr.Button("GENERATE", variant="primary", size="lg",
                                                 elem_id="bb-run")
-                            plan_btn = gr.Button("PLAN ONLY", size="lg", scale=2, elem_id="bb-plan")
-                            allmodes_btn = gr.Button("ALL MODES", size="lg", scale=2,
+                            plan_btn = gr.Button("PLAN ONLY", size="sm", elem_id="bb-plan")
+                            allmodes_btn = gr.Button("ALL MODES", size="sm",
                                                      elem_id="bb-allmodes")
-                            cancel_btn = gr.Button("CANCEL", variant="stop", size="lg", scale=1,
-                                                   elem_id="bb-cancel")
+                            cancel_btn = gr.Button("CANCEL", variant="stop", size="sm",
+                                                   elem_id="bb-cancel",
+                                                   elem_classes=["bb-push-right"])
                         allmodes_link = gr.HTML(elem_id="bb-allmodes-link")
                         with gr.Accordion("SCORE INPUT (optional)",
                                           open=False) as score_input_accordion:
@@ -3337,9 +3426,9 @@ def build_ui(defaults):
                         with gr.Accordion("ARTIFACTS", open=False):
                             files_out = gr.File(label="FILES", file_count="multiple", height=120,
                                                 elem_id="bb-files")
-                        with gr.Row():
-                            open_library_btn = gr.Button("OPEN IN LIBRARY", size="sm", scale=1)
-                            gen_edit_btn = gr.Button("EDIT THIS RUN", size="sm", scale=1)
+                        with gr.Row(elem_classes=["bb-tools"]):
+                            open_library_btn = gr.Button("OPEN IN LIBRARY", size="sm")
+                            gen_edit_btn = gr.Button("EDIT THIS RUN", size="sm")
                         gen_status = gr.Textbox(label="STATUS", lines=6, interactive=False)
                         gen_last_run = gr.State("")
 
@@ -3380,18 +3469,19 @@ def build_ui(defaults):
                                 cover_revision = gr.Textbox(label="MODEL REVISION", max_lines=1,
                                                             scale=1)
                                 cover_offline = gr.Checkbox(value=False, label="OFFLINE", scale=1)
-                        with gr.Row():
+                        with gr.Row(elem_classes=["bb-actionbar"]):
                             cover_btn = gr.Button("TRANSCRIBE", variant="primary", size="lg",
-                                                  scale=3, elem_id="bb-cover-run")
-                            cover_cancel_btn = gr.Button("CANCEL", variant="stop", size="lg", scale=1)
-                        with gr.Row():
+                                                  elem_id="bb-cover-run")
+                            cover_cancel_btn = gr.Button("CANCEL", variant="stop", size="sm",
+                                                         elem_classes=["bb-push-right"])
+                        with gr.Row(elem_classes=["bb-tools"]):
                             cover_keep_warm = gr.Checkbox(
                                 value=config.sheetsage_keep_warm(), label="KEEP SHEETSAGE2 WARM",
                                 info="Reuse one resident model process between transcriptions until "
-                                     "UNLOAD or the idle timeout", scale=3)
-                            cover_env_btn = gr.Button("CHECK ENVIRONMENT", size="sm", scale=1)
-                            cover_detect_btn = gr.Button("AUTO-DETECT VENV", size="sm", scale=1)
-                            cover_unload_btn = gr.Button("UNLOAD SHEETSAGE2", size="sm", scale=1)
+                                     "UNLOAD or the idle timeout")
+                            cover_env_btn = gr.Button("CHECK ENVIRONMENT", size="sm")
+                            cover_detect_btn = gr.Button("AUTO-DETECT VENV", size="sm")
+                            cover_unload_btn = gr.Button("UNLOAD SHEETSAGE2", size="sm")
                         with gr.Row():
                             cover_source = gr.Dropdown(
                                 label="SOURCE WORK", scale=4,
@@ -3412,11 +3502,11 @@ def build_ui(defaults):
                         with gr.Row():
                             cover_keep = gr.Dropdown(
                                 choices=["both", "Vocal", "Ins"], value="both",
-                                label="MELODY VOICES", scale=1,
+                                label="MELODY VOICES", scale=2,
                                 info="Which melodies survive STRIP and the cover generation")
-                            cover_strip_btn = gr.Button("STRIP CHORDS", size="sm", scale=1)
+                            cover_strip_btn = gr.Button("STRIP CHORDS", size="sm", scale=0)
                             cover_send_btn = gr.Button("SEND TO GENERATE", variant="primary",
-                                                       size="sm", scale=2)
+                                                       size="lg", scale=0)
                         with gr.Accordion("GENERATE COVER // direct from this score",
                                           open=False) as cover_generate_accordion:
                             gr.Markdown(
@@ -3434,10 +3524,10 @@ def build_ui(defaults):
                                 cover_seed = gr.Number(value=831001, label="SEED", precision=0,
                                                        scale=1)
                                 cover_cfg = gr.Number(value=0, label="CFG SCALE", scale=1)
-                                cover_generate_btn = gr.Button("GENERATE COVER", variant="primary",
-                                                               size="lg", scale=2,
+                                cover_generate_btn = gr.Button("GENERATE COVER", size="sm",
+                                                               scale=2,
                                                                elem_id="bb-cover-generate")
-                                cover_open_library_btn = gr.Button("OPEN IN LIBRARY", size="lg",
+                                cover_open_library_btn = gr.Button("OPEN IN LIBRARY", size="sm",
                                                                    scale=1)
                             cover_sampling_note = gr.Textbox(
                                 label="SAMPLING // FROM 01 GENERATE", lines=2,
@@ -3520,10 +3610,11 @@ def build_ui(defaults):
                                         "about how the generated audio sounds — confirm with the "
                                         "listening comparison below (whole song and a passage "
                                         "around the edit).", elem_classes=["bb-note"])
-                        with gr.Row():
+                        with gr.Row(elem_classes=["bb-actionbar"]):
                             edit_run_btn = gr.Button("GENERATE EDITED", variant="primary",
-                                                     size="lg", scale=3, elem_id="bb-edit-run")
-                            edit_cancel_btn = gr.Button("CANCEL", variant="stop", size="lg", scale=1)
+                                                     size="lg", elem_id="bb-edit-run")
+                            edit_cancel_btn = gr.Button("CANCEL", variant="stop", size="sm",
+                                                        elem_classes=["bb-push-right"])
                         edit_sampling_note = gr.Textbox(label="SAMPLING // FROM 01 GENERATE",
                                                         lines=2, interactive=False,
                                                         elem_id="bb-edit-sampling")
@@ -3564,7 +3655,8 @@ def build_ui(defaults):
                                 lib_sort_dir = gr.Radio(
                                     choices=[("DESC", "desc"), ("ASC", "asc")],
                                     value="desc", label="ORDER", elem_id="bb-lib-order")
-                                lib_refresh_btn = gr.Button("REFRESH", size="sm", elem_id="bb-lib-refresh")
+                                with gr.Row(elem_classes=["bb-tools"]):
+                                    lib_refresh_btn = gr.Button("REFRESH", size="sm", elem_id="bb-lib-refresh")
                                 lib_list = gr.CheckboxGroup(choices=[], value=[], label="WORKS",
                                                             interactive=True, elem_id="bb-lib-list")
                                 with gr.Row():
@@ -3572,19 +3664,21 @@ def build_ui(defaults):
                                                                 scale=3, elem_id="bb-lib-rename-box")
                                     lib_rename_btn = gr.Button("RENAME", size="sm", scale=1,
                                                                interactive=False, elem_id="bb-lib-rename")
-                                with gr.Row():
+                                with gr.Row(elem_classes=["bb-tools"]):
                                     lib_edit_btn = gr.Button("OPEN IN 03 EDIT", size="sm",
-                                                             scale=1, elem_id="bb-lib-edit")
+                                                             elem_id="bb-lib-edit")
                                     lib_cover_btn = gr.Button("USE IN 02 COVER", size="sm",
-                                                              scale=1, elem_id="bb-lib-cover")
-                                lib_delete_btn = gr.Button("DELETE SELECTED", size="sm",
-                                                           elem_id="bb-lib-delete")
+                                                              elem_id="bb-lib-cover")
+                                with gr.Row(elem_classes=["bb-tools"]):
+                                    lib_delete_btn = gr.Button("DELETE SELECTED", size="sm",
+                                                               elem_id="bb-lib-delete")
                                 lib_confirm = gr.HTML("", elem_id="bb-lib-confirm")
-                                with gr.Row():
+                                with gr.Row(elem_classes=["bb-tools"]):
                                     lib_confirm_btn = gr.Button("CONFIRM DELETE", variant="stop", size="sm",
-                                                                scale=1, interactive=False,
+                                                                interactive=False,
+                                                                elem_classes=["bb-danger-solid"],
                                                                 elem_id="bb-lib-confirm-delete")
-                                    lib_cancel_btn = gr.Button("CANCEL", size="sm", scale=1,
+                                    lib_cancel_btn = gr.Button("CANCEL", size="sm",
                                                                elem_id="bb-lib-cancel-delete")
                                 lib_pending = gr.State([])
                                 # hidden bridge: row clicks set this to the work being viewed
@@ -3615,7 +3709,7 @@ def build_ui(defaults):
                             abc_tool_text = gr.Textbox(label="ABC", lines=6,
                                                        value=(config.EXAMPLES_DIR / "melody.abc").read_text(encoding="utf-8")
                                                        if (config.EXAMPLES_DIR / "melody.abc").exists() else "")
-                            with gr.Row():
+                            with gr.Row(elem_classes=["bb-tools"]):
                                 inspect_btn = gr.Button("VALIDATE / EXPORT EVENTS", size="sm")
                                 strip_btn = gr.Button("STRIP CHORDS (cover melody)", size="sm")
                                 strip_voice = gr.Dropdown(choices=["both", "Vocal", "Ins"], value="both",
@@ -3625,7 +3719,7 @@ def build_ui(defaults):
                                         "meter are unchanged after editing.",
                                         elem_classes=["bb-note"])
                             abc_after = gr.Textbox(label="AFTER // EDITED ABC", lines=6)
-                            with gr.Row():
+                            with gr.Row(elem_classes=["bb-tools"]):
                                 compare_voice = gr.Dropdown(choices=["both", "Vocal", "Ins"], value="both",
                                                             label="COMPARE VOICES", scale=1)
                                 allow_tempo = gr.Checkbox(value=False, label="ALLOW TEMPO CHANGE", scale=1)
@@ -3685,8 +3779,9 @@ def build_ui(defaults):
                                 full_decode = gr.Checkbox(value=False, label="FULL DECODE")
                                 decode_reset_btn = gr.Button("RESET", size="sm", scale=0,
                                                              elem_id="bb-reset-decode")
-                        decode_btn = gr.Button("RE-DECODE", variant="primary", size="lg",
-                                               elem_id="bb-decode")
+                        with gr.Row(elem_classes=["bb-actionbar"]):
+                            decode_btn = gr.Button("RE-DECODE", variant="primary", size="lg",
+                                                   elem_id="bb-decode")
                         decode_audio = gr.Audio(label="RESULT", type="filepath")
                         decode_status = gr.Textbox(label="STATUS", lines=6, interactive=False)
 
@@ -3707,7 +3802,7 @@ def build_ui(defaults):
                                                             '{"id":"jazz1","style":"English jazz","lyrics":"...","cot":"melody","seed":7}')
                         with gr.Row():
                             batch_id = gr.Textbox(label="OUTPUT NAME", value="batch", max_lines=1, scale=2)
-                            batch_btn = gr.Button("RUN BATCH", variant="primary", size="lg", scale=1,
+                            batch_btn = gr.Button("RUN BATCH", variant="primary", size="lg", scale=0,
                                                   elem_id="bb-batch")
                         batch_table = gr.Dataframe(headers=["id", "status", "audio", "seconds", "artifacts"],
                                                    label="RESULTS", wrap=True)
