@@ -2533,7 +2533,12 @@ button:disabled, button[disabled] { opacity: .4 !important; cursor: not-allowed 
    16px inputs stop iOS Safari from zooming the page on focus; the ⓘ and the
    ABC fold control get real touch targets. */
 @media (hover: none) and (pointer: coarse) {
-  input, textarea, select { font-size: 16px !important; }
+  /* 16px stops iOS Safari zooming on focus — but only a field that can take
+     focus needs it.  Gradio renders output/status boxes as disabled, so they
+     keep the desktop 13px instead of jumping to 16px. */
+  input:not([disabled]):not([readonly]),
+  textarea:not([disabled]):not([readonly]),
+  select:not([disabled]) { font-size: 16px !important; }
   .bb-i { width: 20px !important; height: 20px !important; }
   .bb-fold { width: 22px !important; height: 22px !important; font-size: 12px !important; }
 }

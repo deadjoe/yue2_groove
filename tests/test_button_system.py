@@ -86,6 +86,13 @@ def test_action_bars_and_tool_rows_exist() -> None:
     assert sum("bb-tools" in c for c in classes) >= 5
 
 
+def test_touch_zoom_hack_is_scoped_to_editable_fields() -> None:
+    css = webui.BASE_CSS
+    # disabled output/status boxes must not be forced to 16px on iOS/iPadOS
+    assert "input:not([disabled]):not([readonly])" in css
+    assert "input, textarea, select { font-size: 16px" not in css
+
+
 def test_upload_drop_zone_uses_the_hint_scale() -> None:
     css = webui.BASE_CSS
     assert '[data-testid="upload-text"] { font-size: 12px !important' in css
