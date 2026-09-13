@@ -32,7 +32,7 @@ dependencies = [
 
 [project.optional-dependencies]
 yue2 = ["yue2-infer @ git+https://github.com/multimodal-art-projection/YuE@yue2-v0.1.6"]
-test = ["pytest>=8"]
+test = ["pytest>=8", "ruff>=0.16,<0.17"]
 
 [project.urls]
 Repository = "https://github.com/deadjoe/yue2_groove"
@@ -49,3 +49,17 @@ yue2_groove = ["static/*", "examples/*.abc", "vendor/*.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# One lint gate for CI and local runs: `.venv/bin/ruff check .`
+# vendor/ is an upstream byte-identical copy (see NOTICE) and static/ ships JS;
+# both are excluded so lint can never rewrite them.
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+extend-exclude = ["yue2_groove/vendor", "yue2_groove/static"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "RUF", "C4", "ISC", "PLW1510", "S110", "BLE001"]
+# RUF001-003: the UI copy intentionally uses typographic dashes;
+# RUF005: explicit list concatenation in the Gradio wiring reads better than splats.
+ignore = ["RUF001", "RUF002", "RUF003", "RUF005"]

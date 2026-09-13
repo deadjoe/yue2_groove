@@ -99,7 +99,7 @@ def test_scan_kinds_sort_and_label(tmp_path: Path) -> None:
              if re.match(r"\d{8}-\d{6}-", i["rel"])]
     assert timed[0] == "20260903-140000-decode"
     # name order uses the display name (timestamp prefix removed)
-    assert [i["rel"] for i in lib.sort_items(items, "name_asc")][0] == "20260903-140000-decode"
+    assert next(i["rel"] for i in lib.sort_items(items, "name_asc")) == "20260903-140000-decode"
     names = [i["name"] for i in lib.sort_items(items, "name_asc")]
     assert names == sorted(names, key=str.lower)
 

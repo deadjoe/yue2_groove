@@ -7,6 +7,7 @@ tests verify the state machine: guards, yields, button re-enabling, states.
 from __future__ import annotations
 
 import json
+import os
 import textwrap
 from pathlib import Path
 
@@ -17,6 +18,7 @@ gr = pytest.importorskip("gradio")
 edit_flow = pytest.importorskip("yue2_groove.edit_flow")
 library = pytest.importorskip("yue2_groove.library")
 webui = pytest.importorskip("yue2_groove.webui")
+abc_tools = pytest.importorskip("yue2_groove.vendor.abc_tools")
 
 BASE_ABC = textwrap.dedent("""\
     X:1
@@ -54,10 +56,6 @@ def make_work(root: Path, name: str = "20260901-120000-source") -> Path:
     return directory
 
 
-def updates(values):
-    return [v for v in values]
-
-
 # ── cover ────────────────────────────────────────────────────────────────
 
 def test_score_panel_marks_the_textarea_label() -> None:
@@ -70,23 +68,24 @@ def test_cover_strip_and_send_flow() -> None:
     stripped, status = webui.cover_strip(BASE_ABC, "both")
     assert '"C"' not in stripped and "verified" in status
 
-    (score_update, cot_update, style_update, lyrics_update, tab_update,
+    (score_update, cot_update, style_update, lyrics_update, score_input, tab_update,
      status) = webui.cover_send_to_generate(BASE_ABC, "melody-full",
-                                            "English jazz", "[Verse]\nla")
+                                            "English jazz", "[Verse]\nla", "both")
     assert '"C"' not in score_update["value"] and score_update["value"].startswith("X:1")
     assert cot_update["value"] == "melody" and tab_update["selected"] == "gen"
     assert style_update["value"] == "English jazz" and lyrics_update["value"] == "[Verse]\nla"
-    assert "STYLE, LYRICS" in status and "GENERATE" in status
+    assert score_input["open"] is True                      # the attached score is visible
+    assert "STYLE, LYRICS" in status and "chord-free" in status and "GENERATE" in status
 
     # empty target fields do not wipe what 01 GENERATE already has
-    (score_update, cot_update, style_update, lyrics_update, _tab,
-     status) = webui.cover_send_to_generate(BASE_ABC, "full", "", "  ")
+    (score_update, cot_update, style_update, lyrics_update, _score_input, _tab,
+     status) = webui.cover_send_to_generate(BASE_ABC, "full", "", "  ", "both")
     assert '"C"' in score_update["value"] and cot_update["value"] == "full"
     assert "value" not in style_update and "value" not in lyrics_update
-    assert "STYLE, LYRICS" not in status
+    assert "STYLE, LYRICS" not in status and "full score" in status
 
     with pytest.raises(gr.Error, match="Cannot send"):
-        webui.cover_send_to_generate("   ", "melody-full", "", "")
+        webui.cover_send_to_generate("   ", "melody-full", "", "", "both")
 
 
 def test_cover_check_environment_reports_missing_configuration(monkeypatch) -> None:
@@ -175,20 +174,22 @@ def test_edit_load_fills_the_baseline(isolated_runs: Path) -> None:
 
 def test_edit_freeze_and_check_guards(isolated_runs: Path) -> None:
     make_work(isolated_runs)
-    record, info, status = webui.edit_freeze("20260901-120000-source")
+    with pytest.raises(gr.Error, match="press LOAD first"):
+        webui.edit_freeze("20260901-120000-source", "20260901-129999-other")
+    record, info, status = webui.edit_freeze("20260901-120000-source", "20260901-120000-source")
     assert record["schema"] == "yue2-groove-baseline-v1" and "untouched" in info
     assert "frozen" in status
     with pytest.raises(gr.Error, match="Load a source work"):
         webui.edit_freeze("")
 
     with pytest.raises(gr.Error, match="Freeze the baseline"):
-        webui.edit_check(BASE_ABC, BASE_ABC, "both", False, None)
-    output, state = webui.edit_check(BASE_ABC, BASE_ABC, "both", False, record)
+        webui.edit_check(BASE_ABC, BASE_ABC, "both", False, None, "exact", False)
+    output, state = webui.edit_check(BASE_ABC, BASE_ABC, "both", False, record, "exact", False)
     assert json.loads(output)["match"] is True and state["sha256"]
-    output, state = webui.edit_check(BASE_ABC, CHORD_FREE, "both", False, record)
+    output, state = webui.edit_check(BASE_ABC, CHORD_FREE, "both", False, record, "exact", False)
     assert json.loads(output)["match"] is True  # chord-only edits pass
     with pytest.raises(gr.Error, match="Load a source work"):
-        webui.edit_check("", BASE_ABC, "both", False, record)
+        webui.edit_check("", BASE_ABC, "both", False, record, "exact", False)
 
 
 class FakeSong:
@@ -348,16 +349,16 @@ def test_sampling_summary_mirrors_the_shared_sliders() -> None:
 def cover_generate_args(**overrides):
     args = dict(  # noqa: C408 — test fixture builder
         style="English jazz", lyrics="[Verse]\nla", abc_text=BASE_ABC,
-                task="melody-full", seed=831001, cfg_scale=0,
-                abc_temp=.7, abc_p=.9, abc_k=30, abc_rep=1.005, abc_win=100, abc_min=32,
-                abc_max=4096, sem_temp=1.0, sem_p=.95, sem_k=100, sem_rep=1.2, sem_win=50,
-                sem_min=200, sem_max=9000, device="cpu", dtype="float32", backend="torch",
-                quantization="none", offload_ar=False, budget=24, ode_steps=32,
-                vae_core_frames="auto", model="m-a-p/YuE2-3B", vae_choice="standard",
-                vae_custom="", revision="", vae_revision="", offline=False)
+        task="melody-full", keep_voice="both", seed=831001, cfg_scale=0,
+        abc_temp=.7, abc_p=.9, abc_k=30, abc_rep=1.005, abc_win=100, abc_min=32,
+        abc_max=4096, sem_temp=1.0, sem_p=.95, sem_k=100, sem_rep=1.2, sem_win=50,
+        sem_min=200, sem_max=9000, device="cpu", dtype="float32", backend="torch",
+        quantization="none", offload_ar=False, budget=24, ode_steps=32,
+        vae_core_frames="auto", model="m-a-p/YuE2-3B", vae_choice="standard",
+        vae_custom="", revision="", vae_revision="", offline=False)
     args.update(overrides)
     return [args[name] for name in (
-        "style", "lyrics", "abc_text", "task", "seed", "cfg_scale",
+        "style", "lyrics", "abc_text", "task", "keep_voice", "seed", "cfg_scale",
         "abc_temp", "abc_p", "abc_k", "abc_rep", "abc_win", "abc_min", "abc_max",
         "sem_temp", "sem_p", "sem_k", "sem_rep", "sem_win", "sem_min", "sem_max",
         "device", "dtype", "backend", "quantization", "offload_ar", "budget", "ode_steps",
@@ -380,8 +381,10 @@ def test_cover_generate_runs_directly_from_the_cover_tab(isolated_runs: Path,
     monkeypatch.setattr(webui, "_run_generation", fake_run_generation)
 
     yields = list(webui.cover_generate(*cover_generate_args()))
-    assert all(len(chunk) == 11 for chunk in yields)  # status + audio + result abc + files + 7 controls
-    status, audio, result_abc, _files, *buttons = yields[-1]
+    assert all(len(chunk) == 12 for chunk in yields)  # + cover_last_run for OPEN IN LIBRARY
+    status, audio, result_abc, _files, *rest = yields[-1]
+    assert Path(rest[-1]).name.startswith("2") and "cover-" in Path(rest[-1]).name  # run dir kept
+    buttons = rest[:-1]
     assert captured["cot"] == "melody" and '"C"' not in captured["abc"]
     assert audio.endswith("audio.flac") and result_abc == FakeSong.abc
     assert len(buttons) == 7 and all(b["interactive"] is True for b in buttons)
@@ -506,14 +509,15 @@ def test_cover_send_to_edit_hands_over_the_source(isolated_runs: Path) -> None:
     make_work(isolated_runs)
     edited = BASE_ABC.replace('"C"E2G2A2G2E2D2C4', '"C"F2G2A2G2E2D2C4')
     (abc_update, baseline, style_update, lyrics_update, rel, check_state, baseline_state,
-     info, status, tab_update) = webui.cover_send_to_edit(edited, "20260901-120000-source",
-                                                          "jazz", "")
+     info, status, source_update, tab_update) = webui.cover_send_to_edit(
+        edited, "20260901-120000-source", "jazz", "")
     assert abc_update["value"] == edited.strip()
     assert baseline == BASE_ABC.strip()               # checked against the frozen source
     assert rel == "20260901-120000-source" and check_state == {} and baseline_state is None
     assert style_update["value"] == "jazz"            # COVER wins...
     assert lyrics_update["value"].startswith("[Verse]")   # ...source fills the rest
     assert "FREEZE BASELINE" in status and "FREEZE BASELINE" in info
+    assert source_update["value"] == "20260901-120000-source"   # visible dropdown stays in sync
     assert tab_update["selected"] == "edit"
 
     with pytest.raises(gr.Error, match="Transcribe or load"):
@@ -532,3 +536,167 @@ def test_cover_choices_lists_works_and_transcriptions(isolated_runs: Path) -> No
     (d / "score.abc").write_text(BASE_ABC, encoding="utf-8")
     values = {value for _label, value in webui.cover_choices()["choices"]}
     assert {"20260901-120000-source", "transcriptions/20260901-130000-reference"} <= values
+
+
+def test_request_texts_requires_explicit_input() -> None:
+    with pytest.raises(gr.Error, match="STYLE and LYRICS empty"):
+        webui._request_texts("", "  ")
+    with pytest.raises(gr.Error, match="LYRICS empty"):
+        webui._request_texts("pop", "")
+    assert webui._request_texts("  pop ", " la ") == ("pop", "la")
+    style, lyrics = webui._request_texts("", "", fallback=True)
+    assert (style, lyrics) == (webui.EXAMPLE_STYLE, webui.EXAMPLE_LYRICS)
+
+
+def test_empty_style_is_refused_on_generate_paths() -> None:
+    with pytest.raises(gr.Error, match="STYLE empty"):
+        next(webui.cover_generate(*cover_generate_args(style="   ")))
+    with pytest.raises(gr.Error, match="STYLE empty"):
+        next(webui.edit_generate(*edit_generate_args(style="")))
+
+
+def test_cover_generate_passes_melody_voices_through(monkeypatch, tmp_path) -> None:
+    captured = {}
+
+    def fake_run_generation(pipe, request, outdir, **kwargs):
+        captured["abc"] = request.abc
+        Path(outdir).mkdir(parents=True, exist_ok=True)
+        (Path(outdir) / "audio.flac").write_bytes(b"fLaC")
+        return FakeSong(), {"audio_seconds": 1.0, "truncated": False}, 0.5
+
+    monkeypatch.setattr(webui, "_get_pipe", lambda *a, **k: (object(), "note"))
+    monkeypatch.setattr(webui, "_run_generation", fake_run_generation)
+    list(webui.cover_generate(*cover_generate_args(keep_voice="Vocal")))
+    score = abc_tools.parse_abc(captured["abc"])
+    assert score.voices["Ins"].notes == []          # instrumental melody silenced
+    assert score.voices["Vocal"].notes              # vocal melody kept
+
+
+def make_transcription(root, name: str = "transcriptions/20260901-130000-reference"):
+    d = root / name
+    d.mkdir(parents=True)
+    (d / "result.json").write_text(json.dumps({"task": "melody-full", "abc": "X:1"}),
+                                   encoding="utf-8")
+    (d / "score.abc").write_text(BASE_ABC, encoding="utf-8")
+    return d
+
+
+def test_library_flow_back_and_open_last_in_library(isolated_runs: Path) -> None:
+    make_work(isolated_runs)
+    make_transcription(isolated_runs)
+
+    outs = webui.library_open_in_edit("20260901-120000-source")
+    assert len(outs) == 11
+    assert outs[2]["value"].startswith("X:1")                     # EDITED ABC filled
+    assert outs[4] == "20260901-120000-source"                    # baseline state
+    assert outs[9]["value"] == "20260901-120000-source"           # visible dropdown synced
+    assert outs[10]["selected"] == "edit"
+
+    outs = webui.library_use_in_cover("transcriptions/20260901-130000-reference")
+    assert len(outs) == 6 and outs[0]["value"].startswith("X:1")
+    assert outs[4]["value"] == "transcriptions/20260901-130000-reference"
+    assert outs[5]["selected"] == "cover"
+
+    run = isolated_runs / "20260901-140000-fresh"
+    run.mkdir()
+    (run / "result.json").write_text(json.dumps({"status": "complete", "audio_seconds": 1.0}),
+                                     encoding="utf-8")
+    (run / "audio.flac").write_bytes(b"fLaC")
+    outs = webui.open_last_in_library(str(run))                   # absolute path accepted
+    assert len(outs) == 10 and outs[0]["value"] == ["20260901-140000-fresh"]
+    assert "bb-player" in outs[1] and outs[8]["selected"] == "library"
+
+    for call in (webui.library_open_in_edit, webui.library_use_in_cover,
+                 webui.open_last_in_library):
+        with pytest.raises(gr.Error, match="Pick or generate"):
+            call("")
+    with pytest.raises(gr.Error, match="outside the runs directory"):
+        webui.open_last_in_library("/tmp/somewhere-else")
+
+
+def generate_args(**overrides):
+    args = dict(  # noqa: C408 — test fixture builder
+        style="English jazz", lyrics="[Verse]\nla", cot="full", seed=1, cfg_scale=0,
+                abc_text=BASE_ABC, out_id="flow-back", preset="Quick test (~20 s)",
+                abc_temp=.7, abc_p=.9, abc_k=30, abc_rep=1.005, abc_win=100, abc_min=32,
+                abc_max=256, sem_temp=1.0, sem_p=.95, sem_k=100, sem_rep=1.2, sem_win=50,
+                sem_min=200, sem_max=512, device="cpu", dtype="float32", backend="torch",
+                quantization="none", offload_ar=False, budget=24, ode_steps=16,
+                vae_core_frames="auto", model="m-a-p/YuE2-3B", vae_choice="standard",
+                vae_custom="", revision="", vae_revision="", offline=False)
+    args.update(overrides)
+    return [args[name] for name in (
+        "style", "lyrics", "cot", "seed", "cfg_scale", "abc_text", "out_id", "preset",
+        "abc_temp", "abc_p", "abc_k", "abc_rep", "abc_win", "abc_min", "abc_max",
+        "sem_temp", "sem_p", "sem_k", "sem_rep", "sem_win", "sem_min", "sem_max",
+        "device", "dtype", "backend", "quantization", "offload_ar", "budget", "ode_steps",
+        "vae_core_frames", "model", "vae_choice", "vae_custom", "revision", "vae_revision",
+        "offline")]
+
+
+def test_generate_hands_the_run_to_the_flow_back_buttons(monkeypatch, isolated_runs) -> None:
+    def fake_run_generation(pipe, request, outdir, **kwargs):
+        Path(outdir).mkdir(parents=True, exist_ok=True)
+        (Path(outdir) / "audio.flac").write_bytes(b"fLaC")
+        return FakeSong(), {"audio_seconds": 1.0, "truncated": False}, 0.5
+
+    monkeypatch.setattr(webui, "_get_pipe", lambda *a, **k: (object(), "note"))
+    monkeypatch.setattr(webui, "_run_generation", fake_run_generation)
+    yields = list(webui.generate(*generate_args()))
+    assert all(len(chunk) == 7 for chunk in yields)               # 7 wired outputs
+    audio, abc, _status, _files, run_btn, plan_btn, last_run = yields[-1]
+    assert audio.endswith("audio.flac") and abc.startswith("X:1")
+    assert Path(last_run, "audio.flac").is_file()
+    assert run_btn["interactive"] is True and plan_btn["interactive"] is True
+
+
+def test_busy_banner_reflects_the_global_lock() -> None:
+    assert webui.busy_banner() == ""
+    webui._RUNNING.acquire()
+    try:
+        assert "JOB RUNNING" in webui.busy_banner()
+    finally:
+        webui._RUNNING.release()
+    assert webui.busy_banner() == ""
+
+
+def test_cover_detect_python_uses_a_documented_location(monkeypatch, tmp_path) -> None:
+    fake = tmp_path / "python"
+    fake.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.delenv("YUE2_GROOVE_SHEETSAGE_PYTHON", raising=False)
+    monkeypatch.setattr(webui, "_sheetsage_python_candidates", lambda: [tmp_path / "nope", fake])
+    message = webui.cover_detect_python()
+    assert str(fake) in message and os.environ["YUE2_GROOVE_SHEETSAGE_PYTHON"] == str(fake)
+    monkeypatch.setattr(webui, "_sheetsage_python_candidates", lambda: [tmp_path / "nope"])
+    assert "No SheetSage2 venv found" in webui.cover_detect_python()
+
+
+def test_cover_generate_event_wiring_matches_its_outputs(isolated_runs) -> None:
+    demo = webui.build_ui({"device": "cpu", "dtype": "float32", "model": "m-a-p/YuE2-3B",
+                           "vae": "standard", "tab": 1, "status": ""})
+    events = {getattr(f.fn, "__name__", ""): f for f in demo.fns.values()}
+    assert len(events["cover_generate"].outputs) == 12      # matches the handler yields
+    assert len(events["generate"].outputs) == 7
+    assert len(events["edit_generate"].outputs) == 11
+
+
+def test_buttons_are_wired_to_their_own_handlers(isolated_runs) -> None:
+    """Regression: EDIT THIS RUN and GENERATE EDITED must not share a variable/handler.
+
+    A duplicate Python variable silently pointed both wirings at GENERATE EDITED,
+    leaving EDIT THIS RUN dead and double-firing the edit handler.
+    """
+    demo = webui.build_ui({"device": "cpu", "dtype": "float32", "model": "m-a-p/YuE2-3B",
+                           "vae": "standard", "tab": 0, "status": ""})
+    targets: dict[int, list[str]] = {}
+    for f in demo.fns.values():
+        for target in (getattr(f, "targets", None) or []):
+            first = target[0] if isinstance(target, (tuple, list)) else target
+            component_id = first if isinstance(first, int) else first._id
+            targets.setdefault(component_id, []).append(f.api_name or f.fn.__name__)
+
+    def button(label: str):
+        return next(c for c in demo.blocks.values() if getattr(c, "value", None) == label)
+
+    assert targets[button("EDIT THIS RUN")._id] == ["library_open_in_edit"]
+    assert targets[button("GENERATE EDITED")._id] == ["edit_generate"]

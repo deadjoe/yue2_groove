@@ -10,17 +10,21 @@ browser, adds a library of your generated works, and runs as a small local servi
   Plan mode `full / melody / off`, seed, CFG scale, all seven sampling parameters of both
   phases, budget presets, cancel, live progress, a rendered score, one-click artifact download.
   **ALL MODES** runs the same text request as `full` + `melody` + `off` and compares them.
+  A run ends with **OPEN IN LIBRARY** / **EDIT THIS RUN**, and the START strip jumps
+  straight to NEW SONG / COVER A RECORDING / EDIT A WORK / LIBRARY.
 - **06 // DECODE** — re-decode a saved `latent.npy` with another decoder
   (source / standard / legacy / custom VAE, full or tiled) without generating again.
 - **07 // BATCH** — one JSON request per line, run in order, with a results table.
 - **05 // TOOLS** — ABC validation and event export, chord stripping for cover melodies,
   edit invariant check, listening-comparison page, environment doctor.
 - **04 // LIBRARY** — every work you generated: sort, select, rename, confirmed delete,
-  a player with spectrum and transport controls, style / lyrics / ABC / score, run tables.
+  a player with spectrum and transport controls, style / lyrics / ABC / score, run tables,
+  and **OPEN IN 03 EDIT** / **USE IN 02 COVER** to keep working on a work you just heard.
 - **02 // COVER** — source audio → SheetSage2 transcription (separate venv) → editable ABC,
   chord strip → one click into GENERATE with the right plan mode.
-- **03 // EDIT** — freeze a baseline, edit the score, check exact melody/meter invariants,
-  regenerate from the edited score, compare baseline vs edit.
+- **03 // EDIT** — freeze a baseline, edit the score, check invariants under an explicit
+  **CONTRACT** (EXACT notes+meter / PITCH rhythm-free / FREE report-only), regenerate
+  from the edited score, compare baseline vs edit.
 - **Settings rail** — device, dtype, backend, quantization, memory budget, ODE steps,
   VAE core frames, model/VAE revisions, offline mode, load / unload.
 
@@ -233,8 +237,10 @@ YUE2_GROOVE_SHEETSAGE_PYTHON=/path/to/YuE/.venv-sheetsage2/bin/python
 FFmpeg 6.1+ must be on `PATH`. MERT-v2-FullSong, SheetSage2's parent encoder, downloads
 automatically — do not install it separately. On macOS use the same commands without the CUDA
 index and `device=mps` (untested) or `device=cpu` (works, slow). The **CHECK ENVIRONMENT**
-button probes the second venv without loading weights; the TRANSCRIBE task picks vocal-only,
-vocal+instrumental, or full-score (with chords) output. **KEEP SHEETSAGE2 WARM** reuses one
+button probes the second venv without loading weights and **AUTO-DETECT VENV** finds
+`./.venv-sheetsage2` or `../YuE/.venv-sheetsage2` for the session; the TRANSCRIBE task picks
+vocal-only, vocal+instrumental, or full-score (with chords) output, and **MELODY VOICES**
+decides which melodies a cover keeps. **KEEP SHEETSAGE2 WARM** reuses one
 resident worker between transcriptions (fast repeats; **UNLOAD SHEETSAGE2** or the idle reaper
 frees it), while the default is a fresh process per transcription that returns all memory on
 exit. Running both models sequentially on one GPU is the supported setup.
@@ -249,10 +255,15 @@ BASELINE** (hashes + copies of `score.abc`/`request.json`; the original run dire
 modified) → edit the ABC → **CHECK INVARIANTS** (exact sounding-note/meter comparison, per
 voice, with an explicit allow-tempo flag) → **GENERATE EDITED**.
 
+CHECK INVARIANTS runs under an explicit contract: **EXACT** keeps sounding notes and the
+meter grid (tempo/meter changes can be permitted), **PITCH** keeps only the ordered pitch
+sequence so rhythm may change, **FREE** records differences without gating. The contract and
+permissions are written to `edit_manifest.json`.
+
 Generation refuses to run unless the check passed on exactly the current ABC: the edited score
 is always submitted, so an edit can never silently fall back to a fresh plan. `ALLOW
-MELODY/RHYTHM CHANGES` exists for intentional adaptations — it is also the only way past the
-FREEZE BASELINE requirement that ties the check to an immutable record. Sampling parameters are
+MELODY/RHYTHM CHANGES` exists for intentional adaptations: it only lets a *failing* check
+through — FREEZE BASELINE and CHECK INVARIANTS are always required. Sampling parameters are
 shared with 01 GENERATE (the EDIT tab mirrors them read-only). Each attempt is a new run directory
 with `edit_manifest.json` (source/edit hashes, frozen flag, invariant result, permitted changes),
 and **BUILD COMPARISON // baseline vs edit** creates a local listening page from both runs.
@@ -298,8 +309,14 @@ belongs in `yue2_groove/adapter.py`, the only module that imports `yue2`.
 
 ```bash
 uv pip install --python .venv/bin/python -e ".[test]" --overrides overrides/macos.txt
+.venv/bin/ruff check .                                    # the one lint gate (config in pyproject.toml)
+.venv/bin/python -m compileall -q yue2_groove tests scripts
 .venv/bin/python -m pytest -q
 ```
+
+The lint rule set lives in `[tool.ruff]` (pyproject.toml) so CI and local runs use the
+same gate; `yue2_groove/vendor/` is excluded because it is an upstream byte-identical
+copy (see NOTICE).
 
 - `yue2_groove/webui.py` — the Gradio app (all tabs, theme, client-side helpers).
 - `yue2_groove/library.py` — the Library backend; standard library only, reads run
