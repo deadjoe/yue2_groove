@@ -31,6 +31,12 @@ clear configuration error and the rest of the UI keeps working.
                                     background reaper stops it (default: 900)
 * ``YUE2_GROOVE_TRANSCRIPTIONS``    where transcription outputs are written (default:
                                     ``<runs>/transcriptions``)
+
+The repository-root ``.env`` (see README) is also read by the app itself via
+:func:`load_env`, before the CLI defaults are resolved — so a direct
+``python -m yue2_groove`` gets the same settings as ``scripts/serve.sh``, including
+the ``PYTORCH_MPS_HIGH/LOW_WATERMARK_RATIO`` memory guard.  An already-exported
+value always wins over the file.
 """
 from __future__ import annotations
 
@@ -40,6 +46,50 @@ from pathlib import Path
 PACKAGE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = PACKAGE_DIR / "static"
 EXAMPLES_DIR = PACKAGE_DIR / "examples"
+
+
+def load_env(path=None, environ=None) -> int:
+    """Load a repo-root ``.env`` into the process environment.
+
+    ``scripts/serve.sh`` sources ``.env`` before launching, but a direct
+    ``python -m yue2_groove`` / ``yue2-groove`` does not.  Loading it here makes
+    ``PYTORCH_MPS_HIGH_WATERMARK_RATIO`` (the MPS memory guard that keeps the
+    allocator from driving the whole machine into swap) and ``YUE2_GROOVE_*``
+    settings apply to every launch.  Existing environment variables are never
+    overridden, so ``serve.sh`` and the command line still win.
+
+    Returns the number of keys set.  Missing file, unreadable file and malformed
+    lines are ignored.
+    """
+    target = os.environ if environ is None else environ
+    if path is None:
+        candidates = [Path.cwd() / ".env", PACKAGE_DIR.parent / ".env"]
+        env_path = next((candidate for candidate in candidates if candidate.is_file()), None)
+        if env_path is None:
+            return 0
+    else:
+        env_path = Path(path).expanduser()
+    try:
+        text = env_path.read_text(encoding="utf-8")
+    except OSError:
+        return 0
+    count = 0
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key, value = key.strip(), value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        if key and key not in target:
+            target[key] = value
+            count += 1
+    return count
 
 HUB_MODEL = "m-a-p/YuE2-3B"
 HUB_VAE = "m-a-p/YuE2-Vae"

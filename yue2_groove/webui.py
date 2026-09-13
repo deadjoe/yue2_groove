@@ -3938,6 +3938,10 @@ def build_ui(defaults):
 
 
 def main():
+    # .env must be loaded before the CLI defaults below are resolved and before
+    # PyTorch initialises the MPS allocator, so the watermark guard applies here
+    # too (serve.sh sources it, a direct `python -m yue2_groove` did not).
+    config.load_env()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=7860)
@@ -3963,6 +3967,8 @@ def main():
     global RUNS
     if args.runs:
         RUNS = Path(args.runs).expanduser().resolve()
+    else:
+        RUNS = config.runs_dir()      # honour YUE2_GROOVE_RUNS from .env
     if args.sheetsage_python:
         os.environ["YUE2_GROOVE_SHEETSAGE_PYTHON"] = args.sheetsage_python
 
