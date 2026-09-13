@@ -199,6 +199,9 @@ def test_pitch_contract_still_gates_pitch_changes() -> None:
 def test_free_contract_reports_without_gating() -> None:
     result = edit_flow.check_invariants(BASE_ABC, PITCH_EDIT, contract="free")
     assert result["match"] is True and result["contract"] == "free"
+    assert result["differences"]                       # reported, not gated
+    same = edit_flow.check_invariants(BASE_ABC, BASE_ABC, contract="free")
+    assert same["match"] is True and same["differences"] == []
     with pytest.raises(ValueError, match="contract must be one of"):
         edit_flow.check_invariants(BASE_ABC, PITCH_EDIT, contract="nope")
 
@@ -216,3 +219,8 @@ def test_exact_contract_can_allow_a_meter_change() -> None:
     allowed = edit_flow.check_invariants(BASE_ABC, in_two_four, allow_meter_change=True)
     assert allowed["match"] is True and allowed["meter_change_allowed"] is True
     assert allowed["allowed_differences"]
+    # a note change is still gated when only the meter is allowed
+    changed = in_two_four.replace("E2G2A2G2", "F2G2A2G2", 1)
+    strict_note = edit_flow.check_invariants(BASE_ABC, changed, allow_meter_change=True)
+    assert strict_note["match"] is False
+    assert any("sounding notes differ" in d for d in strict_note["differences"])

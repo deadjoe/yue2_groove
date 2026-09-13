@@ -381,8 +381,10 @@ def test_cover_generate_runs_directly_from_the_cover_tab(isolated_runs: Path,
     monkeypatch.setattr(webui, "_run_generation", fake_run_generation)
 
     yields = list(webui.cover_generate(*cover_generate_args()))
-    assert all(len(chunk) == 11 for chunk in yields)  # status + audio + result abc + files + 7 controls
-    status, audio, result_abc, _files, *buttons = yields[-1]
+    assert all(len(chunk) == 12 for chunk in yields)  # + cover_last_run for OPEN IN LIBRARY
+    status, audio, result_abc, _files, *rest = yields[-1]
+    assert Path(rest[-1]).name.startswith("2") and "cover-" in Path(rest[-1]).name  # run dir kept
+    buttons = rest[:-1]
     assert captured["cot"] == "melody" and '"C"' not in captured["abc"]
     assert audio.endswith("audio.flac") and result_abc == FakeSong.abc
     assert len(buttons) == 7 and all(b["interactive"] is True for b in buttons)
@@ -667,3 +669,34 @@ def test_cover_detect_python_uses_a_documented_location(monkeypatch, tmp_path) -
     assert str(fake) in message and os.environ["YUE2_GROOVE_SHEETSAGE_PYTHON"] == str(fake)
     monkeypatch.setattr(webui, "_sheetsage_python_candidates", lambda: [tmp_path / "nope"])
     assert "No SheetSage2 venv found" in webui.cover_detect_python()
+
+
+def test_cover_generate_event_wiring_matches_its_outputs(isolated_runs) -> None:
+    demo = webui.build_ui({"device": "cpu", "dtype": "float32", "model": "m-a-p/YuE2-3B",
+                           "vae": "standard", "tab": 1, "status": ""})
+    events = {getattr(f.fn, "__name__", ""): f for f in demo.fns.values()}
+    assert len(events["cover_generate"].outputs) == 12      # matches the handler yields
+    assert len(events["generate"].outputs) == 7
+    assert len(events["edit_generate"].outputs) == 11
+
+
+def test_buttons_are_wired_to_their_own_handlers(isolated_runs) -> None:
+    """Regression: EDIT THIS RUN and GENERATE EDITED must not share a variable/handler.
+
+    A duplicate Python variable silently pointed both wirings at GENERATE EDITED,
+    leaving EDIT THIS RUN dead and double-firing the edit handler.
+    """
+    demo = webui.build_ui({"device": "cpu", "dtype": "float32", "model": "m-a-p/YuE2-3B",
+                           "vae": "standard", "tab": 0, "status": ""})
+    targets: dict[int, list[str]] = {}
+    for f in demo.fns.values():
+        for target in (getattr(f, "targets", None) or []):
+            first = target[0] if isinstance(target, (tuple, list)) else target
+            component_id = first if isinstance(first, int) else first._id
+            targets.setdefault(component_id, []).append(f.api_name or f.fn.__name__)
+
+    def button(label: str):
+        return next(c for c in demo.blocks.values() if getattr(c, "value", None) == label)
+
+    assert targets[button("EDIT THIS RUN")._id] == ["library_open_in_edit"]
+    assert targets[button("GENERATE EDITED")._id] == ["edit_generate"]
