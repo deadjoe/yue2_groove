@@ -184,8 +184,15 @@ start_service() {
     exec "$PY" "${args[@]}"
   fi
 
+  # Keep the log across restarts: a panic used to be followed by a truncation that
+  # erased the run directory it had just printed.  Append a start banner, and only
+  # rotate when the file grows past ~5 MB.
+  if [ -f "$LOG_FILE" ] && [ "$(wc -c < "$LOG_FILE" | tr -d ' ')" -gt 5242880 ]; then
+    mv -f "$LOG_FILE" "$LOG_FILE.1"
+  fi
+  printf '\n===== %s · serve.sh start =====\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE"
   echo "Starting: $PY ${args[*]}"
-  PYTHONUNBUFFERED=1 nohup "$PY" "${args[@]}" > "$LOG_FILE" 2>&1 &
+  PYTHONUNBUFFERED=1 nohup "$PY" "${args[@]}" >> "$LOG_FILE" 2>&1 &
   local pid=$!
   echo "$pid" > "$PID_FILE"
   echo "$PORT" > "$PORT_FILE"

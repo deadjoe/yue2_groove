@@ -32,6 +32,9 @@ launch; the last choice is remembered per browser.
 - **04 // LIBRARY** — every work you generated: sort, select, rename, confirmed delete,
   a player with spectrum and transport controls, style / lyrics / ABC / score, run tables,
   and **OPEN IN 03 EDIT** / **USE IN 02 COVER** to keep working on a work you just heard.
+  A run is flushed to disk before it is reported done, and one that was interrupted
+  (crash, panic, power loss) stays listed as **INCOMPLETE** with its partial artifacts
+  instead of vanishing.
 - **02 // COVER** — source audio → SheetSage2 transcription (separate venv) → editable ABC,
   chord strip → one click into GENERATE with the right plan mode.
 - **03 // EDIT** — freeze a baseline, edit the score, check invariants under an explicit
