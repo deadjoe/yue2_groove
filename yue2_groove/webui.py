@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import fcntl
 import html
 import json
 import os
@@ -295,6 +296,85 @@ def duration_text(tokens):
             f"({minutes:.1f} min) at {int(tokens)} semantic tokens")
 
 
+# ───────────────────── run durability (panic-safe writes) ─────────────────────
+# save_artifacts() closes the files but never fsyncs, and the whole point of the
+# 2026-09-13 panics was that a run could be listened to and still vanish when the
+# kernel died before APFS flushed it.  A run is only "done" once its files and
+# directory are flushed; ".pending" is the marker the Library shows when it is not.
+PENDING_FILE = "pending.json"
+
+
+def _fsync_fd(fd: int) -> None:
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    # macOS: fsync only reaches the drive cache, F_FULLFSYNC reaches the media
+    if hasattr(fcntl, "F_FULLFSYNC"):
+        try:
+            fcntl.fcntl(fd, fcntl.F_FULLFSYNC)
+        except OSError:
+            pass
+
+
+def _fsync_path(path) -> None:
+    try:
+        fd = os.open(Path(path), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        _fsync_fd(fd)
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+def _fsync_tree(directory) -> None:
+    """Flush every file in *directory* and the directory itself."""
+    directory = Path(directory)
+    try:
+        entries = list(directory.iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        if entry.is_file():
+            _fsync_path(entry)
+    _fsync_path(directory)
+
+
+def _write_pending(directory, status: str, error: str = "") -> None:
+    """Mark *directory* as an unfinished run, durably.
+
+    Written before generation starts and removed only after every artifact is
+    flushed, so a run that never finishes stays visible in the Library instead of
+    disappearing silently.
+    """
+    directory = Path(directory)
+    payload = {"schema": "yue2-groove-pending-v1", "status": status,
+               "pid": os.getpid(), "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    if error:
+        payload["error"] = error[:500]
+    path = directory / PENDING_FILE
+    try:
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                        encoding="utf-8")
+        _fsync_path(path)
+        _fsync_path(directory)
+    except OSError:
+        pass
+
+
+def _clear_pending(directory) -> None:
+    directory = Path(directory)
+    try:
+        (directory / PENDING_FILE).unlink()
+        _fsync_path(directory)
+    except OSError:
+        pass
+
+
 def _run_generation(pipe, request, outdir, *, abc_sampling, semantic_sampling, progress, note,
                     extra_manifest=None):
     """Generate one song into *outdir* and save its artifacts.
@@ -302,6 +382,10 @@ def _run_generation(pipe, request, outdir, *, abc_sampling, semantic_sampling, p
     Shared by 01 GENERATE and 03 EDIT so both flows report progress identically.
     ``extra_manifest`` (a dict) is written next to the run as ``edit_manifest.json``.
     """
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    _write_pending(outdir, "running")
+    print(f"[yue2_groove] run start: {outdir}", flush=True)
     counts = {"abc": 0, "semantic": 0}
     abc_budget = abc_sampling.max_tokens if request.cot != "off" else 0
     sem_budget = semantic_sampling.max_tokens
@@ -324,15 +408,26 @@ def _run_generation(pipe, request, outdir, *, abc_sampling, semantic_sampling, p
                      desc=f"Decoding audio: chunk {done}/{total}")
 
     t0 = time.perf_counter()
-    song = adapter.generate(pipe, request, abc_sampling=abc_sampling,
-                            semantic_sampling=semantic_sampling, cancelled=_CANCEL.is_set,
-                            on_token=on_token, on_progress=on_progress)
-    progress(1.0, desc="Saving artifacts…")
-    result = song.save_artifacts(outdir)
-    if extra_manifest is not None:
-        (Path(outdir) / "edit_manifest.json").write_text(
-            json.dumps(extra_manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    _write_local_env(outdir, pipe, note)
+    try:
+        song = adapter.generate(pipe, request, abc_sampling=abc_sampling,
+                                semantic_sampling=semantic_sampling, cancelled=_CANCEL.is_set,
+                                on_token=on_token, on_progress=on_progress)
+        progress(1.0, desc="Saving artifacts…")
+        result = song.save_artifacts(outdir)
+        if extra_manifest is not None:
+            (Path(outdir) / "edit_manifest.json").write_text(
+                json.dumps(extra_manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        _write_local_env(outdir, pipe, note)
+    except Exception as exc:
+        _write_pending(outdir, "cancelled" if isinstance(exc, InterruptedError) else "failed",
+                       error=f"{type(exc).__name__}: {exc}")
+        print(f"[yue2_groove] run unfinished: {outdir} — {type(exc).__name__}: {exc}", flush=True)
+        raise
+    # flush the artifacts first, then remove the marker: the run only stops being
+    # "pending" once it is actually on disk
+    _fsync_tree(outdir)
+    _clear_pending(outdir)
+    print(f"[yue2_groove] run done: {outdir}", flush=True)
     return song, result, time.perf_counter() - t0
 
 
@@ -936,7 +1031,7 @@ def cover_transcribe(audio_path, task, max_seconds, model, device, dtype, revisi
 
 def cover_choices():
     """Choices for the COVER source dropdown (any saved work or transcription with an ABC)."""
-    _items, choices = _library_choices(_library_mode("time", "desc"))
+    _items, choices = _library_choices(_library_mode("time", "desc"), include_pending=False)
     return gr.update(choices=choices)
 
 
@@ -1446,7 +1541,7 @@ def song_compare(active):
 
 
 def edit_choices():
-    _items, choices = _library_choices(_library_mode("time", "desc"))
+    _items, choices = _library_choices(_library_mode("time", "desc"), include_pending=False)
     return gr.update(choices=choices)
 
 
@@ -1602,8 +1697,10 @@ def _library_mode(sort_key, sort_dir):
     return f"{key}_{direction}"
 
 
-def _library_choices(sort_mode):
+def _library_choices(sort_mode, include_pending=True):
     items = library.sort_items(library.scan(RUNS), sort_mode)
+    if not include_pending:
+        items = [item for item in items if not item.get("pending")]
     return items, [(library.label(item), item["rel"]) for item in items]
 
 

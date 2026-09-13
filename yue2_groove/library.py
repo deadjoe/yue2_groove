@@ -23,6 +23,9 @@ from urllib.parse import quote
 
 # a directory that holds any of these is a Library entry
 ARTIFACTS = ("result.json", "audio.flac", "score.abc")
+# written at the start of a run and removed only once every artifact is flushed;
+# a directory that still has one is a run that did not finish
+PENDING = "pending.json"
 # freeze records keep a copy of score.abc; they are provenance, not works
 SKIP_DIRS = ("baselines",)
 STAMP_RE = re.compile(r"^(\d{8})-(\d{6})-(.*)$")
@@ -128,9 +131,12 @@ def _kind(result: dict, has_audio: bool, has_score: bool) -> str:
 def _item(root: Path, path: Path) -> dict:
     request = _request_of(path) or {}
     result = _read_json(path / "result.json") or {}
+    pending = _read_json(path / PENDING) or {}
     has_audio = (path / "audio.flac").is_file()
     has_score = (path / "score.abc").is_file()
     kind = _kind(result, has_audio, has_score)
+    if pending and not result:
+        kind = "incomplete"   # audio without result.json is a run, not a decode
     truncated = result.get("truncated")
     if isinstance(truncated, dict):
         truncated = any(bool(v) for v in truncated.values())
@@ -142,7 +148,9 @@ def _item(root: Path, path: Path) -> dict:
         "created": _created(path),
         "created_label": _created(path).strftime("%Y-%m-%d %H:%M"),
         "duration": result.get("audio_seconds"),
-        "status": result.get("status", ""),
+        "status": result.get("status") or pending.get("status", ""),
+        "pending": bool(pending),
+        "pending_error": pending.get("error", ""),
         "truncated": bool(truncated),
         "cot": request.get("cot", ""),
         "seed": request.get("seed"),
@@ -171,7 +179,7 @@ def scan(root) -> list[dict]:
                 continue
             if (path / "index.html").is_file() and (path / "manifest.json").is_file():
                 continue  # a listening comparison bundle, not a work
-            if any((path / name).exists() for name in ARTIFACTS):
+            if any((path / name).exists() for name in ARTIFACTS) or (path / PENDING).is_file():
                 items.append(_item(root, path))
                 continue  # never descend into a work directory
             if depth < 2:
@@ -193,6 +201,8 @@ def sort_items(items, mode: str = "time_desc") -> list[dict]:
 
 def label(item: dict) -> str:
     parts = [item["name"], item["created"].strftime("%m-%d %H:%M")]
+    if item.get("pending"):
+        parts.append("INCOMPLETE")
     if item["kind"] == "plan":
         parts.append("PLAN")
     elif item["kind"] == "decode":
@@ -219,11 +229,14 @@ def summarize(items) -> str:
     decodes = sum(1 for i in items if i["kind"] == "decode")
     transcriptions = sum(1 for i in items if i["kind"] == "transcription")
     total = sum(int(i.get("size") or 0) for i in items)
+    incomplete = sum(1 for i in items if i.get("pending"))
     bits = [f"{len(items)} item(s)"]
     for count, word in ((songs, "song"), (plans, "plan"), (decodes, "decode"),
                         (transcriptions, "transcription")):
         if count:
             bits.append(f"{count} {word}(s)")
+    if incomplete:
+        bits.append(f"{incomplete} incomplete")
     bits.append(format_bytes(total))
     return " · ".join(bits)
 
@@ -315,9 +328,16 @@ def render_info_html(item: dict, det: dict) -> str:
            f'<div class="bb-lib-title">{html.escape(item["name"])}</div>',
            '<div class="bb-lib-sub">' + " · ".join(html.escape(str(b)) for b in (
                item.get("created_label"), format_seconds(item.get("duration")),
-               item.get("kind", "").upper()) if b) + '</div>',
+               "INCOMPLETE" if item.get("pending") else item.get("kind", "").upper()) if b)
+           + '</div>',
            (f'<div class="bb-lib-sub bb-lib-dim">{html.escape(item.get("rel", ""))}'
             f' · {html.escape(format_bytes(item.get("size")))}</div>')]
+
+    if item.get("pending"):
+        detail = item.get("pending_error") or item.get("status") or "unfinished"
+        out.append('<div class="bb-lib-note bb-lib-incomplete">INCOMPLETE — this run did not '
+                   'finish, so it was never saved as a song. The artifacts below are partial.'
+                   f'<span class="bb-lib-dim"> ({html.escape(str(detail))})</span></div>')
 
     chips = []
     if request.get("cot"):
@@ -340,6 +360,9 @@ def render_info_html(item: dict, det: dict) -> str:
 
     if det.get("audio"):
         out.append(player_html(det["audio"]))
+    elif item.get("pending"):
+        out.append('<div class="bb-lib-note">No audio yet — the run was interrupted before '
+                   'the song was written.</div>')
     else:
         out.append('<div class="bb-lib-note">No audio in this directory — score-only plan.</div>')
 
@@ -549,6 +572,10 @@ LIBRARY_CSS = """
 .bb-lib-sub { margin-top: 5px; font-size: 10.5px; letter-spacing: .08em;
   color: var(--bb-ink3); text-transform: uppercase; overflow-wrap: anywhere; }
 .bb-lib-note { padding: 10px 2px; font-size: 11px; letter-spacing: .06em; color: var(--bb-ink3); }
+.bb-lib-incomplete {
+  border: 1px solid var(--bb-line2); border-radius: 8px; padding: 9px 11px; margin: 6px 0 2px;
+  color: var(--bb-ink2);
+}
 .bb-lib-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 2px; }
 .bb-chip { border: 1px solid var(--bb-line); border-radius: 999px; padding: 3px 9px;
   font-size: 10px; letter-spacing: .08em; color: var(--bb-ink3); text-transform: uppercase; }
