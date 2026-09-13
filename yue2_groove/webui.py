@@ -37,8 +37,8 @@ Usage:
   python -m yue2_groove --host 0.0.0.0 --auth user:pass   # LAN access (set a password)
   bash scripts/serve.sh start|stop|restart|status|log     # background service
 
-Visual language: Bearbone Design System v0.2 (warm near-black + ivory, 1px strokes, no
-shadows/gradients, monospace), with a dark and a bright scene.
+Visual language: Bearbone Design System v0.2 (cool #11141C ground family + ivory ink,
+1px strokes, no shadows/gradients, monospace), with a dark and a bright scene.
 
 Model weights are CC BY-NC 4.0 (non-commercial); this UI is not affiliated with the
 YuE2 authors.
@@ -1340,25 +1340,26 @@ def _request_texts(style, lyrics):
 
 
 # ─────────────────────── Bearbone DS v0.2, two scenes ───────────────────────
-# dark scene:   warm near-black #0B0A09 ground + ivory #F1ECE2 ink (never pure black/white).
-# bright scene: ivory #F1ECE2 ground + warm near-black #16140F ink (the v0.2 bright token).
+# dark scene:   cool #11141C ground family + ivory #F1ECE2 ink (never pure black/white).
+# bright scene: ivory #F1ECE2 ground + warm near-black #16140F ink; dark controls
+# (primary buttons, selected chips/checkboxes, sliders) share the #11141C family.
 # Shared grammar: 1px strokes, 10px panels, no shadows / gradients / glow, monospace, ops footer.
 
 FONT_STACK = ["Berkeley Mono", "Sarasa Mono SC", "JetBrains Mono", "SF Mono",
               "Noto Sans Mono CJK SC", "ui-monospace", "Menlo", "monospace"]
 
 DARK = {
-    "bg": "#0B0A09", "bg_panel": "#12110F", "bg_input": "#171512", "bg_lift": "#1C1916",
-    "fg": "#F1ECE2", "fg2": "#B5AEA2", "fg3": "#7A746A", "fg4": "#57524A",
-    "stroke": "#2E2B27", "stroke2": "#8C8477",
-    "primary_fill": "#F1ECE2", "primary_hover": "#FBF8F2", "primary_text": "#16140F",
+    "bg": "#11141C", "bg_panel": "#161A24", "bg_input": "#1B202C", "bg_lift": "#212736",
+    "fg": "#F1ECE2", "fg2": "#B6BCC8", "fg3": "#7E8593", "fg4": "#575E6B",
+    "stroke": "#2B3244", "stroke2": "#667090",
+    "primary_fill": "#F1ECE2", "primary_hover": "#FBF8F2", "primary_text": "#11141C",
 }
 
 BRIGHT = {
     "bg": "#F1ECE2", "bg_panel": "#F7F3EB", "bg_input": "#F7F3EB", "bg_lift": "#EAE4D8",
     "fg": "#16140F", "fg2": "#4A463F", "fg3": "#7A746A", "fg4": "#A69D8D",
     "stroke": "#C4BBA8", "stroke2": "#7E7462",
-    "primary_fill": "#16140F", "primary_hover": "#332E26", "primary_text": "#F1ECE2",
+    "primary_fill": "#11141C", "primary_hover": "#2B3244", "primary_text": "#F1ECE2",
 }
 
 
@@ -1447,10 +1448,10 @@ def _theme_values(p):
         "shadow_drop_lg": "none",
         "shadow_inset": "none",
         "checkbox_background_color": p["bg_input"],
-        "checkbox_background_color_selected": p["fg"],
+        "checkbox_background_color_selected": p["primary_fill"],
         "checkbox_background_color_hover": p["bg_lift"],
         "checkbox_border_color": p["fg4"],
-        "checkbox_border_color_selected": p["fg"],
+        "checkbox_border_color_selected": p["primary_fill"],
         "checkbox_border_width": "1px",
         "checkbox_border_radius": "3px",
         "checkbox_check": p["primary_text"],
@@ -1465,8 +1466,8 @@ def _theme_values(p):
         "checkbox_label_shadow": "none",
         "checkbox_label_shadow_hover": "none",
         "checkbox_label_shadow_active": "none",
-        "slider_color": p["fg"],
-        "loader_color": p["fg"],
+        "slider_color": p["primary_fill"],
+        "loader_color": p["primary_fill"],
         "stat_background_fill": p["bg_input"],
         "table_border_color": p["stroke"],
         "table_even_background_fill": p["bg_panel"],
