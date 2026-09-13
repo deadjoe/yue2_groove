@@ -161,7 +161,8 @@ def test_build_edit_manifest_records_hashes_and_permissions() -> None:
     assert manifest["source"]["frozen"] is False and manifest["source"]["baseline"] is None
     assert manifest["abc"]["before_sha256"] != manifest["abc"]["after_sha256"]
     assert manifest["request"] == {"cot": "full", "seed": 5, "cfg_scale": None}
-    assert manifest["permitted"] == {"compared_voices": ["Vocal"], "tempo_change": True,
+    assert manifest["permitted"] == {"compared_voices": ["Vocal"], "contract": "exact",
+                                     "tempo_change": True, "meter_change": False,
                                      "changes_override": False}
     assert manifest["invariants"]["match"] is True
     from datetime import datetime
@@ -175,3 +176,43 @@ def test_build_edit_manifest_records_hashes_and_permissions() -> None:
         baseline={"schema": "yue2-groove-baseline-v1", "baseline": {"path": "/tmp/b"}}, now=0)
     assert frozen["source"]["frozen"] is True
     assert frozen["source"]["baseline"]["baseline"]["path"] == "/tmp/b"
+
+
+# ── contracts ────────────────────────────────────────────────────────────
+
+RHYTHM_EDIT = BASE_ABC.replace("E2G2A2G2E2D2C4", "E4G2A2G2E2D2C2")
+
+
+def test_pitch_contract_allows_rhythm_changes() -> None:
+    result = edit_flow.check_invariants(BASE_ABC, RHYTHM_EDIT, contract="pitch")
+    assert result["match"] is True
+    assert result["contract"] == "pitch"
+    assert any("rhythm changed" in note for note in result["notes"])
+
+
+def test_pitch_contract_still_gates_pitch_changes() -> None:
+    result = edit_flow.check_invariants(BASE_ABC, PITCH_EDIT, contract="pitch")
+    assert result["match"] is False
+    assert any("pitch sequence differs" in d for d in result["differences"])
+
+
+def test_free_contract_reports_without_gating() -> None:
+    result = edit_flow.check_invariants(BASE_ABC, PITCH_EDIT, contract="free")
+    assert result["match"] is True and result["contract"] == "free"
+    with pytest.raises(ValueError, match="contract must be one of"):
+        edit_flow.check_invariants(BASE_ABC, PITCH_EDIT, contract="nope")
+
+
+def test_exact_contract_can_allow_a_meter_change() -> None:
+    """Same sounding notes re-barred into 2/4: a violation by default, allowed on request."""
+    in_two_four = (BASE_ABC
+                   .replace("M:4/4", "M:2/4")
+                   .replace("E2G2A2G2E2D2C4|", "E2G2A2G2|E2D2C4|")
+                   .replace("D2E2G2E2D2C2D4|", "D2E2G2E2|D2C2D4|")
+                   .replace("Z2|", "Z4|"))
+    strict = edit_flow.check_invariants(BASE_ABC, in_two_four)
+    assert strict["match"] is False
+    assert any("meter/time grid differs" in d for d in strict["differences"])
+    allowed = edit_flow.check_invariants(BASE_ABC, in_two_four, allow_meter_change=True)
+    assert allowed["match"] is True and allowed["meter_change_allowed"] is True
+    assert allowed["allowed_differences"]

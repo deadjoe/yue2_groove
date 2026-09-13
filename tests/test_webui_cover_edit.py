@@ -182,13 +182,13 @@ def test_edit_freeze_and_check_guards(isolated_runs: Path) -> None:
         webui.edit_freeze("")
 
     with pytest.raises(gr.Error, match="Freeze the baseline"):
-        webui.edit_check(BASE_ABC, BASE_ABC, "both", False, None)
-    output, state = webui.edit_check(BASE_ABC, BASE_ABC, "both", False, record)
+        webui.edit_check(BASE_ABC, BASE_ABC, "both", False, None, "exact", False)
+    output, state = webui.edit_check(BASE_ABC, BASE_ABC, "both", False, record, "exact", False)
     assert json.loads(output)["match"] is True and state["sha256"]
-    output, state = webui.edit_check(BASE_ABC, CHORD_FREE, "both", False, record)
+    output, state = webui.edit_check(BASE_ABC, CHORD_FREE, "both", False, record, "exact", False)
     assert json.loads(output)["match"] is True  # chord-only edits pass
     with pytest.raises(gr.Error, match="Load a source work"):
-        webui.edit_check("", BASE_ABC, "both", False, record)
+        webui.edit_check("", BASE_ABC, "both", False, record, "exact", False)
 
 
 class FakeSong:

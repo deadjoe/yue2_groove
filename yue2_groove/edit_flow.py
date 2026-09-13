@@ -74,16 +74,63 @@ def validate_edited_abc(text: str) -> str:
     return source
 
 
+CONTRACTS = ("exact", "pitch", "free")
+
+
+def _compare_pitch(before, after, names) -> dict:
+    """Same ordered pitch sequence per voice; rhythm, meter and tempo are not gated."""
+    differences, notes = [], []
+    for name in names:
+        a, b = before.voices[name], after.voices[name]
+        pitches_a = [pitch for _onset, pitch, _duration in a.notes]
+        pitches_b = [pitch for _onset, pitch, _duration in b.notes]
+        if pitches_a != pitches_b:
+            common = min(len(pitches_a), len(pitches_b))
+            first = next((i for i in range(common) if pitches_a[i] != pitches_b[i]), common)
+            differences.append(f"{name}: pitch sequence differs starting at note {first + 1}")
+            continue
+        rhythm_a = [(onset, duration) for onset, _pitch, duration in a.notes]
+        rhythm_b = [(onset, duration) for onset, _pitch, duration in b.notes]
+        if rhythm_a != rhythm_b:
+            notes.append(f"{name}: same pitches, rhythm changed (permitted by the pitch contract)")
+    return {"match": not differences, "compared_voices": list(names), "differences": differences,
+            "notes": notes,
+            "scope": "ordered pitch sequence per voice; rhythm, meter and tempo are not gated"}
+
+
 def check_invariants(before_abc: str, after_abc: str, *, voices: str = "both",
-                     allow_tempo_change: bool = False) -> dict:
-    """Exact sounding-note / meter comparison between the baseline and the edit."""
+                     allow_tempo_change: bool = False, allow_meter_change: bool = False,
+                     contract: str = "exact") -> dict:
+    """Invariant check between the baseline and the edit under an explicit contract.
+
+    ``exact`` (notes + meter grid, tempo optional), ``pitch`` (ordered pitch
+    sequence only) and ``free`` (differences are reported, nothing is gated).
+    """
     before_text, after_text = clean_abc(before_abc), clean_abc(after_abc)
     if not before_text or not after_text:
         raise ValueError("Both the baseline ABC and the edited ABC are required for a check")
+    if contract not in CONTRACTS:
+        raise ValueError(f"contract must be one of {', '.join(CONTRACTS)}")
     names = abc_tools.VOICES if voices == "both" else (voices,)
     before = abc_tools.parse_abc(before_text)
     after = abc_tools.parse_abc(after_text)
-    result = abc_tools.compare(before, after, names=names, allow_tempo_change=bool(allow_tempo_change))
+    if contract == "free":
+        result = {"match": True, "compared_voices": list(names), "differences": [],
+                  "scope": "free adaptation: differences are recorded, nothing is gated"}
+    elif contract == "pitch":
+        result = _compare_pitch(before, after, names)
+    else:
+        result = abc_tools.compare(before, after, names=names,
+                                   allow_tempo_change=bool(allow_tempo_change))
+        if allow_meter_change:
+            allowed = [d for d in result["differences"] if "meter/time grid differs" in d]
+            result["differences"] = [d for d in result["differences"]
+                                     if "meter/time grid differs" not in d]
+            result["match"] = not result["differences"]
+            result["allowed_differences"] = allowed
+    result.setdefault("tempo_change_allowed", bool(allow_tempo_change))
+    result["meter_change_allowed"] = bool(allow_meter_change)
+    result["contract"] = contract
     result["before_sha256"] = sha256_text(before_text)
     result["after_sha256"] = sha256_text(after_text)
     result["checked_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
@@ -155,6 +202,7 @@ def freeze_baseline(root, rel: str, *, baseline_root=None, now=None) -> dict:
 def build_edit_manifest(*, source_rel: str, before_abc: str, after_abc: str, cot: str,
                         seed: int, cfg_scale, invariants: dict | None, voices: str,
                         allow_tempo_change: bool, allow_changes: bool,
+                        allow_meter_change: bool = False, contract: str = "exact",
                         baseline: dict | None = None, now=None) -> dict:
     """The ``edit_manifest.json`` written next to a regenerated song."""
     before_text, after_text = clean_abc(before_abc), clean_abc(after_abc)
@@ -167,6 +215,8 @@ def build_edit_manifest(*, source_rel: str, before_abc: str, after_abc: str, cot
         "request": {"cot": cot, "seed": int(seed), "cfg_scale": cfg_scale},
         "invariants": invariants or None,
         "permitted": {"compared_voices": ["Vocal", "Ins"] if voices == "both" else [voices],
+                      "contract": contract,
                       "tempo_change": bool(allow_tempo_change),
+                      "meter_change": bool(allow_meter_change),
                       "changes_override": bool(allow_changes)},
     }

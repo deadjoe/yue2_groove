@@ -1151,7 +1151,7 @@ def edit_freeze(source_rel, visible_rel=""):
     return record, info, f"Baseline frozen: {record['baseline']['rel']}"
 
 
-def edit_check(baseline_abc, abc_text, voices, allow_tempo, baseline_state):
+def edit_check(baseline_abc, abc_text, voices, allow_tempo, baseline_state, contract, allow_meter):
     if not (baseline_abc or "").strip():
         raise gr.Error("Load a source work first — the check compares against its baseline ABC")
     if not baseline_state:
@@ -1159,12 +1159,15 @@ def edit_check(baseline_abc, abc_text, voices, allow_tempo, baseline_state):
                        "against that frozen record")
     try:
         result = edit_flow.check_invariants(baseline_abc, abc_text, voices=voices,
-                                            allow_tempo_change=bool(allow_tempo))
+                                            allow_tempo_change=bool(allow_tempo),
+                                            allow_meter_change=bool(allow_meter),
+                                            contract=contract or "exact")
     except ValueError as exc:
         raise gr.Error(f"Invariant check failed: {exc}") from exc
     state = {"sha256": edit_flow.sha256_text(edit_flow.clean_abc(abc_text)),
              "match": bool(result["match"]), "result": result,
-             "voices": voices, "allow_tempo_change": bool(allow_tempo)}
+             "voices": voices, "allow_tempo_change": bool(allow_tempo),
+             "allow_meter_change": bool(allow_meter), "contract": result["contract"]}
     return json.dumps(result, ensure_ascii=False, indent=2), state
 
 
@@ -1225,6 +1228,8 @@ def edit_generate(style, lyrics, cot, seed, cfg_scale, abc_text, baseline_abc, s
             invariants=(check_state or {}).get("result"),
             voices=(check_state or {}).get("voices", "both"),
             allow_tempo_change=bool((check_state or {}).get("allow_tempo_change")),
+            allow_meter_change=bool((check_state or {}).get("allow_meter_change")),
+            contract=(check_state or {}).get("contract", "exact"),
             allow_changes=bool(allow_changes), baseline=baseline_state)
         song, result, elapsed = _run_generation(
             pipe, request, outdir, abc_sampling=abc_sampling, semantic_sampling=sem_sampling,
@@ -2005,6 +2010,8 @@ TIPS = {
     "EDITED ABC": "Your edit of the baseline score. It is validated and submitted explicitly — generation never falls back to a fresh plan.",
     "RESULT ABC": "The score actually submitted for the last generation (chord-stripped when the plan mode requires it). The editor above stays untouched.",
     "SAMPLING // FROM 01 GENERATE": "Read-only mirror of 01 GENERATE → ADVANCED // SAMPLING. Both flows share those sliders; change them there.",
+    "CONTRACT": "What CHECK INVARIANTS must preserve: EXACT keeps notes, meter and durations (tempo/meter optional); PITCH keeps only the ordered pitch sequence, so rhythm may change; FREE records differences without gating anything.",
+    "ALLOW METER CHANGE": "EXACT contract only: treat bar/time-grid differences as permitted instead of a violation.",
     "ALLOW MELODY/RHYTHM CHANGES": "Permit generating even when CHECK INVARIANTS reports differences (intentional adaptations). It does not skip FREEZE BASELINE or the check itself.",
     "CHECK RESULT": "Exact sounding-note / meter comparison of baseline vs edit. Chord-only edits pass; pitch or rhythm changes are reported by voice.",
     "COMPARISON": "Baseline vs edited render: a local listening page built from both run directories.",
@@ -2683,12 +2690,19 @@ def build_ui(defaults):
                             edit_seed = gr.Number(value=831001, label="SEED", precision=0, scale=1)
                             edit_cfg = gr.Number(value=0, label="CFG SCALE", scale=1)
                         with gr.Accordion("INVARIANT CHECK", open=True):
+                            edit_contract = gr.Radio(
+                                choices=[("EXACT // notes + meter", "exact"),
+                                         ("PITCH // rhythm free", "pitch"),
+                                         ("FREE // report only", "free")],
+                                value="exact", label="CONTRACT", scale=3)
                             with gr.Row():
                                 edit_voice = gr.Dropdown(choices=["both", "Vocal", "Ins"],
                                                          value="both", label="COMPARE VOICES",
                                                          scale=1)
                                 edit_allow_tempo = gr.Checkbox(value=False,
                                                                label="ALLOW TEMPO CHANGE", scale=1)
+                                edit_allow_meter = gr.Checkbox(value=False,
+                                                               label="ALLOW METER CHANGE", scale=1)
                                 edit_allow_changes = gr.Checkbox(
                                     value=False, label="ALLOW MELODY/RHYTHM CHANGES", scale=1)
                                 edit_check_btn = gr.Button("CHECK INVARIANTS", size="sm", scale=1)
@@ -3078,7 +3092,7 @@ def build_ui(defaults):
         edit_check_btn.click(
             edit_check,
             inputs=[edit_baseline_abc, edit_abc, edit_voice, edit_allow_tempo,
-                    edit_baseline_state],
+                    edit_baseline_state, edit_contract, edit_allow_meter],
             outputs=[edit_check_out, edit_check_state])
         edit_run_btn.click(
             edit_generate,
