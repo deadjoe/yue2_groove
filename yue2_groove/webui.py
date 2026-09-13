@@ -425,13 +425,13 @@ def generate_all_modes(style, lyrics, seed, cfg_scale, abc_text, out_id,
     _CANCEL.clear()
     if not _RUNNING.acquire(blocking=False):
         yield ("Another job is already running — wait for it to finish",
-               gr.update(), gr.update(), gr.update(), gr.update(), gr.update())
+               gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.skip())
         return
     busy = (gr.update(interactive=False),) * 3
     idle = (gr.update(interactive=True),) * 3
     try:
         yield ("Starting ALL MODES (full → melody → off)…",
-               gr.update(), gr.update(), *busy)
+               gr.update(), gr.update(), *busy, gr.skip())
         pipe, note = _get_pipe(device, dtype, backend, quantization, offload_ar, budget,
                                ode_steps, vae_core_frames, model, vae_choice, vae_custom,
                                revision, vae_revision, offline, progress)
@@ -510,10 +510,10 @@ def generate_all_modes(style, lyrics, seed, cfg_scale, abc_text, out_id,
             lines.append(comparison)
         if len(done_dirs) < 2:
             lines.append("(the comparison needs at least two completed modes)")
-        yield "\n".join(lines), files, link, *idle
+        yield "\n".join(lines), files, link, *idle, str(root)
     except Exception as exc:  # noqa: BLE001
         yield (f"ALL MODES failed: {type(exc).__name__}: {exc}",
-               gr.update(), gr.update(), *idle)
+               gr.update(), gr.update(), *idle, gr.skip())
     finally:
         _RUNNING.release()
 
@@ -3107,7 +3107,7 @@ def build_ui(defaults):
                                    sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max]
                                   + model_args,
                            outputs=[gen_status, files_out, allmodes_link,
-                                    run_btn, plan_btn, allmodes_btn])
+                                    run_btn, plan_btn, allmodes_btn, current_bridge])
         # Cooperative cancel only: do NOT use cancels=[...] here, because Gradio would
         # tear down the running generator event and drop its final "re-enable buttons" yield.
         cancel_btn.click(cancel_run, outputs=gen_status)
