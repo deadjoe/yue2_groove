@@ -2480,52 +2480,61 @@ button:disabled, button[disabled] { opacity: .4 !important; cursor: not-allowed 
 #bb-tip.bb-tip-show { display: block; }
 
 /* ── ADVANCED // SAMPLING dual view (knobs default / sliders) ─────────────
-   Knobs are a CSS+JS view layer over the same 14 gr.Slider inputs. Gradio 6
-   keeps number-input + range-input in the DOM; knobs mode hides their chrome. */
-#bb-sampling-panel.bb-view-knobs .bb-knob { display: flex; }
-#bb-sampling-panel.bb-view-sliders .bb-knob { display: none !important; }
-#bb-sampling-panel.bb-view-knobs .bb-sampling-phases {
-  flex-direction: column !important;
-}
-#bb-sampling-panel.bb-view-knobs .bb-sampling-phase {
-  display: grid !important;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 10px 8px;
-  padding: 12px 10px 16px !important;
-}
-#bb-sampling-panel.bb-view-knobs .bb-sampling-phase > .html-container,
-#bb-sampling-panel.bb-view-knobs .bb-sampling-phase > .prose,
-#bb-sampling-panel.bb-view-knobs .bb-sampling-phase > .md,
-#bb-sampling-panel.bb-view-knobs .bb-sampling-phase > :first-child {
-  grid-column: 1 / -1;
-}
-#bb-sampling-panel.bb-view-knobs .bb-sampling-slider {
-  min-width: 0 !important;
-  padding: 0 !important;
-  border: none !important;
-  background: transparent !important;
-  position: relative !important;
-}
-/* hide native slider chrome in knobs mode; keep inputs for Gradio state */
-#bb-sampling-panel.bb-view-knobs .bb-sampling-slider .head,
-#bb-sampling-panel.bb-view-knobs .bb-sampling-slider .slider_input,
-#bb-sampling-panel.bb-view-knobs .bb-sampling-slider span[data-testid="block-info"],
-#bb-sampling-panel.bb-view-knobs .bb-sampling-slider .label-wrap {
-  position: absolute !important;
-  width: 1px !important; height: 1px !important;
-  padding: 0 !important; margin: -1px !important;
-  overflow: hidden !important; clip: rect(0, 0, 0, 0) !important;
-  white-space: nowrap !important; border: 0 !important;
-  opacity: 0 !important; pointer-events: none !important;
-}
+   Knobs are a view layer over the same 14 gr.Slider inputs: Gradio keeps the
+   number + range inputs in the DOM as the single source of truth (component
+   state, BUDGET PRESET, RESET DEFAULTS, generation) and sampling-knobs.js
+   paints a knob beside them. Gradio 6 renders a phase as
+   `.bb-sampling-phase > .styler > (.block header, .form sliders)`, so knobs
+   mode reduces each slider block to its `.bb-knob` child and lays the phase
+   `.form` out as a 7-column grid. Sliders mode is the untouched native layout. */
 .bb-knob {
   display: none; flex-direction: column; align-items: center; gap: 6px;
   user-select: none; -webkit-user-select: none; cursor: ns-resize;
   touch-action: none; color: var(--bb-ink);
 }
+#bb-sampling-panel.bb-view-knobs .bb-knob { display: flex; }
+#bb-sampling-panel.bb-view-knobs .bb-sampling-phases {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 18px !important;
+}
+/* open layout under the knob view: Gradio's group ground/border is only visible
+   because the native sliders used to cover it, and the mockup wants the knobs
+   on the page itself (sliders mode keeps the cards untouched) */
+#bb-sampling-panel.bb-view-knobs .bb-sampling-phase {
+  width: 100% !important;
+  min-width: 0 !important;
+  background: transparent !important;
+  border-color: transparent !important;
+}
+#bb-sampling-panel.bb-view-knobs .bb-sampling-phase .styler {
+  background: transparent !important;
+}
+/* mockup typography: phase heading reads as a quiet row label, not a bold
+   group title (sliders mode keeps Gradio's group heading) */
+#bb-sampling-panel.bb-view-knobs .bb-sampling-phase .prose strong {
+  font-weight: 400;
+  color: var(--bb-ink2) !important;
+}
+#bb-sampling-panel.bb-view-knobs .bb-sampling-phase .form {
+  display: grid !important;
+  grid-template-columns: repeat(7, minmax(0, 1fr)) !important;
+  gap: 12px 8px !important;
+  align-items: start !important;
+}
+/* in knobs mode a slider block is only a knob host; the native chrome (label,
+   number field, range, reset) stays in the DOM for Gradio but paints nothing */
+#bb-sampling-panel.bb-view-knobs .bb-sampling-slider {
+  min-width: 0 !important; width: 100% !important;
+  padding: 0 !important; border: none !important; box-shadow: none !important;
+  background: transparent !important; overflow: visible !important;
+}
+#bb-sampling-panel.bb-view-knobs .bb-sampling-slider > :not(.bb-knob) {
+  display: none !important;
+}
 .bb-knob-label {
   font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
-  color: var(--bb-ink3); text-align: center; line-height: 1.2;
+  color: var(--bb-ink2); text-align: center; line-height: 1.2;
   max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .bb-knob-body {
@@ -2534,10 +2543,10 @@ button:disabled, button[disabled] { opacity: .4 !important; cursor: not-allowed 
 }
 .bb-knob-svg { display: block; width: 88px; height: 88px; overflow: visible; }
 .bb-knob-arc {
-  fill: none; stroke: var(--bb-ink3); stroke-width: 1.5;
-  stroke-linecap: round; opacity: .85;
+  fill: none; stroke: var(--bb-line2); stroke-width: 2.5;
+  stroke-linecap: round;
 }
-.bb-knob-dot { fill: var(--bb-ink); stroke: none; }
+.bb-knob-dot { fill: var(--bb-primary-bg); stroke: none; }
 .bb-knob-value {
   position: absolute; inset: 0; display: flex; align-items: center;
   justify-content: center; pointer-events: none;
@@ -2546,6 +2555,7 @@ button:disabled, button[disabled] { opacity: .4 !important; cursor: not-allowed 
 }
 .bb-knob:hover .bb-knob-arc { stroke: var(--bb-ink2); }
 .bb-knob.bb-knob-active .bb-knob-dot { fill: var(--bb-ink); }
+.bb-knob.bb-knob-active .bb-knob-arc { stroke: var(--bb-ink2); }
 .bb-knob.bb-knob-active { cursor: ns-resize; }
 html.bb-knob-dragging, html.bb-knob-dragging body {
   cursor: ns-resize !important;
@@ -2555,36 +2565,36 @@ html.bb-knob-dragging, html.bb-knob-dragging body {
 }
 html.bb-knob-dragging { touch-action: none; }
 
-/* view toggle: CSS icon (bars ↔ dial), same grammar as theme/rail */
+/* view toggle: CSS icon of the scene on screen (knob ↔ fader bars), same
+   grammar as the theme/rail buttons; the title says what the click gives */
 #bb-sampling-view-btn {
   position: relative; width: 28px !important; height: 27px; min-width: 28px !important;
   padding: 0 !important; color: var(--bb-ink3) !important; flex: 0 0 auto !important;
 }
 #bb-sampling-view-btn:hover { color: var(--bb-ink) !important; }
-/* default (knobs showing): three horizontal bars → click for sliders */
-#bb-sampling-view-btn.bb-showing-knobs::before,
-#bb-sampling-view-btn:not(.bb-showing-sliders)::before {
+/* knobs showing: dial ring + head dot (click for the sliders) */
+#bb-sampling-view-btn.bb-showing-knobs::before {
+  content: ""; position: absolute; left: 7px; top: 7px; width: 12px; height: 12px;
+  border: 1px solid currentColor; border-radius: 50%;
+  background: radial-gradient(circle at 72% 28%, currentColor 0 1.6px, transparent 1.7px);
+  box-shadow: none;
+}
+/* sliders showing: three fader bars (click for the knobs) */
+#bb-sampling-view-btn.bb-showing-sliders::before {
   content: ""; position: absolute; left: 8px; top: 8px; width: 12px; height: 11px;
   background:
     linear-gradient(currentColor, currentColor) 0 0 / 100% 1px no-repeat,
     linear-gradient(currentColor, currentColor) 0 5px / 100% 1px no-repeat,
     linear-gradient(currentColor, currentColor) 0 10px / 100% 1px no-repeat;
 }
-/* sliders showing: small dial ring → click for knobs */
-#bb-sampling-view-btn.bb-showing-sliders::before {
-  content: ""; position: absolute; left: 8px; top: 7px; width: 12px; height: 12px;
-  border: 1px solid currentColor; border-radius: 50%;
-  background: radial-gradient(circle at 70% 30%, currentColor 0 1.5px, transparent 1.6px);
-  box-shadow: none;
-}
-@media (max-width: 900px) {
-  #bb-sampling-panel.bb-view-knobs .bb-sampling-phase {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+@media (max-width: 1000px) {
+  #bb-sampling-panel.bb-view-knobs .bb-sampling-phase .form {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
   }
 }
-@media (max-width: 560px) {
-  #bb-sampling-panel.bb-view-knobs .bb-sampling-phase {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+@media (max-width: 620px) {
+  #bb-sampling-panel.bb-view-knobs .bb-sampling-phase .form {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   }
 }
 

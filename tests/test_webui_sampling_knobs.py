@@ -31,10 +31,28 @@ def test_sampling_knobs_assets_and_defaults_are_wired() -> None:
         assert eid in js
     assert "bb-sampling-view" in js
     assert "SWEEP_DEG" in js
-    # vertical drag feel: ~120px full travel, Shift slows
+    # vertical drag feel: ~120px full travel, Shift 720px (same step grid)
     assert "120" in js and "720" in js
     assert "preventDefault" in js
     assert "__bbToggleSamplingView" in js
+    assert "MutationObserver" in js        # rebind when the accordion re-renders
+    assert "aria-valuenow" in js
+    assert "dblclick" in js                 # double-click restores the default
+
+
+def test_sampling_knobs_css_targets_the_gradio6_dom() -> None:
+    """Gradio 6 renders a phase as `.bb-sampling-phase > .styler > (.block, .form)`;
+    a regression here once squeezed the knobs into a 27px-wide column."""
+    css = webui.BASE_CSS
+    assert ".bb-sampling-phase .form" in css
+    assert "grid-template-columns: repeat(7, minmax(0, 1fr)) !important" in css
+    # in knobs mode a slider block is reduced to its knob child
+    assert ".bb-sampling-slider > :not(.bb-knob)" in css
+    # mockup palette: stroke2 arc, fg2 label, primary dot on both scenes
+    assert "var(--bb-line2)" in css
+    assert ".bb-knob-dot { fill: var(--bb-primary-bg); stroke: none; }" in css
+    assert "grid-template-columns: repeat(4, minmax(0, 1fr)) !important" in css
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr)) !important" in css
 
 
 def test_sampling_sliders_remain_gradio_sliders_with_stable_ids(monkeypatch, tmp_path) -> None:
