@@ -320,7 +320,7 @@ builds the same local listening bundle as 05 TOOLS with the link shown under the
 
 ## Tips: creativity knobs and instrumental / vocals
 
-- **[Generation creativity knobs](docs/GENERATION_CREATIVITY_KNOBS.md)** — CFG, plan mode, seed, and ADVANCED // SAMPLING (ABC vs semantic): what actually moves style/lyrics creativity.
+- **[Generation creativity knobs](docs/GENERATION_CREATIVITY_KNOBS.md)** — producer guide: three ideas (CFG / temperature+seed / plan mode), recipes, then a short glossary.
 - **[Exclude / instrumental research](docs/EXCLUDE_INSTRUMENTAL_RESEARCH.md)** — YuE2 has no Suno-style exclude API; upstream issues, community workarounds (empty lyric sections, ABC `V: Vocal` rests), and what groove can/cannot do.
 
 ## Keeping up with upstream
@@ -375,7 +375,7 @@ copy (see NOTICE).
   `skills/yue2-music/scripts` (Apache 2.0; the wheel does not ship them).
 - `scripts/serve.sh` — service manager; `scripts/mps_sdpa_check.py` — MPS kernel guard.
 - `docs/COVER_EDIT.md` — 02 COVER / 03 EDIT manual, manual E2E checks C1/C2/E1/X.
-- `docs/GENERATION_CREATIVITY_KNOBS.md` — CFG / sampling / plan-mode creativity reference.
+- `docs/GENERATION_CREATIVITY_KNOBS.md` — producer-facing GENERATE creativity guide (recipes + glossary).
 - `docs/EXCLUDE_INSTRUMENTAL_RESEARCH.md` — upstream research: no exclude API; instrumental workarounds.
 
 ## Credits and license

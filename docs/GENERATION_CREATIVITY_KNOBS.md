@@ -1,111 +1,155 @@
-# YUE2 // GROOVE — Generation creativity knobs
+# GENERATE — creativity knobs (producer guide)
 
-How the GENERATE controls affect **creativity** vs **adherence** to style / lyrics.
-Defaults below match the UI’s ADVANCED // SAMPLING protocol defaults (unless noted).
+You want the song to **follow your style and lyrics**, but still feel **alive**.  
+In YUE2 // GROOVE you do not need every ADVANCED slider. Start with **three ideas**, then use a **recipe**.
 
-## Two stages
-
-YuE2 generation is staged:
-
-1. **Plan (ABC)** — when `cot` is `full` or `melody`, the model (or your pasted ABC) writes a score plan first.
-2. **Semantic** — samples codec tokens from style / lyrics (plus the score). This is what the song *sounds* like.
-
-**CFG** guides the conditioned generation overall.  
-**ADVANCED // SAMPLING** has two slider groups: **ABC phase** and **semantic phase**.
+UI labels below match the GENERATE / ADVANCED // SAMPLING screens.
 
 ---
 
-## Highest impact on creativity / prompt follow
+## The only three ideas to remember
 
-| Control | Typical / default | Role |
+| What you want | What to touch | Plain meaning |
 |---|---|---|
-| **CFG SCALE** | Often `1.5` (empty ≈ **1.0**; `cot=off` default **1.01**) | How tightly the model follows style / lyrics. Higher = stricter (too high can sound harsh/dry). Lower = freer, more drift. `1.5` is a mild tighten — a solid starting point. |
-| **PLAN MODE (`cot`)** | Often `full` | **full** = melody + chord plan (more “composed”). **melody** = no chord symbols, freer arrangement (covers). **off** = no symbolic plan — loosest / least controllable. Prefer **melody** for inventive arrangement; **full** + hand-edited ABC when you want obedience. |
-| **SEED** | — | Same settings, different seed = another take. SONG’s **TRY ANOTHER SEED** does this. Changes the draw, not the “personality” of the knobs. |
-| **Semantic `temperature`** | `1.0` | Main **sonic creativity** dial. Higher (`1.1`–`1.3`) = wilder; lower (`0.85`–`0.95`) = safer / more formulaic. |
-| **Semantic `top_p` / `top_k`** | `0.95` / `100` | Nucleus / top-k width (same family as temperature). Slightly lower (e.g. `top_p=0.9`, `top_k=50`) = tighter; maxed = wilder. |
-| **Semantic `repetition_penalty`** | `1.2` | Discourages repeated phrases. Slightly higher = less looping; too high hurts musical lines. |
+| **How obedient** is the model to your style + lyrics? | **CFG SCALE** | Higher = sticks to the brief harder. Lower = freer (and can wander). |
+| **How wild** is *this take*, once obedience is set? | **Semantic temperature** (under ADVANCED → semantic phase) + **SEED** | Temperature = how daring the performance feels. Seed = “record another take” with the same settings. |
+| **How free** is the arrangement / harmony? | **PLAN MODE** (and optionally editing the ABC score) | Chooses how much written structure exists before the sounding pass. |
+
+If you only ever set CFG to `1.5` and leave everything else default, most of the “surprise” room is still in **semantic temperature** and **SEED** — not in CFG alone.
 
 ---
 
-## Affects the *score* more than lyric stickiness (when planning)
+## What happens when you hit GENERATE (no jargon required)
 
-| Control | Default | Role |
+Think of two studio steps:
+
+1. **Write a sketch (optional)** — PLAN MODE can ask the model to draft a score (melody, and maybe chords). You can also paste or edit that score (ABC).
+2. **Perform the song** — the model turns style + lyrics (+ sketch) into audio. That “performance” is where **semantic** sampling lives.
+
+**CFG** applies to how strongly the brief (style / lyrics) steers the run overall.
+
+You can ignore the **ABC phase** sliders at first. They mainly change how adventurous the *sketch* is. Leave them on defaults unless you care about the written plan.
+
+---
+
+## Recipes (copy these first)
+
+Keep style and lyrics fixed while you compare. Change **one** thing at a time when you are learning.
+
+### 1) “Stay close to my words and style” (safer / more radio)
+
+| Control | Set to |
+|---|---|
+| CFG SCALE | `1.5`–`1.8` |
+| PLAN MODE | **full** |
+| Semantic temperature | `0.85`–`0.95` |
+| SEED | Pick one and keep it while comparing other knobs |
+
+Optional later: semantic top_p `0.9`, top_k `50`, repetition_penalty `1.25` (slightly less looping).
+
+### 2) “Same song idea, but more surprising takes”
+
+| Control | Set to |
+|---|---|
+| CFG SCALE | `1.2`–`1.5` (do not jump to `3+` first) |
+| PLAN MODE | **full** or **melody** (see below) |
+| Semantic temperature | `1.15`–`1.25` |
+| SEED | Try several — use **TRY ANOTHER SEED** in SONG |
+
+### 3) “Freer arrangement” (covers, less locked harmony)
+
+| Control | Set to |
+|---|---|
+| PLAN MODE | **melody** |
+| CFG SCALE | about `1.5` |
+| Semantic temperature | start at `1.0`, then nudge |
+
+**melody** = melody plan without chord symbols → accompaniment can wander more.  
+**full** = melody + chords → feels more “composed.”  
+**off** = no sketch → loosest and hardest to steer; use sparingly.
+
+### 4) “Weird but not chaos”
+
+1. Run with PLAN MODE **full** (or PLAN ONLY if you use that flow).  
+2. Edit a few bars of the ABC score so the shape is locked.  
+3. Generate again with a slightly higher semantic temperature and/or new SEED.
+
+You are freezing the skeleton, then letting the performance improvise.
+
+---
+
+## PLAN MODE in one glance
+
+| PLAN MODE | Feels like | Use when |
 |---|---|---|
-| **ABC phase `temperature` / `top_p` / `top_k`** | `0.7` / `0.9` / `30` | How adventurous the **plan** is (melody / chord skeleton). Higher = flashier charts; lower = safer. Lyric adherence still lives mainly in semantic + CFG, but a weird score will skew the song. |
-| **Your own / edited ABC** | empty | Strongest structural steering: PLAN ONLY or COVER → edit the score → generate. Lock form, then play with sampling. |
-
-ABC phase also has `repetition_penalty` (default `1.005`), `penalty_window` (`100`), `min_tokens` (`32`), `max_tokens` (`4096`).
-
----
-
-## Not “creativity” — don’t reach for these first
-
-- **ODE steps**, **dtype**, **memory budget**, **VAE** — quality / speed / stability  
-- **BUDGET PRESET** / **`max_tokens`** — length and wall time (semantic ≈ **25 tokens ≈ 1 s** of audio); not musical personality  
-- **`min_tokens` / `penalty_window`** — length floor and repetition window; fine-tuning only  
+| **full** | Lead sheet with chords | You want a clear harmonic plan, or you will edit the score |
+| **melody** | Melody-only sketch | Covers / freer band arrangement |
+| **off** | No written sketch | Experiments only; least predictable |
 
 ---
 
-## Practical recipes (around CFG `1.5`)
+## CFG SCALE in one glance
 
-### More inventive, still recognises style / lyrics
-
-1. Keep CFG in **`1.2–1.5`** (don’t jump to `3+` first).  
-2. Raise **semantic temperature** to **`1.15–1.25`**, and/or try several **seeds**.  
-3. A/B **full vs melody** at the same seed — arrangement freedom differs a lot.  
-4. For “weird but not chaotic”: plan first, edit a few ABC bars, then generate (lock skeleton, free sampling).
-
-### Tighter follow of words / style
-
-- CFG **`1.5–2.0`**, **slightly lower** semantic temperature, plan **`full`**, hand-edit ABC when needed.
-
-### One-liner
-
-- **CFG** = how obedient  
-- **Semantic temperature (+ seed)** = how wild *within* that obedience  
-- **Plan mode / ABC** = how free the *structure* is  
-
-If you only ever set CFG=`1.5`, most of the creativity room is still in **semantic sampling** and **seed**.
-
----
-
-## Ready-to-type ADVANCED presets
-
-Shared: leave ABC phase at protocol defaults unless you care about the chart itself.  
-ABC defaults: temp `0.7`, top_p `0.9`, top_k `30`, rep `1.005`, window `100`, min `32`, max `4096`.  
-Semantic protocol defaults: temp `1.0`, top_p `0.95`, top_k `100`, rep `1.2`, window `50`, min `200`, max `9000`.
-
-### A — Pop-stable (safer, more “radio”)
-
-| | Value |
+| CFG | Tendency |
 |---|---|
-| CFG | `1.5`–`1.8` |
-| Plan mode | `full` |
-| Semantic temperature | `0.9` |
-| Semantic top_p | `0.9` |
-| Semantic top_k | `50` |
-| Semantic repetition_penalty | `1.25` |
-| Seed | Fix one, or nudge ±1 when comparing |
+| Empty / default | Protocol default (about `1.0`; **off** mode uses about `1.01`) |
+| `1.2`–`1.5` | Mild guidance — good everyday range |
+| `1.5`–`2.0` | Tighter to the brief |
+| Much higher (e.g. `3+`) | Often harsh or stiff — try only after milder values fail |
 
-### B — Experimental (wilder takes)
-
-| | Value |
-|---|---|
-| CFG | `1.2`–`1.5` |
-| Plan mode | `melody` (or `full` + edited ABC) |
-| Semantic temperature | `1.2` |
-| Semantic top_p | `0.95` |
-| Semantic top_k | `100` |
-| Semantic repetition_penalty | `1.15` |
-| Seed | Try several; keep the rest fixed |
-
-Optional ABC tweak for B: temperature `0.85`, top_k `50` if you want a slightly freer plan without chaos.
+Empty CFG in the UI means “use the default,” not the number zero.
 
 ---
 
-## Notes
+## SEED in one glance
 
-- Empty CFG in the UI means “use protocol default,” not literal `0`.  
-- Instrumental / “no vocals” is **not** a native YuE2 exclude control; see upstream issues / community empty-section recipes separately.  
-- This note describes **yue2_groove** GENERATE controls wrapping the upstream `yue2` `SongRequest` + dual `Sampling` objects.
+Same style, lyrics, CFG, plan mode, and sampling + **different SEED** = another take.  
+It does not change what the knobs *mean*; it only changes which roll you get.
+
+---
+
+## Leave alone until you need them
+
+| Area | Why wait |
+|---|---|
+| ABC phase sliders | Mostly “how fancy is the written sketch” |
+| ODE steps, dtype, memory, VAE | Sound engine / speed / stability — not musical personality |
+| BUDGET PRESET / max tokens | Song length and how long you wait — not “vibe” |
+| min tokens / penalty window | Length floor and anti-repeat window — fine print |
+
+---
+
+## Optional: ready-made ADVANCED numbers
+
+**ABC phase (defaults — usually leave as-is)**  
+temperature `0.7`, top_p `0.9`, top_k `30`, repetition_penalty `1.005`, penalty_window `100`, min_tokens `32`, max_tokens `4096`
+
+**Semantic phase — pop-stable**  
+temperature `0.9`, top_p `0.9`, top_k `50`, repetition_penalty `1.25`  
+(+ CFG `1.5`–`1.8`, PLAN MODE **full**)
+
+**Semantic phase — experimental**  
+temperature `1.2`, top_p `0.95`, top_k `100`, repetition_penalty `1.15`  
+(+ CFG `1.2`–`1.5`, PLAN MODE **melody** or **full** + edited ABC)
+
+---
+
+## Glossary (read only if you want the tech names)
+
+| UI / doc word | Simple meaning |
+|---|---|
+| **CFG / cfg_scale** | How hard the model is pulled toward your style + lyrics text |
+| **PLAN MODE / cot** | Whether generation starts from a full score plan, melody-only plan, or no plan (`full` / `melody` / `off`) |
+| **ABC** | The editable score text (the sketch) |
+| **ABC phase sampling** | Randomness while *writing* that sketch |
+| **Semantic phase sampling** | Randomness while *performing* the sounding song |
+| **temperature** | Overall daring / chaos of that phase |
+| **top_p / top_k** | How wide a set of next choices is allowed (same family as temperature: lower = safer) |
+| **repetition_penalty** | Push-back against repeating the same idea too soon |
+| **SEED** | Which take you get with otherwise identical settings |
+
+For instrumental / “no vocals” limits of YuE2 (no Suno-style exclude), see [EXCLUDE_INSTRUMENTAL_RESEARCH.md](EXCLUDE_INSTRUMENTAL_RESEARCH.md).
+
+---
+
+*This guide describes YUE2 // GROOVE GENERATE controls. Under the hood they map to YuE2’s plan + dual sampling settings; you do not need that to use the recipes above.*
