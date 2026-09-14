@@ -2512,7 +2512,10 @@ button:disabled, button[disabled] { opacity: .4 !important; cursor: not-allowed 
 }
 /* mockup typography: phase heading reads as a quiet row label, not a bold
    group title (sliders mode keeps Gradio's group heading). The filled tag
-   lifts it off the knob labels underneath without adding any vertical space. */
+   lifts it off the knob labels underneath and gets a little breathing room. */
+#bb-sampling-panel.bb-view-knobs .bb-sampling-phase .styler > .block {
+  margin-bottom: 8px !important;
+}
 #bb-sampling-panel.bb-view-knobs .bb-sampling-phase .prose strong {
   font-weight: 400;
   color: var(--bb-ink) !important;
