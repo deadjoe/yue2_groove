@@ -58,7 +58,10 @@ from __future__ import annotations
 
 import argparse
 import atexit
-import fcntl
+try:
+    import fcntl  # Unix only; optional macOS F_FULLFSYNC in _fsync_fd
+except ImportError:  # Windows (and any host without the module)
+    fcntl = None
 import html
 import json
 import os
@@ -309,8 +312,9 @@ def _fsync_fd(fd: int) -> None:
         os.fsync(fd)
     except OSError:
         pass
-    # macOS: fsync only reaches the drive cache, F_FULLFSYNC reaches the media
-    if hasattr(fcntl, "F_FULLFSYNC"):
+    # macOS: fsync only reaches the drive cache, F_FULLFSYNC reaches the media.
+    # fcntl is absent on Windows; skip the extra flush there.
+    if fcntl is not None and hasattr(fcntl, "F_FULLFSYNC"):
         try:
             fcntl.fcntl(fd, fcntl.F_FULLFSYNC)
         except OSError:

@@ -140,3 +140,17 @@ def test_edit_and_cover_choices_skip_incomplete_runs(tmp_path, monkeypatch) -> N
     # the Library itself still shows the incomplete run
     assert {item["rel"] for item in library.scan(runs)} == \
         {"20260913-120000-Good", "20260913-130000-Bad"}
+
+
+def test_fsync_fd_without_fcntl(tmp_path, monkeypatch):
+    """Windows has no fcntl; durability must still fsync via os.fsync alone."""
+    import os
+
+    monkeypatch.setattr(webui, "fcntl", None)
+    path = tmp_path / "artifact.bin"
+    path.write_bytes(b"ok")
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        webui._fsync_fd(fd)  # must not raise when fcntl is missing
+    finally:
+        os.close(fd)
