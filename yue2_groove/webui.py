@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+
 try:
     import fcntl  # Unix only; optional macOS F_FULLFSYNC in _fsync_fd
 except ImportError:  # Windows (and any host without the module)
