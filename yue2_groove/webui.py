@@ -2483,7 +2483,9 @@ button:disabled, button[disabled] { opacity: .4 !important; cursor: not-allowed 
    Knobs are a view layer over the same 14 gr.Slider inputs: Gradio keeps the
    number + range inputs in the DOM as the single source of truth (component
    state, BUDGET PRESET, RESET DEFAULTS, generation) and sampling-knobs.js
-   paints a knob beside them. Gradio 6 renders a phase as
+   paints a knob beside them. Every knobs-mode rule hangs off `.bb-view-knobs`,
+   which only the script sets: with no script the panel is plain sliders, never
+   an empty accordion. Gradio 6 renders a phase as
    `.bb-sampling-phase > .styler > (.block header, .form sliders)`, so knobs
    mode reduces each slider block to its `.bb-knob` child and lays the phase
    `.form` out as a 7-column grid. Sliders mode is the untouched native layout. */
@@ -2584,6 +2586,7 @@ html.bb-knob-dragging { touch-action: none; }
   padding: 0 !important; color: var(--bb-ink3) !important; flex: 0 0 auto !important;
 }
 #bb-sampling-view-btn:hover { color: var(--bb-ink) !important; }
+#bb-sampling-view-btn:not(.bb-showing-knobs):not(.bb-showing-sliders) { visibility: hidden; }
 /* knobs showing: dial ring + head dot (click for the sliders) */
 #bb-sampling-view-btn.bb-showing-knobs::before {
   content: ""; position: absolute; left: 7px; top: 7px; width: 12px; height: 12px;
@@ -3544,8 +3547,10 @@ def build_ui(defaults):
                             abc = gr.Textbox(label="ABC SCORE", lines=8,
                                              placeholder="Leave empty to let the model plan")
                         with gr.Accordion("ADVANCED // SAMPLING", open=False):
-                            with gr.Column(elem_id="bb-sampling-panel",
-                                           elem_classes=["bb-view-knobs"]):
+                            # no view class here: sampling-knobs.js adds bb-view-knobs /
+                            # bb-view-sliders when the panel appears, so without the
+                            # script the native sliders stay visible and usable
+                            with gr.Column(elem_id="bb-sampling-panel"):
                                 with gr.Row():
                                     preset = gr.Dropdown(choices=["Protocol defaults (full)",
                                                                   "Preview (~1–1.5 min song)",

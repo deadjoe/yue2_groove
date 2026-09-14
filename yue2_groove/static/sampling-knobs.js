@@ -9,7 +9,10 @@
  * Gradio 6 slider DOM: root `#bb-abc-temp` contains
  *   input[data-testid="number-input"] and input[data-testid="range-input"].
  * Knobs are the default view; the toggle button and localStorage key
- * `bb-sampling-view` remember the user's choice per browser.
+ * `bb-sampling-view` remember the user's choice per browser. The panel is
+ * served without a view class and this script classes it the moment it
+ * appears (before first paint), so if the script never loads the native
+ * sliders stay visible and usable instead of an empty accordion.
  *
  * Drag vertically: ~120 px = full range, Shift = 6x finer (same step grid).
  * Double-click restores that phase's default; arrows / Home / End also work.
@@ -82,6 +85,18 @@
       btn.setAttribute('aria-label', label);
       btn.classList.toggle('bb-showing-knobs', knobs);
       btn.classList.toggle('bb-showing-sliders', !knobs);
+    }
+  }
+
+  /* the server never commits the panel to the JS-only layout; the first
+     observer tick after the panel is inserted classes it before paint, and
+     a re-created panel (accordion re-render) picks its class up the same way */
+  function ensureView() {
+    var p = panel();
+    if (!p) return;
+    if (!p.classList.contains('bb-view-knobs') &&
+        !p.classList.contains('bb-view-sliders')) {
+      applyView(savedView());
     }
   }
 
@@ -415,8 +430,8 @@
     if (!booted) {
       booted = true;
       PARAMS.forEach(function (param) { knobs.push(buildKnob(param)); });
-      applyView(savedView());
     }
+    ensureView();
     knobs.forEach(function (knob) {
       if (knob.host && !knob.host.isConnected) knob._bound = false;
       if (!knob._bound) knob._bound = bindKnob(knob);
@@ -444,7 +459,10 @@
   }
   window.addEventListener('load', scheduleBoot);
   if (window.MutationObserver) {
-    new MutationObserver(scheduleBoot).observe(document.documentElement, {
+    new MutationObserver(function () {
+      ensureView();          /* runs before the browser paints the mutation */
+      scheduleBoot();
+    }).observe(document.documentElement, {
       childList: true,
       subtree: true
     });
