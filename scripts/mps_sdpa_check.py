@@ -127,7 +127,7 @@ def main() -> int:
         err = float((out.float().cpu() - ref).abs().max())
         print(f"   enable_gqa {'OK ' if err <= TOL else 'BAD'}  max|err|={err:9.4f}")
     except Exception as exc:                     # noqa: BLE001
-        print(f"   enable_gqa raised: {type(exc).__name__}: {exc}")
+        print(f"   enable_gqa not available on this build: {exc}")
 
     print("\nDEFECT PRESENT" if defect else "\ndefect not reproduced")
     return 1 if defect else 0
