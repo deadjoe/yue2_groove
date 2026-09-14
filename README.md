@@ -6,48 +6,20 @@
   <a href="https://github.com/multimodal-art-projection/YuE"><img src="https://img.shields.io/badge/model-Yue2-0A9396" alt="Yue2 model"></a>
 </p>
 
-An unofficial web UI for [YuE2](https://github.com/multimodal-art-projection/YuE), the
-open full-song music generation model with an editable symbolic plan. Give it a style
-prompt and lyrics; it plans a melody-and-chord score (ABC), then renders a complete
-48 kHz stereo song. This UI puts every control of the official CLI/Python API in the
-browser, adds a library of your generated works, and runs as a small local service.
+YUE2 // GROOVE is the latest music studio built on the open-source Yue2 model and its inference stack. Generate high-quality full songs from style and lyrics with an editable score plan — powered by the latest YuE model — cover from audio with SheetSage2 and MERT2, refine and compare edits, and keep your works in a reusable, easy-to-manage library. You get high-quality creation with real creative control.
 
-Two views, one kernel.  **SONG** (the default) is the producer-facing director: it
-follows one work at a time, states its stage (`DRAFT → SCORE → AUDIO → REVISE →
-DONE`), renders its score read-only, plays it, offers the next actions, and holds no
-editable control.  **STUDIO** is the full 7-tab gear room below — the view switch is
-always one click away (top right, next to the theme toggle) and never destroys what
-you were doing.  `--view song|studio` / `YUE2_GROOVE_VIEW` forces a view for a
-launch; the last choice is remembered per browser.
+Two views, one kernel. **SONG** (the default) is the producer-facing director: one work at a time, its stage
+(`DRAFT → SCORE → AUDIO → REVISE → DONE`), a read-only score, playback, and the next actions — no knobs.
+**STUDIO** is the full 7-tab gear room. Switch anytime (top right); your work stays intact.
 
-- **SONG** — current work, its stage, READ-ONLY score, a player, and the next
-  actions (`LISTEN` / `RENDER` / `EDIT WORK` / `TRY ANOTHER SEED` / `CHECK` /
-  `SEND TO GENERATE` / `OPEN IN LIBRARY`), each of which opens the matching Studio
-  surface with the work already set.  With no current work it offers three start
-  cards: NEW SONG / COVER A RECORDING / EDIT A WORK.
-- **01 // GENERATE** — style + lyrics (+ optional ABC score) → editable plan → song.
-  Plan mode `full / melody / off`, seed, CFG scale, all seven sampling parameters of both
-  phases, budget presets, cancel, live progress, a rendered score, one-click artifact download.
-  **ALL MODES** runs the same text request as `full` + `melody` + `off` and compares them.
-  A run ends with **OPEN IN LIBRARY** / **EDIT THIS RUN**.
-- **06 // DECODE** — re-decode a saved `latent.npy` with another decoder
-  (source / standard / legacy / custom VAE, full or tiled) without generating again.
-- **07 // BATCH** — one JSON request per line, run in order, with a results table.
-- **05 // TOOLS** — ABC validation and event export, chord stripping for cover melodies,
-  edit invariant check, listening-comparison page, environment doctor.
-- **04 // LIBRARY** — every work you generated: sort, select, rename, confirmed delete,
-  a player with spectrum and transport controls, style / lyrics / ABC / score, run tables,
-  and **OPEN IN 03 EDIT** / **USE IN 02 COVER** to keep working on a work you just heard.
-  A run is flushed to disk before it is reported done, and one that was interrupted
-  (crash, panic, power loss) stays listed as **INCOMPLETE** with its partial artifacts
-  instead of vanishing.
-- **02 // COVER** — source audio → SheetSage2 transcription (separate venv) → editable ABC,
-  chord strip → one click into GENERATE with the right plan mode.
-- **03 // EDIT** — freeze a baseline, edit the score, check invariants under an explicit
-  **CONTRACT** (EXACT notes+meter / PITCH rhythm-free / FREE report-only), regenerate
-  from the edited score, compare baseline vs edit.
-- **Settings rail** — device, dtype, backend, quantization, memory budget, ODE steps,
-  VAE core frames, model/VAE revisions, offline mode, load / unload.
+- **SONG** — start cards for NEW SONG / COVER A RECORDING / EDIT A WORK; then stage + next actions
+  (`LISTEN` / `EDIT WORK` / `TRY ANOTHER SEED` / `OPEN IN LIBRARY`, …)
+- **01 // GENERATE** — style + lyrics (+ optional ABC) → editable plan → full song (plan mode, seed, CFG, sampling)
+- **02 // COVER** — recording → SheetSage2 / MERT2 transcription → polish ABC → generate a cover
+- **03 // EDIT** — freeze baseline → edit score → check invariants → generate edited → compare
+- **04 // LIBRARY** — all works: play, rename, open in EDIT / COVER, durable run history
+- **05 // TOOLS** · **06 // DECODE** · **07 // BATCH** — utilities, re-decode, batch jobs
+- **Settings rail** — device, dtype, memory budget, ODE steps, models
 
 The UI is a thin layer over the `yue2` package: it never modifies upstream code, and the
 single file that imports `yue2` (`yue2_groove/adapter.py`) is covered by contract tests
@@ -59,14 +31,25 @@ that fail loudly when an upstream release changes something the UI depends on.
 
 ## Screenshots
 
-Dark scene (the UI also has a bright one). **04 // LIBRARY** — work list, spectrum player,
-per-run request / sampling tables:
+**SONG** — empty start (NEW SONG / COVER / EDIT):
 
-<img src="docs/images/library-dark.webp" alt="04 // LIBRARY: work list, spectrum player, request and sampling tables" width="100%">
+<img src="docs/images/song-start-dark.png" alt="SONG view: start cards for new song, cover, and edit" width="100%">
 
-**01 // GENERATE** — style, lyrics, plan mode, sampling presets, score and status panes:
+**SONG** — after generate (audio + score):
 
-<img src="docs/images/generate-dark.webp" alt="01 // GENERATE: style, lyrics, plan mode, sampling presets" width="58%">
+<img src="docs/images/song-audio-dark.png" alt="SONG view: Grand_Piano_CFG15 with waveform and score" width="100%">
+
+**02 // COVER** — transcribe a recording with SheetSage2:
+
+<img src="docs/images/cover-dark.png" alt="02 COVER: source audio upload and transcription tasks" width="100%">
+
+**03 // EDIT** — freeze a baseline and revise the score:
+
+<img src="docs/images/edit-dark.png" alt="03 EDIT: freeze baseline and style fields" width="100%">
+
+**04 // LIBRARY** — works, player, and run tables:
+
+<img src="docs/images/library-dark.png" alt="04 LIBRARY: work list, player, request and sampling tables" width="100%">
 
 ## Requirements
 
@@ -83,13 +66,16 @@ per-run request / sampling tables:
 
 ## Run in Pinokio (easiest)
 
-Prefer not to set up Python by hand? Install **[Pinokio Desktop](https://pinokio.computer)**, then open the one-click launcher:
+Prefer not to set up Python by hand? Use the one-click launcher:
 
-**→ [YUE2 // GROOVE on Pinokio](https://pinokio.co/apps/github-com-deadjoe-yue2-groove-pinokio)**
+**→ [YUE2 // GROOVE on Pinokio](https://pinokio.co/apps/github-com-deadjoe-yue2-groove-pinokio)**  
+**→ Launcher repo: [deadjoe/yue2-groove-pinokio](https://github.com/deadjoe/yue2-groove-pinokio)**
 
-Or in Pinokio: **Explore** → search `YUE2 // GROOVE` → **Install** → **Start**.
+<img src="docs/images/pinokio-app-page.png" alt="YUE2 // GROOVE on Pinokio Explore — Install" width="100%">
 
-Alternate: Discover → **Download from URL** → paste `https://github.com/deadjoe/yue2-groove-pinokio`.
+1. Install **[Pinokio Desktop](https://pinokio.computer)**
+2. Open the app page above (or **Explore** → search `YUE2 // GROOVE`) → **Install** → **Start**
+3. Alternate: Discover → **Download from URL** → paste `https://github.com/deadjoe/yue2-groove-pinokio`
 
 That path installs YuE2 + Cover (SheetSage2 / MERT2) for you. The manual steps below remain for developers who want a local clone.
 
