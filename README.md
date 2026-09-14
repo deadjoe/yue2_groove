@@ -1,5 +1,11 @@
 # YUE2 // GROOVE
 
+<p align="center">
+  <a href="https://pinokio.co/apps/github-com-deadjoe-yue2-groove-pinokio"><img src="https://img.shields.io/badge/one--click-Pinokio-F4A261" alt="Install with Pinokio"></a>
+  <a href="https://github.com/deadjoe/yue2-groove-pinokio"><img src="https://img.shields.io/badge/launcher-yue2--groove--pinokio-7C3AED?logo=github&logoColor=white" alt="Pinokio launcher repo"></a>
+  <a href="https://github.com/multimodal-art-projection/YuE"><img src="https://img.shields.io/badge/model-Yue2-0A9396" alt="Yue2 model"></a>
+</p>
+
 An unofficial web UI for [YuE2](https://github.com/multimodal-art-projection/YuE), the
 open full-song music generation model with an editable symbolic plan. Give it a style
 prompt and lyrics; it plans a melody-and-chord score (ABC), then renders a complete
@@ -73,6 +79,19 @@ per-run request / sampling tables:
 - *Optional, for covers:* a separate SheetSage2 environment (Python 3.10/3.11, its own
   torch/transformers, FFmpeg 6.1+) — see [Cover from audio](#cover-from-audio-sheetsage2).
   Everything except 02 COVER works without it.
+
+
+## Run in Pinokio (easiest)
+
+Prefer not to set up Python by hand? Install **[Pinokio Desktop](https://pinokio.computer)**, then open the one-click launcher:
+
+**→ [YUE2 // GROOVE on Pinokio](https://pinokio.co/apps/github-com-deadjoe-yue2-groove-pinokio)**
+
+Or in Pinokio: **Explore** → search `YUE2 // GROOVE` → **Install** → **Start**.
+
+Alternate: Discover → **Download from URL** → paste `https://github.com/deadjoe/yue2-groove-pinokio`.
+
+That path installs YuE2 + Cover (SheetSage2 / MERT2) for you. The manual steps below remain for developers who want a local clone.
 
 ## Quick start
 
