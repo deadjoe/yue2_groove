@@ -2928,13 +2928,13 @@ HEAD_HTML = """<meta name="color-scheme" content="dark light">
 HEAD_HTML += ("<script>window.__BB_TIPS__ = " + json.dumps(TIPS, ensure_ascii=False)
               + ";</script><script>" + TIP_JS + "</script>")
 
-# ── abcjs score rendering (bundled under yue2_groove/static, served via allowed_paths) ──
+# ── static scripts (bundled under yue2_groove/static, served via allowed_paths) ──
 ABCJS_FILE = config.STATIC_DIR / "abcjs-basic-min.js"
 SAMPLING_KNOBS_FILE = config.STATIC_DIR / "sampling-knobs.js"
-# ── abcjs score rendering (bundled under yue2_groove/static, served via allowed_paths) ──
+
+# ── abcjs score rendering ──
 # Every score panel declares data-bb-abc="<label prefix of its ABC textbox>"; the
 # script finds the matching textarea and renders into the panel's .bb-score-inner.
-ABCJS_FILE = config.STATIC_DIR / "abcjs-basic-min.js"
 SCORE_JS = """(function () {
   // Look for the textarea whose block label starts with `prefix`, preferring the
   // panel's own tab (so identical labels in different tabs cannot cross-render).
