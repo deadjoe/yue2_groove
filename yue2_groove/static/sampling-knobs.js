@@ -144,10 +144,17 @@
   }
 
   function readValue(inputs, meta) {
-    var raw = inputs.number ? inputs.number.value
-      : (inputs.range ? inputs.range.value : meta.min);
-    var v = parseFloat(raw);
-    return isFinite(v) ? v : meta.min;
+    /* the number field can be empty while the user retypes a value; fall back
+       to the range input (which the browser keeps at its own position) before
+       assuming min, so the knob never contradicts the native control */
+    var candidates = [inputs.number, inputs.range];
+    for (var i = 0; i < candidates.length; i++) {
+      var el = candidates[i];
+      if (!el || el.value === '') continue;
+      var v = parseFloat(el.value);
+      if (isFinite(v)) return v;
+    }
+    return meta.min;
   }
 
   function decimalsFor(step) {
@@ -170,10 +177,17 @@
     return Number(n.toFixed(d));
   }
 
+  /* The number field carries the component value (Gradio mirrors it into the
+     range, which quantises to its own step — e.g. sem_max 9000 sits at 8960
+     there). Writing the range as well would let its sanitised value win and
+     silently change the parameter, so only the number field is written. */
   function writeValue(inputs, v) {
     var s = String(v);
-    if (inputs.number && inputs.number.value !== s) setNative(inputs.number, s);
-    if (inputs.range && inputs.range.value !== s) setNative(inputs.range, s);
+    if (inputs.number) {
+      if (inputs.number.value !== s) setNative(inputs.number, s);
+    } else if (inputs.range && inputs.range.value !== s) {
+      setNative(inputs.range, s);
+    }
   }
 
   /* ── knob construction / painting ─────────────────────────────────────── */
@@ -274,8 +288,13 @@
       var c = current();
       if (!c.inputs.number && !c.inputs.range) return;
       show(c, c.value);
-      knob.host.setAttribute('aria-valuemin', String(c.meta.min));
-      knob.host.setAttribute('aria-valuemax', String(c.meta.max));
+      var min = String(c.meta.min), max = String(c.meta.max);
+      if (knob.host.getAttribute('aria-valuemin') !== min) {
+        knob.host.setAttribute('aria-valuemin', min);
+      }
+      if (knob.host.getAttribute('aria-valuemax') !== max) {
+        knob.host.setAttribute('aria-valuemax', max);
+      }
     }
 
     function onPointerDown(ev) {
@@ -283,7 +302,10 @@
       if (ev.button != null && ev.button !== 0) return;
       ev.preventDefault();                           /* no text select / scroll */
       var c = current();
-      drag = { y: ev.clientY, value: c.value, meta: c.meta, id: ev.pointerId };
+      /* track an unsnapped accumulator: Shift can be pressed or released
+         mid-drag without the value jumping, and sub-step motion is not lost */
+      drag = { lastY: ev.clientY, raw: c.value, meta: c.meta, id: ev.pointerId };
+      activeDrag = knob;
       try { knob.host.setPointerCapture(ev.pointerId); } catch (e) {}
       knob.host.classList.add('bb-knob-active');
       document.documentElement.classList.add('bb-knob-dragging');
@@ -295,8 +317,9 @@
       var meta = drag.meta;
       var span = meta.max - meta.min;
       var px = ev.shiftKey ? PX_FINE : PX_FULL;
-      var raw = drag.value + (drag.y - ev.clientY) / px * span;
-      var v = snap(raw, meta);
+      drag.raw += (drag.lastY - ev.clientY) / px * span;
+      drag.lastY = ev.clientY;
+      var v = snap(drag.raw, meta);
       writeValue(findInputs(root), v);
       show({ meta: meta }, v);
     }
@@ -305,6 +328,7 @@
       if (!drag) return;
       if (ev) ev.preventDefault();
       drag = null;
+      if (activeDrag === knob) activeDrag = null;
       knob.host.classList.remove('bb-knob-active');
       document.documentElement.classList.remove('bb-knob-dragging');
       try {
@@ -354,6 +378,7 @@
     }
 
     knob.sync = syncFromSlider;
+    knob.end = onPointerUp;
     syncFromSlider();
     return true;
   }
@@ -362,6 +387,18 @@
 
   var knobs = [];
   var booted = false;
+  var activeDrag = null;   /* pointer-up safety net (see below) */
+
+  /* the host's own pointerup normally ends a drag; these are the belt and
+     braces for a pointer released outside it, a cancelled touch, or the host
+     being re-rendered mid-drag — a stuck `bb-knob-dragging` would leave the
+     whole page with the resize cursor and no text selection */
+  function endAnyDrag(ev) {
+    if (activeDrag && activeDrag.end) activeDrag.end(ev);
+  }
+  window.addEventListener('pointerup', endAnyDrag);
+  window.addEventListener('pointercancel', endAnyDrag);
+  window.addEventListener('blur', function () { endAnyDrag(null); });
 
   function boot() {
     var p = panel();
@@ -403,4 +440,10 @@
       subtree: true
     });
   }
+  /* server-driven value updates (preset, reset) repaint the inputs without a
+     DOM event, so a light heartbeat keeps the knobs truthful even if nothing
+     else in the panel mutates; paint() is change-guarded, so this is quiet */
+  setInterval(function () {
+    if (document.getElementById('bb-sampling-panel')) boot();
+  }, 1000);
 })();

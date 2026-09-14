@@ -38,6 +38,13 @@ def test_sampling_knobs_assets_and_defaults_are_wired() -> None:
     assert "MutationObserver" in js        # rebind when the accordion re-renders
     assert "aria-valuenow" in js
     assert "dblclick" in js                 # double-click restores the default
+    # functional guards added after the numeric-control audit:
+    assert "drag.raw" in js                  # incremental drag (Shift mid-drag, no jump)
+    assert "drag.lastY" in js
+    assert "activeDrag" in js                # window pointerup safety net
+    assert "setInterval" in js               # heartbeat resync for preset/reset values
+    assert "inputs.number.value !== s" in js  # number field is the written value
+    assert "inputs.range.value !== s" in js   # range only when no number field exists
 
 
 def test_sampling_knobs_css_targets_the_gradio6_dom() -> None:
