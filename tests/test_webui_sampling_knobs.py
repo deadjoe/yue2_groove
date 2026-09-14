@@ -53,6 +53,8 @@ def test_sampling_knobs_css_targets_the_gradio6_dom() -> None:
     assert ".bb-knob-dot { fill: var(--bb-primary-bg); stroke: none; }" in css
     assert "grid-template-columns: repeat(4, minmax(0, 1fr)) !important" in css
     assert "grid-template-columns: repeat(2, minmax(0, 1fr)) !important" in css
+    # the view switch rides the duration line above the phases, not the preset row
+    assert "#bb-sampling-panel .bb-sampling-viewbar" in css
 
 
 def test_sampling_sliders_remain_gradio_sliders_with_stable_ids(monkeypatch, tmp_path) -> None:

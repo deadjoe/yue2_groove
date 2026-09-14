@@ -2565,6 +2565,10 @@ html.bb-knob-dragging, html.bb-knob-dragging body {
 }
 html.bb-knob-dragging { touch-action: none; }
 
+/* the view switch lives at the right end of the duration line, just above the
+   phases it controls; the row is centred so the icon rides the text midline */
+#bb-sampling-panel .bb-sampling-viewbar { align-items: center !important; }
+
 /* view toggle: CSS icon of the scene on screen (knob ↔ fader bars), same
    grammar as the theme/rail buttons; the title says what the click gives */
 #bb-sampling-view-btn {
@@ -3540,14 +3544,18 @@ def build_ui(defaults):
                                                                   "Quick test (~20 s)"],
                                                          value="Protocol defaults (full)",
                                                          label="BUDGET PRESET", scale=3)
-                                    sampling_view_btn = gr.Button(
-                                        "", size="sm", scale=0,
-                                        elem_id="bb-sampling-view-btn")
                                     sampling_reset_btn = gr.Button(
                                         "RESET DEFAULTS", size="sm", scale=1,
                                         elem_id="bb-reset-sampling")
-                                duration_md = gr.Markdown(
-                                    duration_text(SEM_DEFAULTS["max_tokens"]))
+                                # the view switch rides the duration line right above the
+                                # phases it controls, so the preset row keeps main's
+                                # [BUDGET PRESET][RESET DEFAULTS] layout
+                                with gr.Row(elem_classes=["bb-sampling-viewbar"]):
+                                    duration_md = gr.Markdown(
+                                        duration_text(SEM_DEFAULTS["max_tokens"]), scale=3)
+                                    sampling_view_btn = gr.Button(
+                                        "", size="sm", scale=0,
+                                        elem_id="bb-sampling-view-btn")
                                 with gr.Row(elem_classes=["bb-sampling-phases"]):
                                     with gr.Group(elem_classes=["bb-group",
                                                                 "bb-sampling-phase"]):
