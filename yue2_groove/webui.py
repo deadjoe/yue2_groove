@@ -2479,6 +2479,140 @@ button:disabled, button[disabled] { opacity: .4 !important; cursor: not-allowed 
 }
 #bb-tip.bb-tip-show { display: block; }
 
+/* ── ADVANCED // SAMPLING dual view (knobs default / sliders) ─────────────
+   Knobs are a view layer over the same 14 gr.Slider inputs: Gradio keeps the
+   number + range inputs in the DOM as the single source of truth (component
+   state, BUDGET PRESET, RESET DEFAULTS, generation) and sampling-knobs.js
+   paints a knob beside them. Every knobs-mode rule hangs off `.bb-view-knobs`,
+   which only the script sets: with no script the panel is plain sliders, never
+   an empty accordion. Gradio 6 renders a phase as
+   `.bb-sampling-phase > .styler > (.block header, .form sliders)`, so knobs
+   mode reduces each slider block to its `.bb-knob` child and lays the phase
+   `.form` out as a 7-column grid. Sliders mode is the untouched native layout. */
+.bb-knob {
+  display: none; flex-direction: column; align-items: center; gap: 6px;
+  user-select: none; -webkit-user-select: none; cursor: ns-resize;
+  touch-action: none; color: var(--bb-ink);
+}
+#bb-sampling-panel.bb-view-knobs .bb-knob { display: flex; }
+#bb-sampling-panel.bb-view-knobs .bb-sampling-phases {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 18px !important;
+}
+/* open layout under the knob view: Gradio's group ground/border is only visible
+   because the native sliders used to cover it, and the mockup wants the knobs
+   on the page itself (sliders mode keeps the cards untouched) */
+#bb-sampling-panel.bb-view-knobs .bb-sampling-phase {
+  width: 100% !important;
+  min-width: 0 !important;
+  background: transparent !important;
+  border-color: transparent !important;
+}
+#bb-sampling-panel.bb-view-knobs .bb-sampling-phase .styler {
+  background: transparent !important;
+}
+/* mockup typography: phase heading reads as a quiet row label, not a bold
+   group title (sliders mode keeps Gradio's group heading). The filled tag
+   lifts it off the knob labels underneath and gets a little breathing room. */
+#bb-sampling-panel.bb-view-knobs .bb-sampling-phase .styler > .block {
+  margin-bottom: 8px !important;
+}
+#bb-sampling-panel.bb-view-knobs .bb-sampling-phase .prose strong {
+  font-weight: 400;
+  color: var(--bb-ink) !important;
+  background: var(--bb-line) !important;
+  border-radius: 4px;
+  padding: 2px 8px;
+  letter-spacing: .06em;
+}
+#bb-sampling-panel.bb-view-knobs .bb-sampling-phase .form {
+  display: grid !important;
+  grid-template-columns: repeat(7, minmax(0, 1fr)) !important;
+  gap: 12px 8px !important;
+  align-items: start !important;
+}
+/* in knobs mode a slider block is only a knob host; the native chrome (label,
+   number field, range, reset) stays in the DOM for Gradio but paints nothing */
+#bb-sampling-panel.bb-view-knobs .bb-sampling-slider {
+  min-width: 0 !important; width: 100% !important;
+  padding: 0 !important; border: none !important; box-shadow: none !important;
+  background: transparent !important; overflow: visible !important;
+}
+#bb-sampling-panel.bb-view-knobs .bb-sampling-slider > :not(.bb-knob) {
+  display: none !important;
+}
+.bb-knob-label {
+  font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--bb-ink2); text-align: center; line-height: 1.2;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.bb-knob-body {
+  position: relative; width: 88px; height: 88px;
+  display: flex; align-items: center; justify-content: center;
+}
+.bb-knob-svg { display: block; width: 88px; height: 88px; overflow: visible; }
+.bb-knob-arc {
+  fill: none; stroke: var(--bb-line2); stroke-width: 2.5;
+  stroke-linecap: round;
+}
+.bb-knob-dot { fill: var(--bb-primary-bg); stroke: none; }
+.bb-knob-value {
+  position: absolute; inset: 0; display: flex; align-items: center;
+  justify-content: center; pointer-events: none;
+  font-size: 12px; font-weight: 600; letter-spacing: .02em;
+  color: var(--bb-ink); font-variant-numeric: tabular-nums;
+}
+.bb-knob:hover .bb-knob-arc, .bb-knob:focus-visible .bb-knob-arc { stroke: var(--bb-ink2); }
+.bb-knob.bb-knob-active .bb-knob-dot { fill: var(--bb-ink); }
+.bb-knob.bb-knob-active .bb-knob-arc { stroke: var(--bb-ink2); }
+.bb-knob.bb-knob-active { cursor: ns-resize; }
+html.bb-knob-dragging, html.bb-knob-dragging body {
+  cursor: ns-resize !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  overscroll-behavior: none;
+}
+html.bb-knob-dragging { touch-action: none; }
+
+/* the view switch lives at the right end of the duration line, just above the
+   phases it controls; the row is centred so the icon rides the text midline */
+#bb-sampling-panel .bb-sampling-viewbar { align-items: center !important; }
+
+/* view toggle: CSS icon of the scene on screen (knob ↔ fader bars), same
+   grammar as the theme/rail buttons; the title says what the click gives */
+#bb-sampling-view-btn {
+  position: relative; width: 28px !important; height: 27px; min-width: 28px !important;
+  padding: 0 !important; color: var(--bb-ink3) !important; flex: 0 0 auto !important;
+}
+#bb-sampling-view-btn:hover { color: var(--bb-ink) !important; }
+#bb-sampling-view-btn:not(.bb-showing-knobs):not(.bb-showing-sliders) { visibility: hidden; }
+/* knobs showing: dial ring + head dot (click for the sliders) */
+#bb-sampling-view-btn.bb-showing-knobs::before {
+  content: ""; position: absolute; left: 7px; top: 7px; width: 12px; height: 12px;
+  border: 1px solid currentColor; border-radius: 50%;
+  background: radial-gradient(circle at 72% 28%, currentColor 0 1.6px, transparent 1.7px);
+  box-shadow: none;
+}
+/* sliders showing: three fader bars (click for the knobs) */
+#bb-sampling-view-btn.bb-showing-sliders::before {
+  content: ""; position: absolute; left: 8px; top: 8px; width: 12px; height: 11px;
+  background:
+    linear-gradient(currentColor, currentColor) 0 0 / 100% 1px no-repeat,
+    linear-gradient(currentColor, currentColor) 0 5px / 100% 1px no-repeat,
+    linear-gradient(currentColor, currentColor) 0 10px / 100% 1px no-repeat;
+}
+@media (max-width: 1000px) {
+  #bb-sampling-panel.bb-view-knobs .bb-sampling-phase .form {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  }
+}
+@media (max-width: 620px) {
+  #bb-sampling-panel.bb-view-knobs .bb-sampling-phase .form {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
 /* ── phones ──────────────────────────────────────────────────────────────
    Gradio 6 hides overflowing tabs behind a tiny ⋯ menu and the theme button
    is absolutely positioned over the title. Below 700px: tighter frame, theme
@@ -2563,6 +2697,10 @@ BEARBONE_CSS = "\n".join([
     _scene_css(BRIGHT_SELECTOR, _theme_values(BRIGHT), palette=BRIGHT),
     library.LIBRARY_CSS,
 ])
+
+SAMPLING_VIEW_TOGGLE_JS = """() => {
+  if (window.__bbToggleSamplingView) window.__bbToggleSamplingView();
+}"""
 
 THEME_TOGGLE_JS = """() => {
   const r = document.documentElement;
@@ -2790,12 +2928,13 @@ HEAD_HTML = """<meta name="color-scheme" content="dark light">
 HEAD_HTML += ("<script>window.__BB_TIPS__ = " + json.dumps(TIPS, ensure_ascii=False)
               + ";</script><script>" + TIP_JS + "</script>")
 
-# ── abcjs score rendering (bundled under yue2_groove/static, served via allowed_paths) ──
+# ── static scripts (bundled under yue2_groove/static, served via allowed_paths) ──
 ABCJS_FILE = config.STATIC_DIR / "abcjs-basic-min.js"
-# ── abcjs score rendering (bundled under yue2_groove/static, served via allowed_paths) ──
+SAMPLING_KNOBS_FILE = config.STATIC_DIR / "sampling-knobs.js"
+
+# ── abcjs score rendering ──
 # Every score panel declares data-bb-abc="<label prefix of its ABC textbox>"; the
 # script finds the matching textarea and renders into the panel's .bb-score-inner.
-ABCJS_FILE = config.STATIC_DIR / "abcjs-basic-min.js"
 SCORE_JS = """(function () {
   // Look for the textarea whose block label starts with `prefix`, preferring the
   // panel's own tab (so identical labels in different tabs cannot cross-render).
@@ -3261,6 +3400,12 @@ SONG_JS = r"""(function () {
   }, true);
 })();"""
 HEAD_HTML += "<script>" + SONG_JS + "</script>"
+HEAD_HTML += (
+    "<script>window.__BB_SAMPLING_DEFAULTS__ = "
+    + json.dumps({"abc": ABC_DEFAULTS, "sem": SEM_DEFAULTS})
+    + ";</script>"
+    + f'<script src="/gradio_api/file={SAMPLING_KNOBS_FILE}"></script>'
+)
 
 
 def bb_theme():
@@ -3402,37 +3547,108 @@ def build_ui(defaults):
                             abc = gr.Textbox(label="ABC SCORE", lines=8,
                                              placeholder="Leave empty to let the model plan")
                         with gr.Accordion("ADVANCED // SAMPLING", open=False):
-                            with gr.Row():
-                                preset = gr.Dropdown(choices=["Protocol defaults (full)",
-                                                              "Preview (~1–1.5 min song)",
-                                                              "Quick test (~20 s)"],
-                                                     value="Protocol defaults (full)",
-                                                     label="BUDGET PRESET", scale=3)
-                                sampling_reset_btn = gr.Button("RESET DEFAULTS", size="sm", scale=1,
-                                                               elem_id="bb-reset-sampling")
-                            duration_md = gr.Markdown(duration_text(SEM_DEFAULTS["max_tokens"]))
-                            with gr.Row():
-                                with gr.Group(elem_classes=["bb-group"]):
-                                    gr.Markdown("**ABC PHASE · score planning**")
-                                    abc_temp = gr.Slider(0, 5, value=ABC_DEFAULTS["temperature"], step=.05, label="temperature")
-                                    abc_p = gr.Slider(.05, 1, value=ABC_DEFAULTS["top_p"], step=.01, label="top_p")
-                                    abc_k = gr.Slider(1, 1000, value=ABC_DEFAULTS["top_k"], step=1, label="top_k")
-                                    abc_rep = gr.Slider(1, 2, value=ABC_DEFAULTS["repetition_penalty"], step=.005, label="repetition_penalty")
-                                    abc_win = gr.Slider(1, 100, value=ABC_DEFAULTS["penalty_window"], step=1, label="penalty_window")
-                                    abc_min = gr.Slider(0, 4096, value=ABC_DEFAULTS["min_tokens"], step=8, label="min_tokens")
-                                    abc_max = gr.Slider(64, 4096, value=ABC_DEFAULTS["max_tokens"], step=32, label="max_tokens")
-                                with gr.Group(elem_classes=["bb-group"]):
-                                    gr.Markdown("**SEMANTIC PHASE · 25 tokens ≈ 1 s audio**")
-                                    sem_temp = gr.Slider(0, 5, value=SEM_DEFAULTS["temperature"], step=.05, label="temperature")
-                                    sem_p = gr.Slider(.05, 1, value=SEM_DEFAULTS["top_p"], step=.01, label="top_p")
-                                    sem_k = gr.Slider(1, 1000, value=SEM_DEFAULTS["top_k"], step=1, label="top_k")
-                                    sem_rep = gr.Slider(1, 2, value=SEM_DEFAULTS["repetition_penalty"], step=.005, label="repetition_penalty")
-                                    sem_win = gr.Slider(1, 100, value=SEM_DEFAULTS["penalty_window"], step=1, label="penalty_window")
-                                    sem_min = gr.Slider(0, 9000, value=SEM_DEFAULTS["min_tokens"], step=8, label="min_tokens")
-                                    sem_max = gr.Slider(64, 9000, value=SEM_DEFAULTS["max_tokens"], step=64, label="max_tokens")
-                            gr.Markdown("ODE method and context are fixed by the protocol "
-                                        "(midpoint / 24576), same as upstream.",
-                                        elem_classes=["bb-note"])
+                            # no view class here: sampling-knobs.js adds bb-view-knobs /
+                            # bb-view-sliders when the panel appears, so without the
+                            # script the native sliders stay visible and usable
+                            with gr.Column(elem_id="bb-sampling-panel"):
+                                with gr.Row():
+                                    preset = gr.Dropdown(choices=["Protocol defaults (full)",
+                                                                  "Preview (~1–1.5 min song)",
+                                                                  "Quick test (~20 s)"],
+                                                         value="Protocol defaults (full)",
+                                                         label="BUDGET PRESET", scale=3)
+                                    sampling_reset_btn = gr.Button(
+                                        "RESET DEFAULTS", size="sm", scale=1,
+                                        elem_id="bb-reset-sampling")
+                                # the view switch rides the duration line right above the
+                                # phases it controls, so the preset row keeps main's
+                                # [BUDGET PRESET][RESET DEFAULTS] layout
+                                with gr.Row(elem_classes=["bb-sampling-viewbar"]):
+                                    duration_md = gr.Markdown(
+                                        duration_text(SEM_DEFAULTS["max_tokens"]), scale=3)
+                                    sampling_view_btn = gr.Button(
+                                        "", size="sm", scale=0,
+                                        elem_id="bb-sampling-view-btn")
+                                with gr.Row(elem_classes=["bb-sampling-phases"]):
+                                    with gr.Group(elem_classes=["bb-group",
+                                                                "bb-sampling-phase"]):
+                                        gr.Markdown("**ABC PHASE · SCORE PLAN**")
+                                        abc_temp = gr.Slider(
+                                            0, 5, value=ABC_DEFAULTS["temperature"],
+                                            step=.05, label="temperature",
+                                            elem_id="bb-abc-temp",
+                                            elem_classes=["bb-sampling-slider"])
+                                        abc_p = gr.Slider(
+                                            .05, 1, value=ABC_DEFAULTS["top_p"],
+                                            step=.01, label="top_p",
+                                            elem_id="bb-abc-p",
+                                            elem_classes=["bb-sampling-slider"])
+                                        abc_k = gr.Slider(
+                                            1, 1000, value=ABC_DEFAULTS["top_k"],
+                                            step=1, label="top_k",
+                                            elem_id="bb-abc-k",
+                                            elem_classes=["bb-sampling-slider"])
+                                        abc_rep = gr.Slider(
+                                            1, 2, value=ABC_DEFAULTS["repetition_penalty"],
+                                            step=.005, label="repetition_penalty",
+                                            elem_id="bb-abc-rep",
+                                            elem_classes=["bb-sampling-slider"])
+                                        abc_win = gr.Slider(
+                                            1, 100, value=ABC_DEFAULTS["penalty_window"],
+                                            step=1, label="penalty_window",
+                                            elem_id="bb-abc-win",
+                                            elem_classes=["bb-sampling-slider"])
+                                        abc_min = gr.Slider(
+                                            0, 4096, value=ABC_DEFAULTS["min_tokens"],
+                                            step=8, label="min_tokens",
+                                            elem_id="bb-abc-min",
+                                            elem_classes=["bb-sampling-slider"])
+                                        abc_max = gr.Slider(
+                                            64, 4096, value=ABC_DEFAULTS["max_tokens"],
+                                            step=32, label="max_tokens",
+                                            elem_id="bb-abc-max",
+                                            elem_classes=["bb-sampling-slider"])
+                                    with gr.Group(elem_classes=["bb-group",
+                                                                "bb-sampling-phase"]):
+                                        gr.Markdown("**SEMANTIC PHASE · AUDIO**")
+                                        sem_temp = gr.Slider(
+                                            0, 5, value=SEM_DEFAULTS["temperature"],
+                                            step=.05, label="temperature",
+                                            elem_id="bb-sem-temp",
+                                            elem_classes=["bb-sampling-slider"])
+                                        sem_p = gr.Slider(
+                                            .05, 1, value=SEM_DEFAULTS["top_p"],
+                                            step=.01, label="top_p",
+                                            elem_id="bb-sem-p",
+                                            elem_classes=["bb-sampling-slider"])
+                                        sem_k = gr.Slider(
+                                            1, 1000, value=SEM_DEFAULTS["top_k"],
+                                            step=1, label="top_k",
+                                            elem_id="bb-sem-k",
+                                            elem_classes=["bb-sampling-slider"])
+                                        sem_rep = gr.Slider(
+                                            1, 2, value=SEM_DEFAULTS["repetition_penalty"],
+                                            step=.005, label="repetition_penalty",
+                                            elem_id="bb-sem-rep",
+                                            elem_classes=["bb-sampling-slider"])
+                                        sem_win = gr.Slider(
+                                            1, 100, value=SEM_DEFAULTS["penalty_window"],
+                                            step=1, label="penalty_window",
+                                            elem_id="bb-sem-win",
+                                            elem_classes=["bb-sampling-slider"])
+                                        sem_min = gr.Slider(
+                                            0, 9000, value=SEM_DEFAULTS["min_tokens"],
+                                            step=8, label="min_tokens",
+                                            elem_id="bb-sem-min",
+                                            elem_classes=["bb-sampling-slider"])
+                                        sem_max = gr.Slider(
+                                            64, 9000, value=SEM_DEFAULTS["max_tokens"],
+                                            step=64, label="max_tokens",
+                                            elem_id="bb-sem-max",
+                                            elem_classes=["bb-sampling-slider"])
+                                gr.Markdown("ODE method and context are fixed by the protocol "
+                                            "(midpoint / 24576), same as upstream.",
+                                            elem_classes=["bb-note"])
                         audio_out = gr.Audio(label="RESULT", type="filepath")
                         score_out = gr.Textbox(label="ABC SCORE", lines=8, max_lines=24,
                                                elem_id="bb-abc-source", elem_classes=["bb-output"])
@@ -3924,6 +4140,8 @@ def build_ui(defaults):
                                  outputs=[abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
                                           sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max,
                                           preset])
+        # View layer only: knobs ↔ sliders; Gradio slider values / event graph unchanged.
+        sampling_view_btn.click(fn=None, js=SAMPLING_VIEW_TOGGLE_JS)
         request_reset_btn.click(lambda: ("", "", "full", 831001, 0, ""),
                                 outputs=[style, lyrics, cot, seed, cfg, out_id])
         runtime_reset_btn.click(
