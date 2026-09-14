@@ -22,7 +22,7 @@ YuE2 generation is staged:
 | **CFG SCALE** | Often `1.5` (empty ≈ **1.0**; `cot=off` default **1.01**) | How tightly the model follows style / lyrics. Higher = stricter (too high can sound harsh/dry). Lower = freer, more drift. `1.5` is a mild tighten — a solid starting point. |
 | **PLAN MODE (`cot`)** | Often `full` | **full** = melody + chord plan (more “composed”). **melody** = no chord symbols, freer arrangement (covers). **off** = no symbolic plan — loosest / least controllable. Prefer **melody** for inventive arrangement; **full** + hand-edited ABC when you want obedience. |
 | **SEED** | — | Same settings, different seed = another take. SONG’s **TRY ANOTHER SEED** does this. Changes the draw, not the “personality” of the knobs. |
-| **Semantic `temperature`** | `1.0` | Main **sonic creativity** dial. Higher (~`1.1–1.3`) = wilder; lower (~`0.85–0.95`) = safer / more formulaic. |
+| **Semantic `temperature`** | `1.0` | Main **sonic creativity** dial. Higher (`1.1`–`1.3`) = wilder; lower (`0.85`–`0.95`) = safer / more formulaic. |
 | **Semantic `top_p` / `top_k`** | `0.95` / `100` | Nucleus / top-k width (same family as temperature). Slightly lower (e.g. `top_p=0.9`, `top_k=50`) = tighter; maxed = wilder. |
 | **Semantic `repetition_penalty`** | `1.2` | Discourages repeated phrases. Slightly higher = less looping; too high hurts musical lines. |
 
