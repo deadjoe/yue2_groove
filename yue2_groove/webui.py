@@ -2561,7 +2561,7 @@ button:disabled, button[disabled] { opacity: .4 !important; cursor: not-allowed 
   font-size: 12px; font-weight: 600; letter-spacing: .02em;
   color: var(--bb-ink); font-variant-numeric: tabular-nums;
 }
-.bb-knob:hover .bb-knob-arc { stroke: var(--bb-ink2); }
+.bb-knob:hover .bb-knob-arc, .bb-knob:focus-visible .bb-knob-arc { stroke: var(--bb-ink2); }
 .bb-knob.bb-knob-active .bb-knob-dot { fill: var(--bb-ink); }
 .bb-knob.bb-knob-active .bb-knob-arc { stroke: var(--bb-ink2); }
 .bb-knob.bb-knob-active { cursor: ns-resize; }

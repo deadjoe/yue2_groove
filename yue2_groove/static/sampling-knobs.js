@@ -190,6 +190,15 @@
     }
   }
 
+  /* drag accumulator: unsnapped so Shift can be pressed or released mid-drag
+     without the value jumping and sub-step motion is kept, but clamped to the
+     range — otherwise overshooting past an end keeps piling up and the knob
+     sits dead for that many pixels on the way back */
+  function accumulate(raw, dyUp, px, meta) {
+    var next = raw + dyUp / px * (meta.max - meta.min);
+    return Math.max(meta.min, Math.min(meta.max, next));
+  }
+
   /* ── knob construction / painting ─────────────────────────────────────── */
 
   function svgEl(name, attrs) {
@@ -301,9 +310,10 @@
       if (isSlidersView()) return;                   /* knobs-only gesture   */
       if (ev.button != null && ev.button !== 0) return;
       ev.preventDefault();                           /* no text select / scroll */
+      /* a cancelled pointerdown also cancels the click's focus; the arrow
+         keys should work right after a click, not only after a Tab */
+      try { knob.host.focus({ preventScroll: true }); } catch (e) {}
       var c = current();
-      /* track an unsnapped accumulator: Shift can be pressed or released
-         mid-drag without the value jumping, and sub-step motion is not lost */
       drag = { lastY: ev.clientY, raw: c.value, meta: c.meta, id: ev.pointerId };
       activeDrag = knob;
       try { knob.host.setPointerCapture(ev.pointerId); } catch (e) {}
@@ -315,9 +325,8 @@
       if (!drag) return;
       ev.preventDefault();
       var meta = drag.meta;
-      var span = meta.max - meta.min;
       var px = ev.shiftKey ? PX_FINE : PX_FULL;
-      drag.raw += (drag.lastY - ev.clientY) / px * span;
+      drag.raw = accumulate(drag.raw, drag.lastY - ev.clientY, px, meta);
       drag.lastY = ev.clientY;
       var v = snap(drag.raw, meta);
       writeValue(findInputs(root), v);
