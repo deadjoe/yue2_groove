@@ -55,6 +55,8 @@ def test_sampling_knobs_css_targets_the_gradio6_dom() -> None:
     assert "grid-template-columns: repeat(2, minmax(0, 1fr)) !important" in css
     # the view switch rides the duration line above the phases, not the preset row
     assert "#bb-sampling-panel .bb-sampling-viewbar" in css
+    # phase headings are filled tags in knobs view (separation without extra space)
+    assert "background: var(--bb-line) !important" in css
 
 
 def test_sampling_sliders_remain_gradio_sliders_with_stable_ids(monkeypatch, tmp_path) -> None:
@@ -72,6 +74,11 @@ def test_sampling_sliders_remain_gradio_sliders_with_stable_ids(monkeypatch, tmp
     # defaults still match ABC_DEFAULTS / SEM_DEFAULTS
     assert by_id["bb-abc-temp"].value == webui.ABC_DEFAULTS["temperature"]
     assert by_id["bb-sem-max"].value == webui.SEM_DEFAULTS["max_tokens"]
+    # concise phase labels over the two knob rows
+    headings = [str(getattr(c, "value", "")) for c in demo.blocks.values()
+                if isinstance(c, gr.Markdown)]
+    assert any("ABC PHASE · SCORE PLAN" in h for h in headings)
+    assert any("SEMANTIC PHASE · AUDIO" in h for h in headings)
 
 
 def test_reset_sampling_values_unchanged() -> None:

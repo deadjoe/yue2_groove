@@ -2511,10 +2511,15 @@ button:disabled, button[disabled] { opacity: .4 !important; cursor: not-allowed 
   background: transparent !important;
 }
 /* mockup typography: phase heading reads as a quiet row label, not a bold
-   group title (sliders mode keeps Gradio's group heading) */
+   group title (sliders mode keeps Gradio's group heading). The filled tag
+   lifts it off the knob labels underneath without adding any vertical space. */
 #bb-sampling-panel.bb-view-knobs .bb-sampling-phase .prose strong {
   font-weight: 400;
-  color: var(--bb-ink2) !important;
+  color: var(--bb-ink) !important;
+  background: var(--bb-line) !important;
+  border-radius: 4px;
+  padding: 2px 8px;
+  letter-spacing: .06em;
 }
 #bb-sampling-panel.bb-view-knobs .bb-sampling-phase .form {
   display: grid !important;
@@ -3559,7 +3564,7 @@ def build_ui(defaults):
                                 with gr.Row(elem_classes=["bb-sampling-phases"]):
                                     with gr.Group(elem_classes=["bb-group",
                                                                 "bb-sampling-phase"]):
-                                        gr.Markdown("**ABC PHASE · score planning**")
+                                        gr.Markdown("**ABC PHASE · SCORE PLAN**")
                                         abc_temp = gr.Slider(
                                             0, 5, value=ABC_DEFAULTS["temperature"],
                                             step=.05, label="temperature",
@@ -3597,8 +3602,7 @@ def build_ui(defaults):
                                             elem_classes=["bb-sampling-slider"])
                                     with gr.Group(elem_classes=["bb-group",
                                                                 "bb-sampling-phase"]):
-                                        gr.Markdown(
-                                            "**SEMANTIC PHASE · 25 tokens ≈ 1 s audio**")
+                                        gr.Markdown("**SEMANTIC PHASE · AUDIO**")
                                         sem_temp = gr.Slider(
                                             0, 5, value=SEM_DEFAULTS["temperature"],
                                             step=.05, label="temperature",
