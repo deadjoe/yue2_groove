@@ -473,4 +473,19 @@
   setInterval(function () {
     if (document.getElementById('bb-sampling-panel')) boot();
   }, 1000);
+
+  /* read-only internals so the numeric core can be tested without a browser
+     (tests/test_webui_sampling_knobs.py); nothing in the app reads this */
+  window.__BB_KNOB_INTERNALS__ = {
+    snap: snap,
+    accumulate: accumulate,
+    formatValue: formatValue,
+    decimalsFor: decimalsFor,
+    headDeg: headDeg,
+    arcD: arcD,
+    polar: polar,
+    PARAMS: PARAMS,
+    PX_FULL: PX_FULL,
+    PX_FINE: PX_FINE
+  };
 })();
