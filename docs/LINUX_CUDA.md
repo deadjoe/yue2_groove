@@ -262,7 +262,7 @@ Recorded on the author's Macs against **different songs**, so the numbers are a 
 | Apple M4 Pro 64 GB | MPS, BF16, eager | jazz, 259 s | 1 515 s | 11.2 tok/s | 792.7 s |
 | **NVIDIA L4 (this report)** | **CUDA, BF16, graphs+flash** | **rock, 285 s** | **330 s** | **39.3 tok/s** | **69.4 s** |
 
-Also note: the same seed on different backends/torch builds produces **different songs** (upstream: *"Separate GPUs, runtime versions, or sampling settings can change a seeded generation"*). Seeded A/B comparisons are only valid on one machine.
+Also note: the same seed on a different backend, GPU or quantization setting produces a **different song** (upstream: *"Separate GPUs, runtime versions, or sampling settings can change a seeded generation"*). A torch build change alone on this same L4 (2.10 → 2.14) was bit-exact through the NAR latents — see [CROSS_PLATFORM.md](CROSS_PLATFORM.md) Exp A — but seeded A/B comparisons are still only valid on one machine with one configuration.
 
 ---
 

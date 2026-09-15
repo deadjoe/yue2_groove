@@ -1,21 +1,26 @@
 # Cross-platform analysis: NVIDIA CUDA vs Apple MPS
 
-**Date:** 2026-09-16 · **Evidence:** 5 controlled generation runs across 3 machines · **Status:** experimental findings, hypotheses labelled as such
+**Date:** 2026-09-16 · **Revised:** 2026-09-16, after a re-analysis of the archived runs (token-level divergence positions, latent comparison, audio metrics recomputed, FP8 run added as a calibration point) · **Evidence:** 5 controlled generation runs across 3 machines + 1 CUDA FP8 run · **Status:** experimental findings, hypotheses labelled as such
 
 This document records a controlled investigation into a reported **quality difference between
 the same model on NVIDIA CUDA and on Apple Silicon (MPS)**: identical model, identical
 request, identical settings, but outputs that listeners describe as clearly different in
 quality. It also records the experiments that were run to explain the difference — including
-one finding that changes how the comparison should be interpreted:
+two findings that change how the comparison must be interpreted:
 
 > **The sampler uses a different random-number generator device per platform** (CUDA device
 > RNG on CUDA, CPU RNG on MPS). The same seed therefore produces **different random draws**
-> on the two platforms. This alone guarantees different songs, and it means this experiment's
-> quality comparison is effectively **one draw per platform**, not a like-for-like quality
-> comparison.
+> on the two platforms. This alone guarantees different songs.
 
-See also: [LINUX_CUDA.md](LINUX_CUDA.md) (memory/performance validation on CUDA) and
-[MACOS_MPS.md](MACOS_MPS.md) (MPS support notes and the SDPA defect).
+> **The platform is confounded with the composition.** Every CUDA take of this request lands in
+> one composition family (F minor, 130 BPM) and every MPS take in another (E major, 126 BPM),
+> because the two RNG streams part at the very first genuinely random token — the tempo. Any
+> "CUDA vs MPS" difference measured here is therefore also an "Fm/130 vs E/126" difference.
+> This experiment **cannot** attribute a quality difference to the platform; §9 gives the design
+> that can.
+
+See also: [LINUX_CUDA.md](LINUX_CUDA.md) (memory/performance validation on CUDA; source of the
+FP8 run used here) and [MACOS_MPS.md](MACOS_MPS.md) (MPS support notes and the SDPA defect).
 
 ---
 
@@ -23,21 +28,28 @@ See also: [LINUX_CUDA.md](LINUX_CUDA.md) (memory/performance validation on CUDA)
 
 | # | Finding | Evidence |
 |---|---|---|
-| 1 | **The sampler's RNG device differs by platform — by code design.** CUDA samples with a CUDA-device generator; MPS samples on the **CPU** with a CPU generator. PyTorch generators are device-specific algorithms, so the same seed yields **different random streams**. | `yue2/sampling.py` (`rng_device = device if device.type in {"cpu","cuda"} else torch.device("cpu")`); local test: same seed, CPU vs MPS generator → different draws, each reproducible. |
-| 2 | The same seed therefore produces **different compositions** on CUDA vs MPS — and this is *sufficient* to explain the divergence; no numerical difference in the model is required. | Two CUDA runs (different torch builds) are byte-identical to each other; four MPS runs share one RNG stream and cluster together; chord-set overlap CUDA↔MPS = **0.00**. |
-| 3 | **torch version is not a cause.** | Exp A: CUDA with torch 2.10 vs 2.14 → `score.abc` and `semantic.npy` **byte-identical**. |
-| 4 | **Numeric precision is not a cause on MPS.** | Exp B: MPS with float32 instead of bfloat16 → same key/tempo/harmony trajectory, **1.65× slower**, no quality gain. |
-| 5 | **Whether MPS quality is systematically worse is *not* established by this experiment.** The three MPS takes share one RNG stream — they are near-copies, not independent samples — so the listening comparison is effectively **one draw per platform**. | §5, §8 |
-| 6 | The platforms also use **different attention code paths by design** (a secondary, unquantified difference). | CUDA: `attention: flash` with native GQA. MPS: `attention: sdpa` with `repeat_interleave` K/V expansion. |
+| 1 | **The sampler's RNG device differs by platform — by code design.** CUDA samples with a CUDA-device generator; MPS samples on the **CPU** with a CPU generator. PyTorch generators are device-specific algorithms (CPU: MT19937, CUDA: Philox), and `torch.multinomial` has different CPU and CUDA implementations, so the same seed yields **different random streams**. | `yue2/sampling.py` (`rng_device = device if device.type in {"cpu","cuda"} else torch.device("cpu")`); local test: same seed, CPU vs MPS generator → different draws, each reproducible. |
+| 2 | The same seed therefore produces **different compositions** on CUDA vs MPS — and this is *sufficient* to explain the divergence; no numerical difference in the model is required. | The **first 26 ABC tokens are identical on every platform** (the near-deterministic ABC header); the streams part at **token 27, the tempo** (`Q:1/4=130` on CUDA, `126` on MPS). Two CUDA runs (different torch builds) are byte-identical; chord-set overlap CUDA↔MPS = **0.00**. |
+| 3 | **torch version is not a cause — and Exp A turned out to be a zero-perturbation test.** | Exp A: CUDA, torch 2.10 vs 2.14 → `abc_tokens.npy`, `semantic.npy` **and `latent.npy` byte-identical** (AR *and* NAR bit-exact). Only `audio.flac` differs: max \|Δ\| = 6.4 × 10⁻⁶ full-scale, SNR 119 dB — last-bit differences in the fp32 VAE convolutions, far below audibility. Exp A therefore says nothing about how robust sampling is to numeric perturbation. |
+| 4 | **Numeric precision changes the take but not the family — and the fp32 take was never evaluated by ear.** | Exp B: MPS, float32 instead of bfloat16 → diverges from the bf16 take at **ABC token 122**, stays in the E/126 family, **1.65× slower**. Its spectral balance is the closest of all Mac takes to the CUDA reference (§4.4). "No quality gain" is *not* established. |
+| 5 | **Any real numeric perturbation flips a sampled token within a few hundred ABC tokens, on both platforms.** MPS is not special in this respect; the same-seed takes are *not* reproducible across Macs. | First divergence (ABC token index): FP8 vs BF16 on the **same L4** = 225; M1 Max vs M4 Pro (both bf16) = 122; M4 bf16 vs fp32 = 122; M1 bf16 vs M4 fp32 = 313. Score hashes differ on every pair. |
+| 6 | **Whether MPS quality is systematically worse is *not* established — and cannot be from this design.** Platform is perfectly confounded with composition family (Fm/130 vs E/126). The measurable differences track the draw, not the platform. | The **FP8 CUDA take is nearly as bright as the Mac takes** (centroid 3 373 Hz vs 3 463–3 551) and the **M4 fp32 take is as dark as the CUDA reference** (3 010 vs 2 895) (§4.4). The "static harmony" is a three-chord I–♭VII–IV rock song with a one-chord riff intro — a stylistic outcome, not a defect (§4.1). |
+| 7 | The platforms also use **different attention/execution paths by design** (a secondary, unquantified difference). | CUDA: `execution: cuda_graph`, `attention: flash`, both CFG branches in one batch. MPS: `execution: eager`, `attention: sdpa`, `repeat_interleave` K/V expansion, CFG branches as two batch-1 forwards. |
 
 **Practical consequences**
 
-- Same seed ≠ same song across platforms — expect that, and use it deliberately.
-- The two obvious "fixes" for the perceived Mac quality gap are **tested and rejected**
-  (torch version alignment, float32).
-- To decide whether MPS *systematically* produces worse music, two follow-up experiments are
-  needed (§9): a **common-RNG run** (make both platforms sample with the same RNG device) and a
-  **multi-seed listening comparison**.
+- Same seed ≠ same song across platforms — expect that, and use it deliberately. It is not
+  fixable: different RNG algorithms, different `multinomial` implementations, and reduced-
+  precision kernel differences amplified by autoregressive sampling.
+- Same seed ≠ same song **across Macs** either (M1 Max vs M4 Pro share only 122 ABC tokens).
+  Same-machine reproducibility on MPS has not been tested (§9.2).
+- torch version alignment is **tested and has no effect** (bit-exact AR/NAR). float32 on MPS
+  **changes the take** (like any perturbation) and was **not evaluated by ear**; there is no
+  evidence here that it is a quality mode, and it costs 1.65×.
+- To decide whether MPS *systematically* produces worse music, either hold the composition
+  fixed across platforms (§9.1, cheap and direct) or average over many seeds per platform under
+  blind listening (§9.5, expensive). More takes of *this* seed will not do it — they stay in
+  their platform's family.
 
 ---
 
@@ -51,7 +63,9 @@ During routine testing, the same song request produced outputs that were judged 
 **clearly better on CUDA than on two different Macs**. The Macs' outputs were *similar to each
 other*, which motivated a controlled comparison rather than a "one bad roll of the dice"
 explanation. The investigation found that the platform difference has a code-level cause
-(§6.1) that also constrains what the listening evidence can prove (§5, §8).
+(§6.1). A re-analysis of the archived runs then showed that the Macs' similarity is a shared
+*prefix* (the two Mac takes part at ABC token 122), and that the listening comparison is
+confounded: one composition family per platform (§4.1, §5, §8).
 
 ## 2. Method
 
@@ -59,12 +73,12 @@ explanation. The investigation found that the platform difference has a code-lev
 
 | Variable | Value |
 |---|---|
-| Model weights | `m-a-p/YuE2-3B` + `m-a-p/YuE2-Vae` — **SHA-256 verified identical in all 5 runs** |
-| Upstream runtime | `yue2-infer` 0.1.6 — **`runtime_sha256` identical in all 5 runs** (hash of the upstream `yue2` runtime files) |
-| App | `yue2-groove` 0.8.0 — repo commit `524ac85` (reference run) or `238ff9a` (all other runs); those two commits differ in **documentation only**, so the generation path is identical |
-| Request | same style, lyrics, `seed=831001`, `cfg_scale=1.5`, `cot=full` |
-| Generation config | `ode_steps=32`, `ode_method=midpoint`, `context=24576`, protocol sampling defaults |
-| Runtime config | `backend=torch`, `quantization=none`, `offload_ar=false`, `memory_budget=24`, `vae_core_frames=1024` |
+| Model weights | `m-a-p/YuE2-3B` + `m-a-p/YuE2-Vae` — **SHA-256 verified identical in all runs** |
+| Upstream runtime | `yue2-infer` 0.1.6 — **`runtime_sha256` identical in all runs** (hash of the upstream `yue2` runtime files) |
+| App | `yue2-groove` 0.8.0 — repo commit `524ac85` (reference and FP8 calibration runs, first cloud session) or `238ff9a` (Exp A, both Controls, Exp B); those two commits differ in **documentation only**, so the generation path is identical |
+| Request | same style, lyrics, `seed=831001`, `cfg_scale=1.5`, `cot=full` — the 884-token request prefix (first 884 entries of `prefix.npy`) is byte-identical in all six runs |
+| Generation config | `ode_steps=32`, `ode_method=midpoint`, `context=24576`, protocol sampling defaults (ABC: T 0.7 / top-k 30 / top-p 0.9, no CFG; semantic: T 1.0 / top-k 100 / top-p 0.95, CFG 1.5) |
+| Runtime config | `backend=torch`, `quantization=none`, `offload_ar=false`, `memory_budget=24`, `vae_core_frames=1024` (FP8 calibration run: `quantization=fp8`, budget 12, `vae_core_frames=512`) |
 
 ### 2.2 What is deliberately varied
 
@@ -75,10 +89,15 @@ explanation. The investigation found that the platform difference has a code-lev
 | Control 1 | Apple M1 Max (MPS) | 2.14.0 | bfloat16 | isolate the platform |
 | Control 2 | Apple M4 Pro (MPS) | 2.14.0 | bfloat16 | isolate the GPU generation |
 | **Exp B** | Apple M4 Pro (MPS) | 2.14.0 | **float32** | isolate numeric precision |
+| *Calibration* | NVIDIA L4 (CUDA) | 2.10.0+cu128 | bf16 weights **quantized to FP8**, eager + SDPA | a known, large numeric perturbation on the CUDA RNG stream (from [LINUX_CUDA.md](LINUX_CUDA.md) §4) |
 
-The design: if torch version mattered, Exp A would diverge from the reference. If the GPU
-generation mattered, the two Macs would diverge from each other. If precision mattered, Exp B
-would diverge from Control 2. **None of those happened** — see §5.
+The original design: if torch version mattered, Exp A would diverge from the reference; if the
+GPU generation mattered, the two Macs would diverge from each other; if precision mattered,
+Exp B would diverge from Control 2. What actually happened: Exp A did not diverge **at all**
+(bit-exact through NAR), while the two Macs *and* Exp B diverged from each other at the token
+level (ABC token 122) yet stayed in one composition family. §4.1 explains why "family" — not
+"same take" — is the right unit, and why the FP8 run is needed to calibrate what a token-level
+divergence means.
 
 A platform difference that is *not* varied but is inherent to the code is the **sampling RNG
 device** (§6.1): it is CUDA on CUDA and CPU on MPS, so the same seed yields different random
@@ -86,18 +105,32 @@ draws on the two platforms no matter what else is configured.
 
 ### 2.3 Measurements
 
-- **Composition** — parsed from `score.abc` (key, tempo, chord sequence, chord-set similarity).
+- **Divergence** — index of the first differing token between two runs' `abc_tokens.npy` /
+  `semantic.npy`; first differing line of `score.abc`. In an autoregressive sampler a single
+  flipped token changes every subsequent distribution, so this index — not the similarity of
+  what follows — is the measure of how far two runs agree.
+- **Composition** — parsed from `score.abc`: key, tempo, section list, chord sequence per
+  section, chord-set similarity, and vocal-melody repetition over *sung* bars (full-rest bars
+  excluded, chord symbols stripped).
 - **Tokens** — `semantic.npy` / `abc_tokens.npy` (count, diversity, entropy, repetition).
-- **Audio** — `audio.flac` (duration, peak/RMS, spectral centroid, high-frequency share, stereo correlation).
+- **Latents** — `latent.npy` (NAR output; byte comparison and RMS difference where the token
+  streams match).
+- **Audio** — `audio.flac`, decoded to PCM. Every spectral and level measure uses the mono mix
+  (mean of the two channels): peak, RMS and crest factor (peak/RMS in dB); spectral centroid and share of spectral magnitude above 8 kHz from one magnitude
+  spectrum of the whole mono mix; power share per band from 1-s Hann windows; stereo
+  correlation; loudness dynamics as the standard deviation and P10–P95 range of 3-s RMS in dB.
+  Sample-level comparison where the token streams match.
 - **Performance** — per-stage timings from `result.json` (each run records them itself).
-- **Integrity** — SHA-256 of every artifact (`result.json` records them; re-verified for this document).
-- **Listening** — one experienced listener (the author), non-blind, comparing takes on the same playback setup.
+- **Integrity** — SHA-256 of every artifact (`result.json` records them; all re-verified
+  against the archived files for this revision).
+- **Listening** — one experienced listener (the author), non-blind, comparing takes on the same
+  playback setup.
 
 ---
 
 ## 3. Test environments
 
-### 3.1 NVIDIA L4 (reference and Exp A)
+### 3.1 NVIDIA L4 (reference, Exp A and the FP8 calibration run)
 
 | | |
 |---|---|
@@ -107,7 +140,7 @@ draws on the two platforms no matter what else is configured.
 | Python | 3.12.3 (`uv` venv) |
 | torch | reference: **2.10.0+cu128** · Exp A: **2.14.0+cu130** |
 | Other pins | transformers 4.57.6, huggingface-hub 0.36.2, safetensors 0.7.0, tiktoken 0.12.0, soundfile 0.13.1 |
-| Attention / execution | `attention: flash`, `execution: cuda_graph` |
+| Attention / execution | bf16: `attention: flash`, `execution: cuda_graph` · FP8: `attention: sdpa`, `execution: eager` |
 | Sampling RNG device | **CUDA device generator** |
 
 ### 3.2 Apple M1 Max (Control 1)
@@ -137,7 +170,7 @@ draws on the two platforms no matter what else is configured.
 | | |
 |---|---|
 | seed / cfg_scale / cot | `831001` / `1.5` / `full` |
-| style | 790-character grunge / 90s-alternative prompt, `116, 8 BPM`, 4/4, C#/Db major |
+| style | 790-character grunge / 90s-alternative prompt, `116, 8 BPM`, 4/4, C#/Db major, "quiet-loud dynamics … loud-quiet-loud dynamic architecture" |
 | lyrics | "Something True" — a full song: 111 lines including section tags and bracketed performance directions (`[Intro]` … `[Outro]`) |
 | Exact text | preserved in each run's `request.json` |
 
@@ -146,6 +179,8 @@ draws on the two platforms no matter what else is configured.
 > also shows `bfloat16` there. The authoritative runtime dtype for each run is in the app's
 > `local_env.json` (`"dtype": "float32"` for Exp B). This was verified directly.
 > Run directory names carry each machine's **local** time; the two cloud runs are UTC.
+> Neither platform honoured the prompt's key or tempo hints (C#/Db major, 116 BPM): CUDA drew
+> Fm/130, MPS drew E/126. That is a model property, not a platform one.
 
 ---
 
@@ -153,13 +188,34 @@ draws on the two platforms no matter what else is configured.
 
 ### 4.1 Composition — the headline difference
 
-| Take | Key | BPM | Chords | Distinct | Top chord % | Longest run of one chord | Vocal bars | Longest run of identical vocal bars |
-|---|---|---|---|---|---|---|---|---|
-| L4 · torch 2.10 · bf16 *(reference)* | **Fm** | **130** | 155 | 5 | 27 % | 4 | 156 | 1 |
-| L4 · torch 2.14 · bf16 *(Exp A)* | **Fm** | **130** | 155 | 5 | 27 % | 4 | 156 | 1 |
-| M1 Max · bf16 *(Control 1)* | **E** | **126** | 143 | 4 | 46 % | 13 | 143 | 7 |
-| M4 Pro · bf16 *(Control 2)* | **E** | **126** | 144 | 5 | 52 % | 19 | 144 | 7 |
-| M4 Pro · fp32 *(Exp B)* | **E** | **126** | 151 | 4 | 60 % | 14 | 151 | 9 |
+| Take | Key | BPM | Chords | Distinct | Top chord % | Longest run of one chord | Sung vocal bars | Distinct sung bars | Longest run of identical sung bars |
+|---|---|---|---|---|---|---|---|---|---|
+| L4 · torch 2.10 · bf16 *(reference)* | **Fm** | **130** | 155 | 5 | 27 % | 4 | 121 | **49 %** | 2 |
+| L4 · torch 2.14 · bf16 *(Exp A)* | **Fm** | **130** | 155 | 5 | 27 % | 4 | 121 | **49 %** | 2 |
+| L4 · FP8 *(calibration)* | **Fm** | **130** | 182 | 5 | 32 % | 5 | 117 | 45 % | 2 |
+| M1 Max · bf16 *(Control 1)* | **E** | **126** | 143 | 4 | 47 % | 13 | 124 | 35 % | 5 |
+| M4 Pro · bf16 *(Control 2)* | **E** | **126** | 144 | 5 | 53 % | 19 | 117 | 35 % | 3 |
+| M4 Pro · fp32 *(Exp B)* | **E** | **126** | 151 | 4 | 60 % | 14 | 122 | 39 % | 3 |
+
+*Sung vocal bars* are bars of the vocal voice that contain at least one note; "distinct" and
+"longest run" are computed on the bar text with chord symbols stripped, so a one-chord intro of
+rests does not count as repetition.
+
+#### Where the runs part — first differing token
+
+| Pair | `abc_tokens.npy` (of ~3 000) | `score.abc` | `semantic.npy` |
+|---|---|---|---|
+| L4 2.10 vs L4 2.14 (Exp A) | **identical** | identical | **identical** |
+| L4 2.10 vs L4 ODE 48 / budget 16 | identical | identical | identical |
+| L4 bf16 vs **L4 FP8** (same RNG stream, quantized weights, eager path) | **225** | line 17 (second `V: Ins` line of the intro) | 2 |
+| **M1 Max vs M4 Pro** (same RNG stream, both bf16) | **122** | line 13 (first `V: Ins` line of the intro) | 4 |
+| M4 Pro bf16 vs **fp32** (same RNG stream, same chip) | **122** (the M4 bf16 take is the one that flips; M1 bf16 and M4 fp32 still agree there) | line 13 | 4 |
+| M1 Max bf16 vs M4 Pro fp32 | 313 | line 24 | 21 |
+| L4 vs any MPS take (different RNG streams) | **26** | line 5: `Q:1/4=130` vs `Q:1/4=126` | 1 |
+
+The semantic stage is conditioned on the (already different) score and re-seeds with the same
+seed, so its first-divergence index is near zero for every pair except Exp A; the ABC index is
+the informative one.
 
 First 24 chord symbols of each take (the intro is where the divergence is already visible):
 
@@ -169,6 +225,23 @@ M1 Max  bf16:             E  E  E  E  E  E  E  E  E  E  E  E  E  D  D  Amaj7 Ama
 M4 Pro  bf16:             E  E  E  E  E  E  E  E  E  E  E  E  E  E  E  E  E  E  E  D  A  E  E  E
 M4 Pro  fp32:             E  E  E  E  E  E  E  E  E  E  E  E  E  D  D  A  A  E  E  E  E  D  D  A
 ```
+
+Chord progression by section (consecutive duplicates collapsed):
+
+| Section | L4 (Fm/130) | M1 Max | M4 Pro bf16 | M4 Pro fp32 |
+|---|---|---|---|---|
+| intro | Fm Ab Eb Eb7 ×4 | E | E | E |
+| verse | Fm Ab Eb Eb7 → Fm Ab Eb Db | E D A(maj7) ×4 | E D A ×4 | E D A ×4 |
+| pre-chorus | Db Eb Db Eb Db | E D A ×2 | C#m B C#m B A ×2 | C#m A E D ×2 |
+| chorus | Fm Ab Eb Db ×… | E D A ×… | E D A ×… | E D A ×… |
+| interlude | Fm Ab Eb Db ×2 | *(none)* | E | E |
+| bridge | Fm Ab Eb Db ×4 | E D A ×3 | E D A ×2 | E D A ×2 |
+| outro | Fm Ab Eb Db ×4 | E D A E | E | E |
+
+Section order: reference, M4 Pro bf16 and FP8 = intro · verse · pre-chorus · chorus · interlude ·
+verse · pre-chorus · chorus · bridge · chorus · outro. M1 Max has no interlude; M4 Pro fp32
+places the interlude after the second chorus. Every take realises the requested
+verse / pre-chorus / chorus / bridge / outro form.
 
 Complete chord inventories (symbol × occurrences):
 
@@ -189,60 +262,118 @@ Chord-set similarity (Jaccard index on the set of distinct chord symbols):
 | **M4 Pro bf16** | 0.00 | 0.00 | 0.50 | 1.00 | 0.80 |
 | **M4 Pro fp32** | 0.00 | 0.00 | 0.60 | 0.80 | 1.00 |
 
-**Reading:** the two CUDA takes are the same composition (score byte-identical). The four MPS
-takes are a family — same key, same tempo, shared chords, overlapping structure — and share
-**nothing** with the CUDA composition. The Macs also show a more static harmonic surface
-(top chord 46–60 % of all chord symbols vs 27 %; longest run 13–19 chords vs 4; and 7–9
-identical consecutive bars in the vocal line vs 1 on CUDA).
+**Reading.**
 
-This pattern is exactly what §6.1 predicts: the two Macs draw from the **same** random stream
-(CPU generator, same seed) and differ only in GPU numerics → near-identical takes; CUDA draws
-from a **different** stream (CUDA generator) → a different take entirely.
+1. *Two families, decided at token 27.* The ABC header (`X:1 T: M:4/4 L:1/32 Q:1/4=1`) is
+   near-deterministic and identical on every platform; the tempo digit is the first genuinely
+   random decision, and the CUDA and CPU streams make it differently. Everything downstream —
+   key, progression, melody style — is conditioned on that decision. The seed therefore picks a
+   *family*, and every take of a given platform with this seed lives in that platform's family.
+2. *The MPS takes are not near-copies.* They share a prefix of 122–313 ABC tokens (the header,
+   the vocal-intro rests and the first riff bar) and then diverge completely; their score hashes
+   all differ. Their remaining similarity (same key/tempo, same E–D–A progression, Jaccard
+   0.5–0.8) is inherited from the shared prefix, exactly as the FP8 CUDA take inherits Fm/130
+   and the Fm–Ab–Eb progression from its 225-token shared prefix with the reference.
+3. *A token-level divergence is the normal response to any numeric perturbation.* FP8 weight
+   quantization on the same GPU and RNG stream flips a token at 225; a different Apple GPU
+   generation flips one at 122; float32 on the same chip flips one at 122. Single samples of a
+   heavy-tailed quantity cannot rank these perturbations, but they put them in one regime:
+   small, non-zero, and amplified by the autoregressive loop. Exp A (identical tokens) is the
+   only pair with a *zero* perturbation.
+4. *"Harmonically static" is a description of the E/126 family, not a defect.* The CUDA take is
+   a four-chord i–♭III–♭VII–♭VI progression in F minor (Fm–Ab–Eb–Db, with Eb7 as ♭VII7 in
+   the intro/verse) and a distinct pre-chorus; the MPS family is a three-chord
+   I–♭VII–IV rock song in E over a one-chord riff intro of 9–13 bars — both idiomatic for the
+   requested style. Top-chord share and longest chord run mostly measure the riff intro.
+5. *The one composition-level measure that separates the platforms and matches the listening
+   notes is vocal-melody repetition*: 49 % / 45 % distinct sung bars on the two CUDA draws vs
+   35 % / 35 % / 39 % on the three MPS draws, with longer runs of identical bars (5 / 3 / 3 vs
+   2 / 2). Because the MPS draws share the E/126 prefix, this cannot be attributed to the
+   platform rather than to the family (§8).
 
 ### 4.2 Token level
 
-| Take | semantic tokens | unique | entropy (bits) | repeated-token share | abc tokens | unique abc |
+| Take | semantic tokens | unique | entropy (bits) | repeated-token share¹ | abc tokens | unique abc |
 |---|---|---|---|---|---|---|
 | L4 · 2.10 bf16 | 7 123 | 4 682 | 11.91 | 53.0 % | 3 073 | 81 |
 | L4 · 2.14 bf16 | 7 123 | 4 682 | 11.91 | 53.0 % | 3 073 | 81 |
+| L4 · FP8 | 7 846 | 5 116 | 12.04 | 53.9 % | 3 311 | 84 |
 | M1 Max bf16 | 6 665 | 4 452 | 11.85 | 51.6 % | 2 686 | 78 |
 | M4 Pro bf16 | 6 677 | 4 468 | 11.86 | 51.9 % | 3 017 | 79 |
 | M4 Pro fp32 | 7 155 | 4 673 | 11.92 | 53.8 % | 2 839 | 79 |
 
+¹ share of tokens whose ID occurs more than once in the stream.
+
 All latent tensors are finite on every platform (no NaN/Inf anywhere). Token entropy is
 essentially equal across platforms — **the difference is not a degenerate or corrupted token
 stream; it is a different, comparably-rich composition.** Exactly repeated 4-grams are
-essentially absent from every semantic stream: 0 in the two CUDA runs and the M1 Max run,
-and 2 each (0.03 %) in the two M4 Pro runs.
+essentially absent from every semantic stream (0–1 per run), and the longest run of one
+repeated semantic token is 2 everywhere.
 
 ### 4.3 Artifact hashes
 
-| Take | `score.abc` | `semantic.npy` | `audio.flac` |
-|---|---|---|---|
-| L4 · 2.10 bf16 | `db2d1467174a7d71…` | `e8a09373bc99f11e…` | `07f934932f357eca…` |
-| L4 · 2.14 bf16 | `db2d1467174a7d71…` | `e8a09373bc99f11e…` | `a824641c442d9e9e…` |
-| M1 Max bf16 | `04eb164b3d73782c…` | `6a33a837f9777a3f…` | `57201bbd19154f43…` |
-| M4 Pro bf16 | `5ba38106abfe35ce…` | `99d780bef2169f4f…` | `6ed915a459baf8ff…` |
-| M4 Pro fp32 | `d996dd11c604f0c0…` | `0bf1dac96dc78b68…` | `745c85d4a623ba73…` |
+| Take | `score.abc` | `semantic.npy` | `latent.npy` | `audio.flac` |
+|---|---|---|---|---|
+| L4 · 2.10 bf16 | `db2d1467174a7d71…` | `e8a09373bc99f11e…` | `f3e90f8968bbd16d…` | `07f934932f357eca…` |
+| L4 · 2.14 bf16 | `db2d1467174a7d71…` | `e8a09373bc99f11e…` | `f3e90f8968bbd16d…` | `a824641c442d9e9e…` |
+| L4 · FP8 | `e1bd6badaa6fc6a8…` | `fa8193769086779a…` | `6132b6e06b7b3f7b…` | `41756563b76434f3…` |
+| M1 Max bf16 | `04eb164b3d73782c…` | `6a33a837f9777a3f…` | `d670a9c5a98c2996…` | `57201bbd19154f43…` |
+| M4 Pro bf16 | `5ba38106abfe35ce…` | `99d780bef2169f4f…` | `d79e37053643c9ba…` | `6ed915a459baf8ff…` |
+| M4 Pro fp32 | `d996dd11c604f0c0…` | `0bf1dac96dc78b68…` | `51cac367a5d0d925…` | `745c85d4a623ba73…` |
 
-Full SHA-256 values are in Appendix A. Note the CUDA pair: **identical plan and tokens, but
-different audio** — i.e. torch version changed only the acoustic rendering (NAR/VAE) numerics,
-invisibly at the statistical level (§4.4), never the composition.
+Full SHA-256 values are in Appendix A. Note the CUDA pair: **identical plan, tokens *and*
+latents, different audio** — the torch build changed nothing in the AR or NAR stages; the
+difference is confined to the fp32 VAE decode (cuDNN cu128 vs cu130) and is measured in §4.4.
 
 ### 4.4 Audio-level measurements
 
-| Take | Duration | Peak | RMS | Spectral centroid | Energy > 8 kHz | Stereo correlation |
-|---|---|---|---|---|---|---|
-| L4 · 2.10 bf16 | 284.9 s | 1.000 | 0.1546 | 2 898 Hz | 10.74 % | 0.845 |
-| L4 · 2.14 bf16 | 284.9 s | 1.000 | 0.1546 | 2 898 Hz | 10.74 % | 0.845 |
-| M1 Max bf16 | 266.6 s | 1.000 | 0.1433 | 3 576 Hz | 17.08 % | 0.867 |
-| M4 Pro bf16 | 267.1 s | 1.000 | 0.1418 | 3 271 Hz | 14.88 % | 0.857 |
-| M4 Pro fp32 | 286.2 s | 1.000 | 0.1650 | 3 457 Hz | 15.21 % | 0.845 |
+All values recomputed from the archived `audio.flac` files for this revision (estimators in
+§2.3). Earlier versions of this table used a different estimator and mis-stated the fp32 take.
 
-No clipping anywhere; levels are comparable. The MPS takes are measurably **brighter**
-(higher spectral centroid, 1.4–1.6× the high-frequency energy) — consistent with different
-music rather than a rendering fault. The two CUDA takes are statistically indistinguishable
-here despite different `audio.flac` hashes (identical composition, negligible render delta).
+| Take | Duration | Peak | RMS (mono mix) | Crest | Spectral centroid | Magnitude > 8 kHz | Stereo corr. | 3-s RMS σ | P10–P95 range |
+|---|---|---|---|---|---|---|---|---|---|
+| L4 · 2.10 bf16 | 284.9 s | 1.000 | 0.155 | 16.2 dB | 2 895 Hz | 10.4 % | 0.845 | 5.5 dB | 14.1 dB |
+| L4 · 2.14 bf16 | 284.9 s | 1.000 | 0.155 | 16.2 dB | 2 895 Hz | 10.4 % | 0.845 | 5.5 dB | 14.1 dB |
+| L4 · FP8 | 313.8 s | 1.000 | 0.141 | 17.0 dB | **3 373 Hz** | 12.4 % | 0.804 | 4.1 dB | 11.3 dB |
+| M1 Max bf16 | 266.6 s | 1.000 | 0.143 | 16.9 dB | 3 463 Hz | 15.3 % | 0.867 | 2.7 dB | 6.0 dB |
+| M4 Pro bf16 | 267.1 s | 1.000 | 0.142 | 17.0 dB | 3 551 Hz | 15.8 % | 0.857 | 5.4 dB | 12.3 dB |
+| M4 Pro fp32 | 286.2 s | 1.000 | 0.165 | 15.7 dB | **3 010 Hz** | 10.8 % | 0.845 | 2.7 dB | 4.2 dB |
+
+Power share per band (whole song, mono): bass 60–150 Hz = 46.6 % (L4) · 52.5 % (FP8) ·
+37.7 % (M1) · 37.5 % (M4 bf16) · 45.7 % (M4 fp32); mid 400 Hz–1 kHz = 17.9 % · 15.5 % ·
+24.2 % · 21.8 % · 21.2 %.
+
+Loudness envelope, full 10-s windows only (a trailing partial window is dropped), dB relative
+to each song's own RMS (the prompt asks for "quiet-loud dynamics"):
+
+```
+L4 ref   -14 -11 -13  -6  -2  +0  -1  +0  +1  +2  +1  +0  +1  +1  +0  -1  +1  +1  +2  -0  -1  +1  +2  +2  +2  +1  +1 -13   (28 windows)
+L4 FP8   -12 -11  +0  +1  +0  +1  +1  +1  +0  +1  +1  +1  -2  -9  -0  +0  +0  +0  +1  +1  +1  -3  +0  +1  +1  +1  +1  +2  -6  -2  +1   (31 windows)
+M1 bf16   -9  -3  -1  +0  -1  -4  +1  +1  +1  +1  -1  +0  -0  -3  +0  +2  +0  +0  +1  -1  -1  +0  +2  +2  +2  -0   (26 windows)
+M4 bf16  -14 -10  -6  -2  +0  +1  +2  +2  +2  -4  -1  +0  +0  +0  +1  +2  +2  +1  -6  +0  +1  -2  +2  +2  +2  -0   (26 windows)
+M4 fp32   -9  -4  -2  -0  -0  -0  +1  +1  +0  -2  -1  -1  +0  +0  +0  +1  +2  +2  -1  +1  -2  -1  +1  +1  +2  +2  -1  +0   (28 windows)
+```
+
+The dropped tails are 6.6 s (M1 Max, −5 dB), 7.1 s (M4 Pro bf16, **−16 dB** — its quiet outro) and
+6.2 s (M4 Pro fp32, −2 dB); the two CUDA takes end on a full window.
+
+Sample-level comparisons where the token streams are identical:
+
+| Pair | max \|Δ\| (full-scale) | RMS Δ | SNR | Note |
+|---|---|---|---|---|
+| L4 2.10 vs L4 2.14 (identical latents) | 6.4 × 10⁻⁶ | 1.8 × 10⁻⁷ | **119 dB** | 43 % of samples bit-identical; below 16-bit quantisation noise — inaudible by construction |
+| L4 ODE 32 vs ODE 48 (identical tokens, different solver) | 0.33 | 6.4 × 10⁻³ | 28 dB | latent RMS Δ = 2.3 % of latent std — the "audible but subtle" reference point |
+
+**Reading.** No clipping anywhere; levels are comparable. The two bf16 Mac takes are brighter
+and bass-lighter than the CUDA reference — but the **FP8 take generated on the same L4 is just
+as bright**, and the **M4 fp32 take is as dark and as bass-heavy as the reference**. Brightness
+and bass share therefore vary between *draws* on both platforms; they are not a platform
+rendering signature. The same holds
+for dynamics: the M4 Pro bf16 take reproduces the reference's quiet intro / quiet outro
+architecture almost exactly (P10–P95 12.3 vs 14.1 dB), while the M1 Max and M4 fp32 takes are
+flat (6.0 / 4.2 dB). Note that the listener ranked M4 bf16 *with* M1 Max, not with the
+reference — the listening verdict is not tracking macro-dynamics or harmonic structure, which
+points at the semantic/acoustic layer (vocal performance, timbre) rather than the score.
 
 ### 4.5 Performance
 
@@ -269,7 +400,7 @@ Observations:
 - **NAR (flow-matching ODE synthesis) is the worst stage on MPS** — 8–12× slower — while VAE
   decode is equal or faster on Apple GPUs (10.4–12.5 s vs 14.4 s).
 - **fp32 costs 1.65×** end-to-end on the M4 Pro (1 231 s → 2 036 s) and changes nothing about
-  the trajectory class (§5).
+  the family (§5).
 - The M4 Pro is ~1.24× faster than the M1 Max overall and 1.42× faster in NAR, consistent
   with newer GPU generations having better Metal kernels for this workload.
 
@@ -283,8 +414,8 @@ Observations:
 | M4 Pro (fp32) | 11.8–20.9 GB GPU allocation | `ioreg` |
 
 fp32 doubles the weights (7.3 GB → 14.6 GB) and visibly increases the reserve the MPS
-allocator holds, without improving the result. See [LINUX_CUDA.md](LINUX_CUDA.md) for the
-full VRAM-budget analysis on CUDA (including the 12 GiB OOM boundary and FP8).
+allocator holds. See [LINUX_CUDA.md](LINUX_CUDA.md) for the full VRAM-budget analysis on CUDA
+(including the 12 GiB OOM boundary and FP8).
 
 ### 4.7 Listening evaluation
 
@@ -297,40 +428,44 @@ one this listener has used repeatedly for cross-platform quality assessment.
 | L4 · 2.14 bf16 (Exp A) | *"very good — vocals, music, lyrics, arrangement, instruments and narrative direction all correct; high quality"* |
 | M1 Max bf16 | *"clearly worse than the Linux/CUDA version — obvious by ear"* (vocals, music, arrangement, instruments) |
 | M4 Pro bf16 | *"about the same as the M1 Max take; clearly worse than Linux/CUDA"* |
-| M4 Pro fp32 (Exp B) | **not yet evaluated by ear at the time of writing** |
+| M4 Pro fp32 (Exp B) | **not evaluated by ear** |
+| L4 · FP8 | not part of the listening comparison |
 
 The listening verdicts were reported in Chinese and are translated here.
 
-**How much does this prove?** The MPS verdicts concern **one effective random draw**
-(the three MPS takes share one RNG stream — see §6.1), against one CUDA draw. It is therefore
-strong evidence that *this* MPS draw is worse, and consistent with the wider impression from
-routine use on Macs — but it is not yet evidence that MPS draws are *systematically* worse.
-The composition analysis (§4.1) supports the same reading: the MPS take is more harmonically
-static, but that may be a property of this draw rather than of the platform. §9 proposes the
-experiment that would settle it.
+**How much does this prove?** Less than it appears to, for a structural reason: the listener
+compared **one composition family against another**. Every CUDA take is Fm/130 with the
+Fm–Ab–Eb progression; every MPS take is E/126 with E–D–A. The verdict "CUDA better" is
+indistinguishable from "this listener prefers the Fm/130 realisation of this song", and the
+verdict "the two Macs sound alike" is expected from their shared 122-token prefix regardless of
+platform. The only measurable difference that lines up with the notes on *vocals* is the
+vocal-melody repetition in §4.1 — and it, too, is inherited by all three MPS takes from the same
+prefix. The experiment that would separate platform from family is §9.1.
 
 ---
 
 ## 5. Hypothesis testing
 
-### Exp A — "the torch version explains it" → **rejected**
+### Exp A — "the torch version explains it" → **rejected (zero perturbation)**
 
 Same GPU (L4), same dtype, same request; only torch changes (2.10.0+cu128 → 2.14.0+cu130,
 i.e. the Linux pin vs the macOS pin):
 
 | Artifact | torch 2.10 | torch 2.14 | Result |
 |---|---|---|---|
-| `score.abc` | `db2d1467174a7d71…` | `db2d1467174a7d71…` | **byte-identical** |
-| `semantic.npy` | `e8a09373bc99f11e…` | `e8a09373bc99f11e…` | **byte-identical** |
-| `audio.flac` | `07f934932f357eca…` | `a824641c442d9e9e…` | different samples, statistically indistinguishable (§4.4) |
+| `abc_tokens.npy` / `score.abc` | `73e6a905…` / `db2d1467…` | same | **byte-identical** |
+| `semantic.npy` | `e8a09373…` | same | **byte-identical** |
+| `latent.npy` (NAR output) | `f3e90f89…` | same | **byte-identical** |
+| `audio.flac` | `07f93493…` | `a824641c…` | PCM max \|Δ\| 6.4 × 10⁻⁶, SNR 119 dB (§4.4) |
 
-The composition is **torch-version independent on CUDA**. Note what this also verifies: with
-the RNG stream held constant (same device generator, same seed), two different torch builds
-still produce identical tokens — so token-level sampling on CUDA is robust to kernel-level
-numeric differences of the magnitude between these builds. This makes the platform RNG
-difference (§6.1) the natural explanation for the cross-platform divergence.
+The composition is **torch-version independent on CUDA**, and so is the acoustic latent.
+Upstream pins deterministic kernels (`cudnn.deterministic`, TF32 off, `float32_matmul_precision
+= "highest"`), and on the same GPU the two builds evidently selected bit-equivalent kernels for
+the AR and NAR paths. What Exp A does **not** show is that CUDA sampling is robust to numeric
+perturbation: the perturbation it applied to the token path was zero. The FP8 calibration run
+below is the CUDA data point for a real perturbation.
 
-### Exp B — "numeric precision explains it" → **rejected**
+### Exp B — "numeric precision explains it" → **rejected as an explanation of the divergence; not evaluated as a quality lever**
 
 Same machine (M4 Pro), same request; only dtype changes (bfloat16 → float32), verified in
 `local_env.json` and by the doubled GPU allocation:
@@ -338,30 +473,48 @@ Same machine (M4 Pro), same request; only dtype changes (bfloat16 → float32), 
 | | M4 Pro bf16 | M4 Pro fp32 |
 |---|---|---|
 | Key / tempo | E / 126 | **E / 126** |
-| Distinct chords / top share | 5 / 52 % | 4 / **60 %** |
+| First differing ABC token | — | **122** |
+| Distinct chords / top share | 5 / 53 % | 4 / 60 % |
 | Chord-set similarity vs bf16 | — | 0.80 |
+| Spectral centroid / bass share | 3 551 Hz / 37.5 % | **3 010 Hz / 45.7 %** (closest to the CUDA reference) |
 | End-to-end | 1 231 s | 2 036 s (1.65×) |
+| Listening | "clearly worse than CUDA" | **not evaluated** |
 
-With the RNG stream held constant (both runs sample on CPU), fp32 stays on the same
-trajectory — and is *more* harmonically static, not less. Precision is not the discriminator,
-and fp32 is not a quality mode.
+With the RNG stream held constant (both runs sample on CPU), fp32 flips a token at ABC index
+122 and produces a different take of the same family — the same behaviour as every other
+non-zero perturbation in this study. Precision is therefore not what puts MPS in the E/126
+family (the tempo token at index 27 does that). Whether fp32 *sounds* better was not tested;
+its audio measurements (§4.4) happen to be the closest of the Mac takes to the CUDA reference,
+which is a reason to include it in the blind comparison of §9.5, not a conclusion.
 
-### Cross-check — "the GPU generation explains it" → **rejected**
+### Cross-check — "the GPU generation explains it" → **rejected as an explanation of the divergence**
 
 M1 Max (32-core, 2021) and M4 Pro (20-core, 2024) are different GPU generations with
-different Metal capabilities, yet produced the same key, same tempo, and a 0.50–0.80
-chord-set overlap with each other, and 0.00 with CUDA. This is what §6.1 predicts: the two
-Macs share an RNG stream and differ only in kernel numerics, which is a much smaller
-difference than a different random stream.
+different Metal capabilities. On the same RNG stream they agree for **122 ABC tokens** and then
+part; their scores share key, tempo, the E–D–A progression and a 0.50 chord-set overlap because
+those were decided inside the shared prefix. They are two different takes of one family, not
+"the same take with small numeric variations".
+
+### Calibration — FP8 on the reference GPU (from LINUX_CUDA.md)
+
+Same L4, same RNG stream, weights quantized to FP8 and the eager + SDPA execution path
+(CUDA graphs are disabled for FP8): first differing ABC token **225**; Fm/130 with the same
+Fm–Ab–Eb–Eb7 intro; a different chorus (Fm–Db–Ab–Eb); centroid 3 373 Hz, i.e. nearly as
+bright as the Mac takes (3 463–3 551 Hz) against the reference's 2 895 Hz. This is what a large, known numeric perturbation does on CUDA,
+and it is qualitatively identical to what a different Apple GPU or a different dtype does on
+MPS. Token-level divergence is therefore not evidence of an MPS-specific defect.
 
 ### What remains, and what is still open
 
 - **Explained:** the *divergence* between CUDA and MPS. The platforms sample from different
-  random streams by design (§6.1); this is sufficient to produce entirely different songs,
-  and the observed clustering (Macs together, CUDA apart) matches it exactly.
-- **Open:** whether MPS draws are *worse on average*. The available listening evidence covers
-  one effective draw per platform. The numerical path differences in §6.2–6.3 may or may not
-  contribute to quality; this experiment cannot separate them from the RNG difference.
+  random streams by design (§6.1); the streams part at the first random token (tempo), which
+  places the platforms in different composition families.
+- **Explained:** why the Mac takes resemble each other — a shared prefix on a shared RNG stream,
+  not small numerics. Numerics on MPS are large enough to flip a token within ~120 draws, as
+  FP8 is on CUDA within ~225.
+- **Open:** whether MPS draws are *worse on average*. This design cannot answer it: platform and
+  family are confounded (§8). The numerical path differences in §6.2–6.3 may or may not
+  contribute; nothing here measures them (§9.3–9.4).
 
 ---
 
@@ -387,8 +540,9 @@ else:
 | | CUDA | MPS |
 |---|---|---|
 | Generator device | CUDA device generator | **CPU generator** (probabilities moved to CPU for the draw) |
-| Same seed gives | CUDA RNG stream | CPU RNG stream |
-| Streams equal? | **No** — PyTorch generators are device-specific (CPU: MT19937; CUDA: Philox) | |
+| Same seed gives | CUDA RNG stream (Philox) | CPU RNG stream (MT19937) |
+| `torch.multinomial` implementation | CUDA kernel | CPU kernel (different consumption of the stream) |
+| Streams equal? | **No** | |
 
 Measured on the M1 Max (torch 2.14.0) — same seed, same probability vector, eight draws:
 
@@ -398,16 +552,23 @@ MPS generator : 186, 753, 776, 703, 229, 980, 485, 545     # different stream
 CPU generator re-run: identical to the first CPU list      # reproducible
 ```
 
+Note that the **NAR stage is different**: its initial noise is drawn with a CPU generator on
+every platform (`yue2/nar.py`, `torch.Generator(device="cpu")`), so for a given token stream
+the acoustic stage has RNG parity across platforms. This is what makes §9.3 a clean test.
+
 **Consequences**
 
 1. The same seed **cannot** produce the same song on CUDA and on MPS. This is a property of
    the sampler's RNG-device selection, not of the model.
-2. Both Macs use the CPU stream → near-identical takes (§4.1); CUDA uses a CUDA stream →
-   a different take. Exactly the observed pattern.
-3. An apples-to-apples *platform* comparison of identical draws requires the same RNG device
-   on both sides — see the follow-up experiment in §9.
+2. The first 26 ABC tokens agree anyway, because the ABC header is near-deterministic; the
+   streams part at the first genuinely random token (the tempo), which puts each platform in
+   its own composition family (§4.1).
+3. Two Macs on the same CPU stream agree until their kernel numerics first flip a sampled
+   token (ABC index 122 here) and then diverge completely — same family, different take.
+4. An apples-to-apples *platform* comparison therefore cannot rely on a shared seed at all; it
+   has to hold the composition fixed explicitly (§9.1).
 
-### 6.2 Attention path — different by design (secondary, unquantified)
+### 6.2 Attention and execution path — different by design (secondary, unquantified)
 
 Upstream's `sdpa()` wrapper (`yue2/modeling_yue2.py`) selects different implementations per
 device:
@@ -425,20 +586,19 @@ def sdpa(query, key, value, *, attn_mask=None, is_causal=False):
                                           is_causal=is_causal, enable_gqa=grouped)
 ```
 
-| | CUDA | MPS |
+| | CUDA (bf16) | MPS |
 |---|---|---|
 | Grouped-query attention | native (`enable_gqa=True`) | K/V expanded with `repeat_interleave`, then ungrouped |
-| Kernel selected (as recorded) | `attention: flash` | `attention: sdpa` |
-| Execution | `cuda_graph` | `eager` |
+| AR execution (as recorded) | `cuda_graph` — `GraphAR`, native variable-length FlashAttention, both CFG branches in one batch (`GraphAR`'s optional projection fusion is off by default and never enabled by the sampler) | `eager` — `StaticKVCache`, MPS SDPA, CFG branches as two batch-1 forwards |
+| NAR attention | one SDPA call over the whole query block | queries processed in 256-row blocks |
 
-Different kernels accumulate differently; the model runs ~24 000-token contexts through this
-path. The math is equivalent, the numerics are not. The project's
-`scripts/mps_sdpa_check.py` verifies the MPS attention result against a reference within
-~6e-4 in bf16 (excluding gross errors) but does not make the platforms bit-equal, and does not
-cover every shape the model uses. **Note the CUDA control in §5:** token-level sampling on
-CUDA survived a torch/kernel change without a single token flip, so numeric differences of
-that magnitude are not, by themselves, sufficient to change a take when the RNG stream is
-held constant.
+The math is equivalent; the numerics are not. The model runs ~24 000-token contexts through
+this path, and the AR decode on MPS goes through the single-query half-precision kernel whose
+out-of-bounds defect (fixed in torch 2.11) is documented in [MACOS_MPS.md](MACOS_MPS.md).
+The project's `scripts/mps_sdpa_check.py` is a **gross-error and determinism check** (tolerance
+0.05 against an fp64 reference, key lengths up to 2 048, random inputs); it does not establish
+precision parity with the CUDA kernels at the model's real context lengths. Nothing in this
+study measures the magnitude of these differences at the logit level; §9.4 does.
 
 ### 6.3 Kernel libraries
 
@@ -448,11 +608,13 @@ for completeness.
 
 ### 6.4 What has been excluded as a mechanism
 
-- **Model weights** — SHA-256 verified identical in all five runs.
-- **Tokenizer / text handling** — same request text, same `yue2-infer` runtime hash.
+- **Model weights** — SHA-256 verified identical in all runs.
+- **Tokenizer / text handling** — same request text, same `yue2-infer` runtime hash, byte-identical 884-token request prefix in every run.
 - **Degenerate sampling on MPS** — token entropy and repetition are comparable across
   platforms (§4.2); no NaN/Inf in any latent tensor.
-- **torch build, dtype, GPU generation** — tested and rejected (§5).
+- **torch build** — tested, bit-exact through NAR (§5).
+- **A platform-specific rendering signature in brightness or dynamics** — the FP8 CUDA take
+  and the M4 fp32 take break the pattern in both directions (§4.4).
 
 ---
 
@@ -462,79 +624,134 @@ for completeness.
 
 - **Same seed ≠ same song on a Mac vs on CUDA — by design.** The Mac samples with the CPU
   RNG; CUDA samples with the CUDA RNG. Use this deliberately: a seed you like on one platform
-  does not reproduce the other.
-- **Mac results are reproducible on Macs**: the CPU RNG stream is stable, so the same seed and
-  settings give the same song across macOS machines (verified across M1 Max and M4 Pro).
-- **Seed re-rolling is the practical lever** — since the draw determines the composition, and
-  MPS draws are reproducible per seed, trying several seeds is effective.
-- **`float32` is not a quality mode.** It costs ~1.65× time and does not change the trajectory
-  class (§5, Exp B). Do not reach for it to "fix" quality.
+  does not reproduce on the other.
+- **Same seed ≠ same song across Macs either.** The M1 Max and M4 Pro takes share only 122 ABC
+  tokens. Treat a seed as reproducible only on one machine with one torch build and one dtype —
+  and even that has not yet been verified on MPS (§9.2).
+- **Seed re-rolling is the practical lever** — the first random token decides the family, so
+  different seeds explore genuinely different songs.
+- **`float32` is not a documented quality mode.** It costs ~1.65× time, produces a different
+  take of the same family, and has not been evaluated by ear. Do not reach for it to "fix"
+  quality on the strength of this document.
 - **MPS is slower, most of all in NAR** (8–12× vs CUDA; a ~4.5-minute song takes ~20 minutes
   on an M4 Pro, ~25 minutes on an M1 Max). Memory is modest: ~10.5 GB of unified memory at
   bf16.
-- If a take matters, generate on CUDA — and if you want to compare *like for like*, use the
-  method in §9 rather than the same seed alone.
+- If you want to compare platforms *like for like*, fix the score (§9.1) — a same-seed
+  comparison compares two families, not one song rendered twice.
 
 ### For the project
 
-- Document macOS as **supported, with a different sampling stream by design**; avoid promising
-  cross-platform seed parity.
-- The comparison tooling (`05 // TOOLS`) should be used **within** a platform; a same-seed
-  cross-platform comparison compares two different draws, not one song rendered twice.
+- Document macOS as **supported, with a different sampling stream by design**; do not promise
+  cross-platform or cross-machine seed parity.
+- The comparison tooling (`05 // TOOLS`) is only meaningful **within** one machine, or across
+  machines with an explicitly fixed score.
+- Record the sampling RNG device in `result.json` so runs are self-describing (it is currently
+  implicit in the device).
+- A "first differing token" comparison between two runs' `abc_tokens.npy` / `semantic.npy`
+  would have exposed the M1 ≠ M4 divergence immediately; it is a cheap addition to `05 // TOOLS`.
 - If cross-platform *sampling parity* were ever wanted, the `rng_device` choice in
-  `yue2/sampling.py` is the single place to change (force CPU sampling on all platforms).
-  Note that this is upstream code.
+  `yue2/sampling.py` is the single place to change — but note that it would only align the
+  stream, not the kernels, so takes would still part at the first numerically close call.
 - The ODE-step A/B finding in [LINUX_CUDA.md](LINUX_CUDA.md) is unaffected: on one platform
   and one dtype, changing ODE steps leaves the plan and tokens byte-identical and changes only
-  the acoustic solver.
+  the acoustic solver (SNR 28 dB vs the 32-step take).
 
 ---
 
 ## 8. Limitations
 
-1. **One request, one seed — and effectively one draw per platform.** The three MPS takes
-   share a single RNG stream (§6.1), so they are near-copies rather than independent samples.
-   The listening comparison is therefore **one CUDA draw vs one MPS draw**, repeated with
-   small numeric variations. It cannot establish whether MPS draws are worse *on average*.
-2. **One listener, not blind.** The quality ranking is one experienced listener's judgement;
-   the wider impression from routine Mac use was not recorded under controlled conditions.
-3. **Output-level, not op-level.** No per-op or per-token logit comparison was performed, so
-   §6.2–6.3 remain candidates rather than a proven mechanism for any residual quality effect.
-4. **Two Apple GPUs, one macOS version, one torch build on the Mac side.** macOS 26.6.2 and
+1. **Platform is confounded with composition family.** One request, one seed; the CUDA stream
+   puts every CUDA take in Fm/130 and the CPU stream puts every MPS take in E/126. No
+   comparison in this document — listening, harmony, brightness, dynamics, melody repetition —
+   can separate "MPS" from "the E/126 realisation of this song". More takes of this seed would
+   not help (they stay in their family); different seeds would, but only in aggregate, with
+   enough of them to average over families — fixing the score (§9.1) removes the confound
+   outright.
+2. **The three MPS takes are not independent samples.** They share a 122–313-token ABC prefix
+   (header, tempo, key, intro riff) on one RNG stream. After the prefix they are independent
+   continuations, but of the same family.
+3. **One listener, not blind, and the fp32 take was not listened to.** The quality ranking is
+   one experienced listener's judgement made knowing which take came from where; the wider
+   impression from routine Mac use was not recorded under controlled conditions.
+4. **Output-level, not op-level.** No per-token logit comparison was performed, so §6.2–6.3
+   remain candidates rather than a measured mechanism for any residual quality effect.
+5. **Exp A is a null test of numeric robustness.** It shows torch 2.10 and 2.14 are bit-exact
+   on this GPU, not that sampling tolerates perturbation; the FP8 run is the only CUDA
+   perturbation data point, and it is a single sample of a heavy-tailed quantity (first flip
+   index).
+6. **Same-machine reproducibility on MPS is untested.** No MPS run was repeated on the same
+   machine with the same settings. The formerly non-deterministic MPS attention kernel
+   ([MACOS_MPS.md](MACOS_MPS.md)) makes this worth an explicit check rather than an assumption.
+7. **Two Apple GPUs, one macOS version, one torch build on the Mac side.** macOS 26.6.2 and
    torch 2.14.0 throughout; other combinations are untested.
-5. **Memory numbers** come from periodic sampling (5 s on CUDA, 20 s on the Macs), so brief
+8. **Memory numbers** come from periodic sampling (5 s on CUDA, 20 s on the Macs), so brief
    peaks may be missed; treat them as working-set figures, not exact maxima.
-6. **The CUDA-vs-CPU random-stream difference is inferred** from the code path, from a
+9. **The CUDA-vs-CPU random-stream difference is inferred** from the code path, from a
    locally measured CPU-vs-MPS generator difference, and from documented PyTorch behaviour
-   (device-specific generator algorithms). No CUDA-device RNG measurement was taken in this
-   investigation; the decisive test is §9.
-7. **Not tested:** macOS with torch 2.10 + the documented zero-mask workaround; MPS attention
-   pinned to the math backend; any patch-level intervention.
-8. **Exp B was not separately evaluated by ear** before this document was written.
+   (device-specific generator algorithms); it is corroborated by the divergence at token 27.
+   No CUDA-device RNG measurement was taken.
+10. **Not tested:** macOS with torch 2.10 + the documented zero-mask workaround; MPS attention
+    pinned to the math backend; any patch-level intervention.
 
 ---
 
-## 9. Follow-up experiments (recommended)
+## 9. Follow-up experiments (recommended, in order of value)
 
-### 9.1 Common-RNG comparison — the decisive test for "numerics vs RNG"
+### 9.1 Fixed-score comparison — the design that removes the confound
 
-Force the sampler to use the **same RNG device on both platforms** (always the CPU generator
-and CPU sampling) and re-run the fixed request on CUDA:
+`request.abc` bypasses the ABC sampling stage entirely (`yue2/pipeline.py`, "Using provided
+score"; the UI exposes it as the optional ABC input in `01 // GENERATE` and via `03 // EDIT`).
+Feed the **reference CUDA `score.abc`** as the exact score on both platforms and generate with
+several seeds each (3–5 per platform; short songs keep the Mac cost manageable). Composition,
+key, tempo, progression and melody are then identical everywhere; only the performance
+(semantic stage) and the rendering (NAR/VAE) are drawn — which is exactly the layer the
+listening notes ("vocals, instruments, arrangement") point at. Listen blind (§9.5). This is
+the experiment that can support or refute "MPS is systematically worse".
 
-- If the CUDA output then matches the **MPS** trajectory (E/126 family): the divergence was
-  purely the RNG stream; the model numerics are equivalent for this purpose.
-- If the CUDA output stays in the **Fm/130** family: numerical path differences also
-  contribute, and their magnitude can then be studied with the RNG controlled.
+### 9.2 Same-machine repeat — is MPS reproducible at all?
 
-This requires a one-line change in `yue2/sampling.py` (upstream) or a runtime patch in the
-app's adapter layer.
+Re-run the fixed request on the M4 Pro with identical settings and compare `abc_tokens.npy`
+and `semantic.npy` hashes. Ten minutes; decides whether "reproducible on one Mac" may be
+claimed.
 
-### 9.2 Multi-seed listening comparison — the test for "systematically worse"
+### 9.3 Cross-platform re-rendering — isolates the acoustic stage
 
-Generate N ≥ 5 seeds on each platform (same settings), shuffle and listen blind, and compare
-the distribution of ratings — not a single pair. This is the only design that can support the
-claim "MPS quality is systematically worse", and it should replace single-seed comparisons in
-future write-ups.
+The NAR noise is CPU-generated on every platform (§6.1), so rendering the CUDA run's tokens
+on a Mac uses the *same* noise and the *same* tokens; only kernel numerics differ. Two levels:
+
+- VAE only: decode the CUDA run's `latent.npy` on the Mac (`06 // DECODE`, ~10 s) and compare
+  with the CUDA `audio.flac` at sample level.
+- NAR + VAE: call `yue2.nar.synthesize(model, prefix, codec, seed)` on the Mac with the CUDA
+  run's `prefix.npy` / `semantic.npy` (10–15 min), then decode. Compare against the CUDA audio
+  and against the ODE 32-vs-48 reference point (SNR 28 dB): a Mac render far above 28 dB SNR
+  rules out the acoustic stage; a render below it is a real, listenable platform difference on
+  identical music.
+
+### 9.4 Teacher-forced logit comparison — quantifies the numeric gap without sampling
+
+Force the CUDA run's token sequence through the model on each platform via the same
+incremental `StaticKVCache` path the sampler uses (not a single prefill — the MPS decode kernel
+differs from the prefill kernel), and record per-position top-k probabilities. Report
+KL(p_CUDA ‖ p_MPS), argmax agreement and entropy difference **as a function of position**. A
+KL that is small and flat means the platforms differ only by chaotic amplification of
+negligible noise; a KL that grows with context length is the signature of an attention-
+precision effect and would be a mechanism worth fixing.
+
+### 9.5 Blind multi-seed listening
+
+Most efficient on the fixed score of §9.1: shuffle N ≥ 5 takes per platform, listen blind
+(ideally with a second listener), and compare the distributions of ratings. With free seeds the
+same design also works, but family-to-family variance adds to the noise, so it needs more takes
+per platform. Include the fp32 take. Either way, this — not a single seed — is the only design
+that can support "MPS quality is systematically worse".
+
+### 9.6 Common-RNG run (demoted)
+
+Forcing CPU sampling on CUDA aligns only the random stream, not the kernels. Given that every
+non-zero perturbation flipped a token within a few hundred draws, a common-RNG CUDA run would
+almost certainly produce a *third* take, and whether it lands in Fm/130 or E/126 would depend
+on whether the first flip precedes token 27. It answers "are the logits bit-equal" (no), not
+"do the numerics matter for quality". §9.4 answers the latter directly.
 
 ---
 
@@ -548,6 +765,8 @@ Environment setup is documented in [LINUX_CUDA.md](LINUX_CUDA.md) §6 (CUDA) and
 uv pip install --python env/bin/python torch==2.14.0 --force-reinstall
 
 # Exp B — macOS: set DTYPE = float32 in Settings → RUNTIME (or --dtype float32)
+
+# FP8 calibration — CUDA: QUANTIZATION = fp8, MEMORY BUDGET = 12 (see LINUX_CUDA.md §4)
 ```
 
 Then run the fixed request (seed 831001, cfg 1.5, cot full, ODE 32) and compare:
@@ -557,15 +776,24 @@ Then run the fixed request (seed 831001, cfg 1.5, cot full, ODE 32) and compare:
 grep -E '^(K|Q):' score.abc                     # key / tempo
 grep -o '"[A-G][#b]?[a-z0-9]*"' score.abc       # chord stream
 
+# where two runs part
+python3 - <<'PY'
+import numpy as np, sys
+a, b = (np.load(f"{d}/abc_tokens.npy") for d in ("RUN_A", "RUN_B"))
+n = min(len(a), len(b)); d = np.nonzero(a[:n] != b[:n])[0]
+print("first differing ABC token:", int(d[0]) if len(d) else "none", "| lengths", len(a), len(b))
+PY
+
 # integrity
-sha256sum score.abc semantic.npy audio.flac
+sha256sum score.abc abc_tokens.npy semantic.npy latent.npy audio.flac
 jq '.weights, .truncated, .timing' result.json  # hashes, truncation, per-stage timings
 ```
 
 Verification checklist for a comparable run: same `weights.*.sha256`, same
 `runtime_sha256`, same `config.json` settings except the variable under test, and
 `local_env.json` recording the intended `device`/`dtype`. For cross-platform comparisons,
-also record the **sampling RNG device** (§6.1) — it is currently implicit in the device.
+also record the **sampling RNG device** (§6.1) — it is currently implicit in the device — and
+compare `abc_tokens.npy` before comparing anything downstream.
 
 ---
 
@@ -574,34 +802,51 @@ also record the **sampling RNG device** (§6.1) — it is currently implicit in 
 ```
 L4 2.10 bf16 (reference)
   score.abc      db2d1467174a7d7166207f03a5e0dc146ea79e33a3af5719cccac2af4f92c7b8
+  abc_tokens.npy 73e6a90596086c9f6798d39e624e9c306d24e322f8c405fee11524cc2b4e706c
   semantic.npy   e8a09373bc99f11ed3c931b95f8d6c76d6e4765b233c6fc37362fcdebda8aaed
+  latent.npy     f3e90f8968bbd16d07d8e6410d91052206576708b1901dd39c083c3e0c0fb82d
   audio.flac     07f934932f357ecab3ad7d200eead58135fbad72a66fe1ac2f7fad25f3cb68ec
 
 L4 2.14 bf16 (Exp A)
   score.abc      db2d1467174a7d7166207f03a5e0dc146ea79e33a3af5719cccac2af4f92c7b8
+  abc_tokens.npy 73e6a90596086c9f6798d39e624e9c306d24e322f8c405fee11524cc2b4e706c
   semantic.npy   e8a09373bc99f11ed3c931b95f8d6c76d6e4765b233c6fc37362fcdebda8aaed
+  latent.npy     f3e90f8968bbd16d07d8e6410d91052206576708b1901dd39c083c3e0c0fb82d
   audio.flac     a824641c442d9e9ed5f22871d58a5118c942ab9e0672867a08379722aec0418f
+
+L4 FP8 (calibration; LINUX_CUDA.md run 20260915-151926)
+  score.abc      e1bd6badaa6fc6a87888903978211d9bfa90dbf7e35768e5e65c6c5e05c806cc
+  abc_tokens.npy 9f30f6a6f4ec50aad31e12a7ea933c886520c0fa06c29f2ee54e1a96d57b62af
+  semantic.npy   fa8193769086779a3c672fde9b1a845be3bd23c26de7270bf9cb11d5015c6cd1
+  latent.npy     6132b6e06b7b3f7bc7e2c34c39e8592db299b31ae5c5e1a8cd348ff040858212
+  audio.flac     41756563b76434f3a050a59bb0444a78a44a7dabc9b0637f8caa0220eadf7146
 
 M1 Max bf16 (Control 1)
   score.abc      04eb164b3d73782cdba65e1aa0ccb30337853a7018f5b1f67500902fdc613137
+  abc_tokens.npy 6b314234d2da3569109b508693d7c6ea4dc968c9b0779919877a90af2c517e80
   semantic.npy   6a33a837f9777a3f6b877969edef00a705a32d27e52f2beb4caafe5711121406
+  latent.npy     d670a9c5a98c2996cd636fa649a283ec11b51ef8b0cce86b8cef68c842b75684
   audio.flac     57201bbd19154f431f13857d7ff0186b89f832db149679f4c710e8c9ee0fe34a
 
 M4 Pro bf16 (Control 2)
   score.abc      5ba38106abfe35ce7aafca0fb363f4605a91ed7c4107f992cf954d1202e12c33
+  abc_tokens.npy cec1014596cc2e2ba6cb68d07f4d8b332f88c4d103037e67f0a19a4b874ac6d0
   semantic.npy   99d780bef2169f4f90aef61924a79181b41f02739c93827f9eb692cbd7ad9d27
+  latent.npy     d79e37053643c9ba2de01ed73a6e4f45c530ccfb6e5f1fdb0136f4db2563185b
   audio.flac     6ed915a459baf8ff1a48d10a0aa8352e215fd53a8e186fd99edca698fb18f729
 
 M4 Pro fp32 (Exp B)
   score.abc      d996dd11c604f0c08d6ab76f28445c125450d979820a9960200fda0462136406
+  abc_tokens.npy a6f0b6beb8256ed851904b9e155640f09ccee043ead6042685cb7a67ea7225a7
   semantic.npy   0bf1dac96dc78b68d72c9fa8f0a35fadef43140b851637f20d94209ba568a7b1
+  latent.npy     51cac367a5d0d9250a696fa10cd96fc96ed2385015bb67f57b1f009cc87dc266
   audio.flac     745c85d4a623ba73e480d613700ac62c7f70f78a7aea70b6d4b6d54d9f48d386
 
-Weights (identical in all five runs)
+Weights (identical in all runs)
   YuE2-3B model.safetensors   1d55c42c1a9875c34f5d736e15078449992b044e807ce2a138e6cf289a1e59e9
   YuE2-Vae model.safetensors  807ce9d5149fa27c5ad3e6582058469852e908f6c5acc8c8aa338e7ab7751346
 
-Upstream runtime (identical in all five runs)
+Upstream runtime (identical in all runs)
   runtime_sha256              17963197ec6c7a87f7519cda132ad70c9843acecf65eeb0d58e41506a744b3ed
 ```
 
@@ -610,21 +855,32 @@ Upstream runtime (identical in all five runs)
 ```json
 {
   "request": {"seed": 831001, "cfg_scale": 1.5, "cot": "full", "ode_steps": 32},
-  "rng": {"cuda": "CUDA device generator", "mps": "CPU generator", "same_seed_same_stream": false},
+  "rng": {"cuda": "CUDA device generator", "mps": "CPU generator", "nar_noise": "CPU generator on all platforms", "same_seed_same_stream": false},
   "runs": [
-    {"id": "20260915-142716-Something_True_CFG15",             "platform": "cuda/L4",   "torch": "2.10.0+cu128", "dtype": "bfloat16", "key": "Fm", "bpm": 130, "e2e_s": 324.8,  "rtf": 1.14},
-    {"id": "20260915-173431-Something_True_CFG15_T214",        "platform": "cuda/L4",   "torch": "2.14.0+cu130", "dtype": "bfloat16", "key": "Fm", "bpm": 130, "e2e_s": 331.5,  "rtf": 1.16},
-    {"id": "20260916-001257-Something_True_CFG15_M1MAX",       "platform": "mps/M1Max", "torch": "2.14.0",       "dtype": "bfloat16", "key": "E",  "bpm": 126, "e2e_s": 1525.6, "rtf": 5.72},
-    {"id": "20260916-005839-Something_True_CFG15_M4MPRO",      "platform": "mps/M4Pro", "torch": "2.14.0",       "dtype": "bfloat16", "key": "E",  "bpm": 126, "e2e_s": 1231.4, "rtf": 4.61},
-    {"id": "20260916-012748-Something_True_CFG15_M4MPRO_FL32", "platform": "mps/M4Pro", "torch": "2.14.0",       "dtype": "float32",  "key": "E",  "bpm": 126, "e2e_s": 2036.1, "rtf": 7.11}
-  ]
+    {"id": "20260915-142716-Something_True_CFG15",             "platform": "cuda/L4",   "torch": "2.10.0+cu128", "dtype": "bfloat16", "key": "Fm", "bpm": 130, "abc_tokens": 3073, "semantic_tokens": 7123, "e2e_s": 324.8,  "rtf": 1.14},
+    {"id": "20260915-173431-Something_True_CFG15_T214",        "platform": "cuda/L4",   "torch": "2.14.0+cu130", "dtype": "bfloat16", "key": "Fm", "bpm": 130, "abc_tokens": 3073, "semantic_tokens": 7123, "e2e_s": 331.5,  "rtf": 1.16},
+    {"id": "20260915-151926-Something_True_CFG15_MB12G",       "platform": "cuda/L4",   "torch": "2.10.0+cu128", "dtype": "bfloat16", "quantization": "fp8", "key": "Fm", "bpm": 130, "abc_tokens": 3311, "semantic_tokens": 7846, "e2e_s": 1398.0},
+    {"id": "20260916-001257-Something_True_CFG15_M1MAX",       "platform": "mps/M1Max", "torch": "2.14.0",       "dtype": "bfloat16", "key": "E",  "bpm": 126, "abc_tokens": 2686, "semantic_tokens": 6665, "e2e_s": 1525.6, "rtf": 5.72},
+    {"id": "20260916-005839-Something_True_CFG15_M4MPRO",      "platform": "mps/M4Pro", "torch": "2.14.0",       "dtype": "bfloat16", "key": "E",  "bpm": 126, "abc_tokens": 3017, "semantic_tokens": 6677, "e2e_s": 1231.4, "rtf": 4.61},
+    {"id": "20260916-012748-Something_True_CFG15_M4MPRO_FL32", "platform": "mps/M4Pro", "torch": "2.14.0",       "dtype": "float32",  "key": "E",  "bpm": 126, "abc_tokens": 2839, "semantic_tokens": 7155, "e2e_s": 2036.1, "rtf": 7.11}
+  ],
+  "first_differing_abc_token": {
+    "L4_2.10 vs L4_2.14": null,
+    "L4_bf16 vs L4_fp8": 225,
+    "M1Max_bf16 vs M4Pro_bf16": 122,
+    "M4Pro_bf16 vs M4Pro_fp32": 122,
+    "M1Max_bf16 vs M4Pro_fp32": 313,
+    "L4 vs any MPS": 26
+  },
+  "audio_pcm_snr_db": {"L4_2.10 vs L4_2.14": 119, "L4_ODE32 vs L4_ODE48": 28}
 }
 ```
 
 ## Appendix C — raw data
 
-The five run directories (each containing `result.json`, `config.json`, `request.json`,
-`local_env.json`, `score.abc`, `semantic.npy`, `abc_tokens.npy`, `latent.npy`, `audio.flac`)
-are archived together with the other validation artifacts. Every number in this document is
-derived from those files; `result.json` additionally carries the per-stage timings and
-artifact hashes recorded by the app at generation time.
+The run directories (each containing `result.json`, `config.json`, `request.json`,
+`local_env.json`, `score.abc`, `semantic.npy`, `abc_tokens.npy`, `prefix.npy`, `latent.npy`,
+`audio.flac`) are archived together with the other validation artifacts. Every number in this
+document is derived from those files; `result.json` additionally carries the per-stage timings
+and artifact hashes recorded by the app at generation time. All artifact hashes were re-verified
+against the archive for this revision.

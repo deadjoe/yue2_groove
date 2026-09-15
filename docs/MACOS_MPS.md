@@ -7,7 +7,10 @@ dependency level. These notes record what was verified and how.
 > **Companion analysis:** [CROSS_PLATFORM.md](CROSS_PLATFORM.md) measures what differs between
 > CUDA and MPS for the same request. Note in particular that the sampler draws from a
 > platform-specific RNG device (CUDA generator on CUDA, CPU generator on MPS), so **the same
-> seed does not reproduce across platforms** — it does reproduce across Macs.
+> seed does not reproduce across platforms** — and not across Macs either: an M1 Max and an
+> M4 Pro on the same CPU stream agreed for 122 ABC tokens and then diverged, because any kernel
+> numeric difference eventually flips a sampled token. Same-machine reproducibility on MPS has
+> not been tested.
 
 ## Tested configuration
 
