@@ -26,8 +26,9 @@ single file that imports `yue2` (`yue2_groove/adapter.py`) is covered by contrac
 that fail loudly when an upstream release changes something the UI depends on.
 
 > **Platforms.** Developed and tested on macOS / Apple Silicon (MPS). Linux + NVIDIA CUDA
-> is the platform YuE2 itself supports and validates; this UI has not been exercised there
-> yet — it should work, and reports are welcome.
+> is validated end-to-end — generation through the UI, first pass on an NVIDIA L4. See
+> [docs/LINUX_CUDA.md](docs/LINUX_CUDA.md) for the measured VRAM budget, ODE-step cost and
+> FP8 findings.
 
 ## Screenshots
 
@@ -244,6 +245,8 @@ pip install "torch==2.14.0"                      # macOS only
 ```
 
 More on the Apple Silicon story, with measurements: [docs/MACOS_MPS.md](docs/MACOS_MPS.md).
+The Linux + NVIDIA story, with measured VRAM, memory budget and FP8 numbers:
+[docs/LINUX_CUDA.md](docs/LINUX_CUDA.md).
 
 ## Cover from audio (SheetSage2)
 
@@ -377,6 +380,7 @@ copy (see NOTICE).
 - `docs/COVER_EDIT.md` — 02 COVER / 03 EDIT manual, manual E2E checks C1/C2/E1/X.
 - `docs/GENERATION_CREATIVITY_KNOBS.md` — producer-facing GENERATE creativity guide (recipes + glossary).
 - `docs/EXCLUDE_INSTRUMENTAL_RESEARCH.md` — upstream research: no exclude API; instrumental workarounds.
+- `docs/LINUX_CUDA.md` — Linux + NVIDIA CUDA validation: measured VRAM budget and boundaries, ODE steps, FP8 cost.
 
 ## Credits and license
 
