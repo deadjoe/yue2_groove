@@ -1,7 +1,8 @@
 # YuE2 on Linux + NVIDIA CUDA — memory and performance validation
 
 **Date:** 2026-09-15 · **Status:** first end-to-end Linux/CUDA validation of this app
-**Companion doc:** [MACOS_MPS.md](MACOS_MPS.md) covers Apple Silicon; this one covers Linux + NVIDIA.
+**Companion docs:** [MACOS_MPS.md](MACOS_MPS.md) covers Apple Silicon;
+[CROSS_PLATFORM.md](CROSS_PLATFORM.md) compares the two platforms run-for-run (why the same seed differs).
 
 Upstream YuE2 documents a single validated platform: *Linux · Python 3.12 · NVIDIA GPU with BF16 support and 24 GB VRAM*. This report turns that guideline into measured numbers for this app: what actually runs, what it actually needs in VRAM, where the failure boundary is, and what the experimental FP8 mode does and costs.
 

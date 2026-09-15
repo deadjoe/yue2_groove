@@ -4,6 +4,11 @@ YuE2 officially validates Linux + NVIDIA (24 GB, bfloat16). It also runs on Appl
 through PyTorch's MPS backend — with one caveat that this project works around at the
 dependency level. These notes record what was verified and how.
 
+> **Companion analysis:** [CROSS_PLATFORM.md](CROSS_PLATFORM.md) measures what differs between
+> CUDA and MPS for the same request. Note in particular that the sampler draws from a
+> platform-specific RNG device (CUDA generator on CUDA, CPU generator on MPS), so **the same
+> seed does not reproduce across platforms** — it does reproduce across Macs.
+
 ## Tested configuration
 
 | | |

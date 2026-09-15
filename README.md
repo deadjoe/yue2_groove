@@ -247,6 +247,8 @@ pip install "torch==2.14.0"                      # macOS only
 More on the Apple Silicon story, with measurements: [docs/MACOS_MPS.md](docs/MACOS_MPS.md).
 The Linux + NVIDIA story, with measured VRAM, memory budget and FP8 numbers:
 [docs/LINUX_CUDA.md](docs/LINUX_CUDA.md).
+Why the same seed produces a different song on macOS than on CUDA — five controlled runs,
+two experiments, and the sampler-level cause: [docs/CROSS_PLATFORM.md](docs/CROSS_PLATFORM.md).
 
 ## Cover from audio (SheetSage2)
 
@@ -381,6 +383,7 @@ copy (see NOTICE).
 - `docs/GENERATION_CREATIVITY_KNOBS.md` — producer-facing GENERATE creativity guide (recipes + glossary).
 - `docs/EXCLUDE_INSTRUMENTAL_RESEARCH.md` — upstream research: no exclude API; instrumental workarounds.
 - `docs/LINUX_CUDA.md` — Linux + NVIDIA CUDA validation: measured VRAM budget and boundaries, ODE steps, FP8 cost.
+- `docs/CROSS_PLATFORM.md` — CUDA vs Apple MPS: why the same seed differs (sampler RNG device), what was ruled out, measured performance ratios.
 
 ## Credits and license
 
