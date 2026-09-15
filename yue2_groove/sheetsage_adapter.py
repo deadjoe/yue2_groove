@@ -97,7 +97,8 @@ def probe(python: str | None = None, *, timeout: float = 180) -> dict:
     interpreter = resolve_python(python)
     try:
         result = subprocess.run([interpreter, "-c", _python_fragment()],
-                                capture_output=True, text=True, timeout=timeout, check=False)
+                                capture_output=True, timeout=timeout, check=False,
+                                env=config.child_env(), **config.SUBPROCESS_TEXT)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise SheetsageFailed(f"Could not run the SheetSage2 python ({interpreter}): {exc}") from exc
     if result.returncode != 0:
@@ -258,7 +259,8 @@ class _Worker:
     def start(self, timeout: float = 900.0) -> dict:
         self.process = subprocess.Popen(
             self.cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, bufsize=1, start_new_session=(os.name == "posix"))
+            bufsize=1, start_new_session=(os.name == "posix"),
+            env=config.child_env(), **config.SUBPROCESS_TEXT)
         threading.Thread(target=self._pump, args=(self.process.stdout, self._lines),
                          daemon=True).start()
         threading.Thread(target=self._pump, args=(self.process.stderr, None),
@@ -528,8 +530,9 @@ def transcribe(audio_path, *, output_dir=None, task: str = "melody-full",
     output.parent.mkdir(parents=True, exist_ok=True)
     report(None, "Starting the SheetSage2 environment…")
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                               text=True, bufsize=1, stdin=subprocess.DEVNULL,
-                               start_new_session=(os.name == "posix"))
+                               bufsize=1, stdin=subprocess.DEVNULL,
+                               start_new_session=(os.name == "posix"),
+                               env=config.child_env(), **config.SUBPROCESS_TEXT)
     lines: queue.Queue[str | None] = queue.Queue()
     stderr_lines: list[str] = []
 

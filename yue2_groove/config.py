@@ -91,6 +91,26 @@ def load_env(path=None, environ=None) -> int:
             count += 1
     return count
 
+
+# Text-mode keyword arguments for every child process the app spawns; pair with
+# :func:`child_env`.  Without an explicit encoding, Python on Windows decodes a
+# pipe with the ANSI code page, which cannot hold most non-ASCII paths or ABC text.
+SUBPROCESS_TEXT = {"text": True, "encoding": "utf-8", "errors": "replace"}
+
+
+def child_env() -> dict[str, str]:
+    """Environment for child interpreters: the current one plus UTF-8 stdio.
+
+    The SheetSage2 driver and ``yue2 doctor`` print JSON with ``ensure_ascii=False``
+    (paths, warnings).  A child Python on Windows encodes stdout with the ANSI code
+    page unless told otherwise, so a path outside that page raises
+    ``UnicodeEncodeError`` in the child before a byte reaches us.  Pinning both ends
+    — the child here, the parent through :data:`SUBPROCESS_TEXT` — keeps the pipe
+    readable on every platform and under every locale.
+    """
+    return {**os.environ, "PYTHONIOENCODING": "utf-8"}
+
+
 HUB_MODEL = "m-a-p/YuE2-3B"
 HUB_VAE = "m-a-p/YuE2-Vae"
 HUB_VAE_LEGACY = "m-a-p/YuE2-Vae-legacy"

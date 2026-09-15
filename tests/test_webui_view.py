@@ -8,6 +8,7 @@ the fact that SONG actions reuse the existing handlers.
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
 
@@ -333,3 +334,15 @@ def test_song_action_wiring_matches_the_handlers() -> None:
     # BUILD COMPARISON must not hide SONG before the user can click the link
     view = next(c for c in demo.blocks.values() if getattr(c, "elem_id", None) == "bb-view")
     assert view not in events["song_compare"].outputs
+
+
+def test_backend_dropdown_offers_vllm_only_when_importable() -> None:
+    """vLLM is upstream's optional Linux/CUDA extra; a plain install (and every
+    macOS / Windows one) must not list a backend that ends in ImportError."""
+    assert webui.BACKEND_CHOICES[:2] == ["torch", "torch-eager"]
+    assert ("vllm" in webui.BACKEND_CHOICES) == (importlib.util.find_spec("vllm") is not None)
+    demo = webui.build_ui({"device": "cpu", "dtype": "float32", "model": "m-a-p/YuE2-3B",
+                           "vae": "standard", "tab": 0, "status": ""})
+    backend = next(c for c in demo.blocks.values()
+                   if isinstance(c, gr.Dropdown) and c.label == "BACKEND")
+    assert [value for _, value in backend.choices] == webui.BACKEND_CHOICES

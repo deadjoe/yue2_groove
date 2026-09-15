@@ -64,6 +64,7 @@ try:
 except ImportError:  # Windows (and any host without the module)
     fcntl = None
 import html
+import importlib.util
 import json
 import os
 import subprocess
@@ -94,6 +95,11 @@ DTYPE_CHOICES = [
     ("bfloat16 (checkpoint dtype; default on CUDA/MPS)", "bfloat16"),
     ("float32 (cast at load; slower, 2x memory)", "float32"),
 ]
+
+# vLLM is upstream's optional Linux/CUDA backend (``yue2-infer[fast]``).  Offer it
+# only when the package is importable, so the dropdown never promises a backend
+# that ends in ImportError at generate time (macOS, Windows, or a plain install).
+BACKEND_CHOICES = ["torch", "torch-eager"] + (["vllm"] if importlib.util.find_spec("vllm") else [])
 
 ABC_DEFAULTS = {"temperature": .7, "top_p": .9, "top_k": 30, "repetition_penalty": 1.005,
                 "penalty_window": 100, "min_tokens": 32, "max_tokens": 4096}
@@ -879,7 +885,8 @@ def run_doctor(model, vae_choice, vae_custom, revision, vae_revision, offline, v
     vae_path, _ = resolve_vae(vae_choice, vae_custom)
     cmd = adapter.doctor_command(model, vae_path, revision=revision, vae_revision=vae_revision,
                                  offline=bool(offline), verify=bool(verify))
-    res = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, check=False)
+    res = subprocess.run(cmd, capture_output=True, timeout=1800, check=False,
+                         env=config.child_env(), **config.SUBPROCESS_TEXT)
     return res.stdout.strip() or res.stderr.strip()
 
 
@@ -893,7 +900,8 @@ def make_comparison(paths_text, progress=gr.Progress()):
     outdir = RUNS / f"{time.strftime('%Y%m%d-%H%M%S')}-comparison"
     progress(0.2, desc="Building listening comparison…")
     cmd = [sys.executable, "-m", "yue2_groove.vendor.listen", *sources, "--output", str(outdir)]
-    res = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, check=False)
+    res = subprocess.run(cmd, capture_output=True, timeout=1800, check=False,
+                         env=config.child_env(), **config.SUBPROCESS_TEXT)
     if res.returncode not in (0, 1):
         raise gr.Error(f"Build failed: {res.stderr.strip()}")
     html_path = outdir / "index.html"
@@ -4062,8 +4070,7 @@ def build_ui(defaults):
                         revision = gr.Textbox(label="MODEL REVISION", max_lines=1)
                         vae_revision = gr.Textbox(label="VAE REVISION", max_lines=1)
                     offline = gr.Checkbox(value=False, label="OFFLINE")
-                    backend = gr.Dropdown(choices=["torch", "torch-eager", "vllm"], value="torch",
-                                          label="BACKEND")
+                    backend = gr.Dropdown(choices=BACKEND_CHOICES, value="torch", label="BACKEND")
                     quantization = gr.Dropdown(choices=["none", "fp8"], value="none",
                                                label="QUANTIZATION")
                     offload_ar = gr.Checkbox(value=False, label="OFFLOAD AR WEIGHTS")

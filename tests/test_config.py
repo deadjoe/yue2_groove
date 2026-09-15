@@ -1,6 +1,7 @@
-"""``yue2_groove.config.load_env``: the .env loader that ``main()`` runs."""
+"""``yue2_groove.config``: the .env loader that ``main()`` runs, and the child-process env."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from yue2_groove import config
@@ -50,3 +51,13 @@ def test_load_env_default_path_is_the_repo_root(tmp_path: Path, monkeypatch) -> 
     environ: dict[str, str] = {}
     assert config.load_env(environ=environ) == 1
     assert environ["YUE2_GROOVE_TEST_DEFAULT"] == "yes"
+
+
+def test_child_env_pins_utf8_stdio_without_touching_the_parent(monkeypatch) -> None:
+    monkeypatch.setenv("PYTHONIOENCODING", "ascii")
+    monkeypatch.setenv("YUE2_GROOVE_TEST_MARKER", "kept")
+    env = config.child_env()
+    assert env["PYTHONIOENCODING"] == "utf-8"
+    assert env["YUE2_GROOVE_TEST_MARKER"] == "kept"
+    assert os.environ["PYTHONIOENCODING"] == "ascii"
+    assert config.SUBPROCESS_TEXT == {"text": True, "encoding": "utf-8", "errors": "replace"}

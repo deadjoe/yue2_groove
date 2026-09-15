@@ -551,3 +551,76 @@ def test_reaper_never_stops_a_busy_worker(monkeypatch, tmp_path: Path) -> None:
         time.sleep(0.01)
         assert adapter._reap_idle_worker() is False
     assert adapter.worker_status() is not None
+
+
+# ── UTF-8 pipe contract (Windows ANSI code page regression) ──────────────
+
+UNICODE_STUB = """
+    import json, pathlib, sys
+    out = pathlib.Path(sys.argv[1]); out.mkdir(parents=True, exist_ok=True)
+    # Non-ASCII on the pipe, like the real driver's ensure_ascii=False events.
+    print("@@PROGRESS " + json.dumps({"done": 1, "total": 2, "note": "谱面 ♪"},
+                                     ensure_ascii=False), flush=True)
+    (out / "result.json").write_text(json.dumps({
+        "status": "complete", "abc": "X:1", "warnings": ["stdout=" + sys.stdout.encoding],
+        "abc_error": None, "melody_only": False, "score_path": str(out / "score.abc")},
+        ensure_ascii=False), encoding="utf-8")
+    print("完成", flush=True)
+"""
+
+
+def test_child_stdout_is_utf8_even_under_an_ascii_locale(monkeypatch, tmp_path: Path) -> None:
+    """A parent whose locale cannot encode non-ASCII (Windows cp1252 in miniature)
+    must still read the driver: the child is pinned to UTF-8, and so is our decoder."""
+    monkeypatch.setenv("PYTHONIOENCODING", "ascii")   # inherited by the child unless overridden
+    audio = tmp_path / "参考.wav"
+    audio.write_bytes(b"RIFF")
+    patch_command(monkeypatch, write_stub(tmp_path, UNICODE_STUB), {})
+    seen: list[tuple] = []
+
+    record = adapter.transcribe(audio, output_dir=tmp_path / "输出",
+                                progress=lambda value, text: seen.append((value, text)))
+
+    assert record["abc"] == "X:1"
+    assert record["warnings"] == ["stdout=utf-8"]
+    assert [v for v, _ in seen if v is not None] == [1 / 2]
+
+
+def test_resident_worker_pipe_is_utf8_under_an_ascii_locale(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("PYTHONIOENCODING", "ascii")
+    # The ready line carries a raw non-ASCII model path (ensure_ascii=False, like the
+    # real driver); a child left on an ASCII locale dies right there.
+    ready = SERVE_STUB.replace(
+        'json.dumps({"model": "stub", "device": "cpu", "dtype": "fp32"})',
+        'json.dumps({"model": "模型/stub", "device": "cpu", "dtype": "fp32"}, ensure_ascii=False)')
+    assert ready != SERVE_STUB
+    enable_warm(monkeypatch, tmp_path, ready)
+    audio = tmp_path / "ref.wav"
+    audio.write_bytes(b"RIFF")
+    record = adapter.transcribe(audio, output_dir=tmp_path / "输出")
+    assert record["abc"] == "X:1" and adapter.worker_status() is not None
+
+
+def test_probe_pins_the_child_pipe_to_utf8(monkeypatch, tmp_path: Path) -> None:
+    fake_python = tmp_path / "python"
+    fake_python.write_text("#!/bin/sh\n", encoding="utf-8")
+    fake_python.chmod(fake_python.stat().st_mode | stat.S_IXUSR)
+    payload = {"python": "3.11.9", "executable": str(fake_python),
+               "packages": {"torch": True, "transformers": True, "huggingface-hub": True},
+               "versions": {"torch": "2.8.0", "transformers": "4.45.2", "huggingface-hub": "0.36.0"}}
+
+    class Completed:
+        returncode = 0
+        stdout = json.dumps(payload) + "\n"
+        stderr = ""
+
+    calls: dict = {}
+
+    def fake_run(*args, **kwargs):
+        calls.update(kwargs)
+        return Completed()
+    monkeypatch.setattr(adapter.subprocess, "run", fake_run)
+    monkeypatch.setenv("PYTHONIOENCODING", "ascii")
+    assert adapter.probe(str(fake_python))["ok"] is True
+    assert calls["encoding"] == "utf-8" and calls["errors"] == "replace" and calls["text"] is True
+    assert calls["env"]["PYTHONIOENCODING"] == "utf-8"
