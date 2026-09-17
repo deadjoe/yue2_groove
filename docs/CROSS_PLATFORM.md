@@ -1,6 +1,6 @@
 # Cross-platform analysis: NVIDIA CUDA vs Apple MPS
 
-**Date:** 2026-09-16 · **Revised:** 2026-09-16, after a re-analysis of the archived runs (token-level divergence positions, latent comparison, audio metrics recomputed, FP8 run added as a calibration point) · **Evidence:** 5 controlled generation runs across 3 machines + 1 CUDA FP8 run · **Status:** experimental findings, hypotheses labelled as such
+**Date:** 2026-09-16 · **Revised:** 2026-09-16 (re-analysis of the archived runs: token-level divergence positions, latent comparison, audio metrics recomputed, FP8 run added as a calibration point) · 2026-09-18 (follow-up experiments §9.1–9.3 and the blind listening test §9.5 completed) · **Evidence:** 5 controlled generation runs across 3 machines + 1 CUDA FP8 run, then 1 repeat run, 5 re-renders, 6 fixed-score takes and an 8-item blind listening test · **Status:** the divergence is explained; the quality question was tested on a fixed composition and no platform deficit was found (single listener)
 
 This document records a controlled investigation into a reported **quality difference between
 the same model on NVIDIA CUDA and on Apple Silicon (MPS)**: identical model, identical
@@ -16,8 +16,10 @@ two findings that change how the comparison must be interpreted:
 > one composition family (F minor, 130 BPM) and every MPS take in another (E major, 126 BPM),
 > because the two RNG streams part at the very first genuinely random token — the tempo. Any
 > "CUDA vs MPS" difference measured here is therefore also an "Fm/130 vs E/126" difference.
-> This experiment **cannot** attribute a quality difference to the platform; §9 gives the design
-> that can.
+> The original five-take experiment therefore **cannot** attribute a quality difference to the
+> platform. The design that can — the same composition performed on both platforms, rated
+> blind — was run afterwards (§9.1, §9.5): **no platform deficit was found**; the take-to-take
+> variation of the draw itself dominates everything the platform contributes.
 
 See also: [LINUX_CUDA.md](LINUX_CUDA.md) (memory/performance validation on CUDA; source of the
 FP8 run used here) and [MACOS_MPS.md](MACOS_MPS.md) (MPS support notes and the SDPA defect).
@@ -33,8 +35,8 @@ FP8 run used here) and [MACOS_MPS.md](MACOS_MPS.md) (MPS support notes and the S
 | 3 | **torch version is not a cause — and Exp A turned out to be a zero-perturbation test.** | Exp A: CUDA, torch 2.10 vs 2.14 → `abc_tokens.npy`, `semantic.npy` **and `latent.npy` byte-identical** (AR *and* NAR bit-exact). Only `audio.flac` differs: max \|Δ\| = 6.4 × 10⁻⁶ full-scale, SNR 119 dB — last-bit differences in the fp32 VAE convolutions, far below audibility. Exp A therefore says nothing about how robust sampling is to numeric perturbation. |
 | 4 | **Numeric precision changes the take but not the family — and the fp32 take was never evaluated by ear.** | Exp B: MPS, float32 instead of bfloat16 → diverges from the bf16 take at **ABC token 122**, stays in the E/126 family, **1.65× slower**. Its spectral balance is the closest of all Mac takes to the CUDA reference (§4.4). "No quality gain" is *not* established. |
 | 5 | **Any real numeric perturbation flips a sampled token within a few hundred ABC tokens, on both platforms.** MPS is not special in this respect; the same-seed takes are *not* reproducible across Macs. | First divergence (ABC token index): FP8 vs BF16 on the **same L4** = 225; M1 Max vs M4 Pro (both bf16) = 122; M4 bf16 vs fp32 = 122; M1 bf16 vs M4 fp32 = 313. Score hashes differ on every pair. |
-| 6 | **Whether MPS quality is systematically worse is *not* established — and cannot be from this design.** Platform is perfectly confounded with composition family (Fm/130 vs E/126). The measurable differences track the draw, not the platform. | The **FP8 CUDA take is nearly as bright as the Mac takes** (centroid 3 373 Hz vs 3 463–3 551) and the **M4 fp32 take is as dark as the CUDA reference** (3 010 vs 2 895) (§4.4). The "static harmony" is a three-chord I–♭VII–IV rock song with a one-chord riff intro — a stylistic outcome, not a defect (§4.1). |
-| 7 | The platforms also use **different attention/execution paths by design** — now bounded for the acoustic stage: re-rendering the CUDA tokens on the M4 Pro gives **SNR 110 dB for the VAE** and **28.6 dB for NAR + VAE**, the latter essentially the same as CUDA's own ODE 32 → 48 change (28.0 dB), with the spectrum unchanged (§9.3). The AR stage remains unquantified (§9.4). | CUDA: `execution: cuda_graph`, `attention: flash`, both CFG branches in one batch. MPS: `execution: eager`, `attention: sdpa`, `repeat_interleave` K/V expansion, CFG branches as two batch-1 forwards. |
+| 6 | **The five-take comparison cannot establish whether MPS quality is worse** — platform is perfectly confounded with composition family (Fm/130 vs E/126), and the measurable differences track the draw, not the platform. **Tested afterwards on a fixed composition, blind: no platform deficit.** Five Mac performances of the CUDA reference's score were rated 5 / 4 / 3 / 2 / 2 against 3 for the CUDA performance (its two re-renders 4 / 4); the best-rated take was a Mac performance. | The **FP8 CUDA take is nearly as bright as the Mac takes** (centroid 3 373 Hz vs 3 463–3 551) and the **M4 fp32 take is as dark as the CUDA reference** (3 010 vs 2 895) (§4.4). The "static harmony" is a three-chord I–♭VII–IV rock song with a one-chord riff intro — a stylistic outcome, not a defect (§4.1). Blind ratings and the 1-point noise floor: §9.5. |
+| 7 | The platforms also use **different attention/execution paths by design** — now bounded for the acoustic stage: re-rendering the CUDA tokens on the M4 Pro gives **SNR 110 dB for the VAE** and **28.6 dB for NAR + VAE**, the latter essentially the same as CUDA's own ODE 32 → 48 change (28.0 dB), with the spectrum unchanged (§9.3); blind, the Mac render of the same performance was indistinguishable from the CUDA render (§9.5). The AR stage remains numerically unquantified (§9.4), but its output was rated blind without a platform deficit. | CUDA: `execution: cuda_graph`, `attention: flash`, both CFG branches in one batch. MPS: `execution: eager`, `attention: sdpa`, `repeat_interleave` K/V expansion, CFG branches as two batch-1 forwards. |
 
 **Practical consequences**
 
@@ -47,10 +49,11 @@ FP8 run used here) and [MACOS_MPS.md](MACOS_MPS.md) (MPS support notes and the S
 - torch version alignment is **tested and has no effect** (bit-exact AR/NAR). float32 on MPS
   **changes the take** (like any perturbation) and was **not evaluated by ear**; there is no
   evidence here that it is a quality mode, and it costs 1.65×.
-- To decide whether MPS *systematically* produces worse music, either hold the composition
-  fixed across platforms (§9.1, cheap and direct) or average over many seeds per platform under
-  blind listening (§9.5, expensive). More takes of *this* seed will not do it — they stay in
-  their platform's family.
+- Whether MPS *systematically* produces worse music was tested by holding the composition
+  fixed (§9.1) and rating blind (§9.5): **no deficit found** — the Mac performances span the
+  whole rating scale around the CUDA one, and the Mac render of the CUDA performance is
+  indistinguishable from the CUDA render. What remains open is only a distribution-level
+  comparison (the CUDA side has one performance) and the numeric gap itself (§9.4).
 
 ---
 
@@ -66,7 +69,9 @@ other*, which motivated a controlled comparison rather than a "one bad roll of t
 explanation. The investigation found that the platform difference has a code-level cause
 (§6.1). A re-analysis of the archived runs then showed that the Macs' similarity is a shared
 *prefix* (the two Mac takes part at ABC token 122), and that the listening comparison is
-confounded: one composition family per platform (§4.1, §5, §8).
+confounded: one composition family per platform (§4.1, §5, §8). The follow-up that removes the
+confound — the CUDA composition performed five times on the Mac and rated blind alongside the
+CUDA original and its Mac re-render — found no platform deficit (§9.1, §9.5).
 
 ## 2. Method
 
@@ -125,7 +130,8 @@ draws on the two platforms no matter what else is configured.
 - **Integrity** — SHA-256 of every artifact (`result.json` records them; all re-verified
   against the archived files for this revision).
 - **Listening** — one experienced listener (the author), non-blind, comparing takes on the same
-  playback setup.
+  playback setup (§4.7). The follow-up in §9.5 is blind: takes served under random codes with
+  every provenance field scrubbed, the key opened only after rating.
 
 ---
 
@@ -373,8 +379,11 @@ rendering signature. The same holds
 for dynamics: the M4 Pro bf16 take reproduces the reference's quiet intro / quiet outro
 architecture almost exactly (P10–P95 12.3 vs 14.1 dB), while the M1 Max and M4 fp32 takes are
 flat (6.0 / 4.2 dB). Note that the listener ranked M4 bf16 *with* M1 Max, not with the
-reference — the listening verdict is not tracking macro-dynamics or harmonic structure, which
-points at the semantic/acoustic layer (vocal performance, timbre) rather than the score.
+reference — so the non-blind verdict was not tracking macro-dynamics or harmonic structure
+either, which pointed at the performance and rendering layers rather than the score. The
+follow-ups then cleared both layers of a platform effect (§9.3, §9.5), leaving the draw
+itself — which composition and which performance the RNG produced — as the only variable
+that the verdict can have been responding to.
 
 ### 4.5 Performance
 
@@ -441,7 +450,8 @@ indistinguishable from "this listener prefers the Fm/130 realisation of this son
 verdict "the two Macs sound alike" is expected from their shared 122-token prefix regardless of
 platform. The only measurable difference that lines up with the notes on *vocals* is the
 vocal-melody repetition in §4.1 — and it, too, is inherited by all three MPS takes from the same
-prefix. The experiment that would separate platform from family is §9.1.
+prefix. The experiment that separates platform from family is §9.1; its blind ratings are in
+§9.5, and they do not reproduce a Mac deficit once the composition is held fixed.
 
 ---
 
@@ -513,9 +523,12 @@ MPS. Token-level divergence is therefore not evidence of an MPS-specific defect.
 - **Explained:** why the Mac takes resemble each other — a shared prefix on a shared RNG stream,
   not small numerics. Numerics on MPS are large enough to flip a token within ~120 draws, as
   FP8 is on CUDA within ~225.
-- **Open:** whether MPS draws are *worse on average*. This design cannot answer it: platform and
-  family are confounded (§8). The numerical path differences in §6.2–6.3 may or may not
-  contribute; nothing here measures them (§9.3–9.4).
+- **Answered afterwards, as far as one listener can answer it:** whether MPS draws are *worse
+  on average*. This five-take design cannot answer it (platform and family are confounded, §8);
+  the fixed-composition blind test can, and found no deficit (§9.1, §9.5). The numerical path
+  differences in §6.2–6.3 are bounded for the acoustic stage (§9.3) and remain unmeasured for
+  the AR stage (§9.4) — but their perceptual effect, if any, is below this listener's 1-point
+  noise floor.
 
 ---
 
@@ -620,7 +633,11 @@ for completeness.
 - **The VAE** — cross-platform decode of identical latents differs at −110 dB (§9.3).
 - **The NAR as a large effect** — cross-platform synthesis from identical tokens and noise
   differs by the same amount as CUDA's own ODE 32 → 48 change (§9.3); anything beyond
-  "subtle" is excluded.
+  "subtle" is excluded — and blind, the Mac render was indistinguishable from the CUDA render
+  (§9.5).
+- **A platform deficit in the semantic stage large enough to hear** — five Mac performances of
+  the CUDA composition were rated across the whole scale around the CUDA performance, best take
+  included (§9.5). A deficit smaller than one rating point on a 5-point scale is not excluded.
 
 ---
 
@@ -644,6 +661,10 @@ for completeness.
   bf16.
 - If you want to compare platforms *like for like*, fix the score (§9.1) — a same-seed
   comparison compares two families, not one song rendered twice.
+- **A Mac take is not a worse take.** With the composition fixed, Mac performances were rated
+  across the whole scale around the CUDA one, and the Mac rendering of a CUDA performance was
+  indistinguishable from the CUDA rendering (§9.5). If a Mac take disappoints, re-roll the seed;
+  do not switch platforms expecting a systematic gain.
 
 ### For the project
 
@@ -672,47 +693,92 @@ for completeness.
    can separate "MPS" from "the E/126 realisation of this song". More takes of this seed would
    not help (they stay in their family); different seeds would, but only in aggregate, with
    enough of them to average over families — fixing the score (§9.1) removes the confound
-   outright.
+   outright, and that is the follow-up that was run (§9.1, §9.5). This limitation applies to
+   the five-take comparison in §4, not to the fixed-score result.
 2. **The three MPS takes are not independent samples.** They share a 122–313-token ABC prefix
    (header, tempo, key, intro riff) on one RNG stream. After the prefix they are independent
    continuations, but of the same family.
-3. **One listener, not blind, and the fp32 take was not listened to.** The quality ranking is
-   one experienced listener's judgement made knowing which take came from where; the wider
-   impression from routine Mac use was not recorded under controlled conditions.
+3. **The §4.7 ranking is one listener, not blind, and the fp32 take was not listened to.** It
+   was made knowing which take came from where; the wider impression from routine Mac use was
+   not recorded under controlled conditions. The §9.5 test is blind but still one listener in
+   one session, with a measured repeatability of ±1 point on a 5-point scale (identical audio
+   rated 3 and 4); it can rule out a large platform deficit, not a small one. The fp32 take
+   belongs to the E/126 family and was not part of the fixed-score bundle.
 4. **Output-level, not op-level.** No per-token logit comparison was performed, so §6.2–6.3
-   remain candidates rather than a measured mechanism for any residual quality effect.
-5. **Exp A is a null test of numeric robustness.** It shows torch 2.10 and 2.14 are bit-exact
+   remain candidates rather than a measured mechanism for any residual numeric effect — a
+   question that is now academic for quality (§9.5) but still open as a measurement (§9.4).
+5. **One CUDA performance against five Mac performances.** The fixed-score test has a single
+   CUDA-sampled performance (the reference, rated once directly and twice through its
+   re-renders) against five Mac-sampled ones, so it compares a point to a distribution, not two
+   distributions. Five CUDA seeds on the same score (§9.1) would close that; the present result
+   already fails to show any deficit direction.
+6. **Exp A is a null test of numeric robustness.** It shows torch 2.10 and 2.14 are bit-exact
    on this GPU, not that sampling tolerates perturbation; the FP8 run is the only CUDA
    perturbation data point, and it is a single sample of a heavy-tailed quantity (first flip
    index).
-6. **Same-machine reproducibility on MPS was verified once, on one machine.** A repeat of the
+7. **Same-machine reproducibility on MPS was verified once, on one machine.** A repeat of the
    fixed request on the M4 Pro reproduced every artifact byte for byte (§9.2). The M1 Max has
    not been repeated, and other torch builds are untested.
-7. **Two Apple GPUs, one macOS version, one torch build on the Mac side.** macOS 26.6.2 and
+8. **Two Apple GPUs, one macOS version, one torch build on the Mac side.** macOS 26.6.2 and
    torch 2.14.0 throughout; other combinations are untested.
-8. **Memory numbers** come from periodic sampling (5 s on CUDA, 20 s on the Macs), so brief
+9. **Memory numbers** come from periodic sampling (5 s on CUDA, 20 s on the Macs), so brief
    peaks may be missed; treat them as working-set figures, not exact maxima.
-9. **The CUDA-vs-CPU random-stream difference is inferred** from the code path, from a
+10. **The CUDA-vs-CPU random-stream difference is inferred** from the code path, from a
    locally measured CPU-vs-MPS generator difference, and from documented PyTorch behaviour
    (device-specific generator algorithms); it is corroborated by the divergence at token 27.
    No CUDA-device RNG measurement was taken.
-10. **Not tested:** macOS with torch 2.10 + the documented zero-mask workaround; MPS attention
+11. **Not tested:** macOS with torch 2.10 + the documented zero-mask workaround; MPS attention
     pinned to the math backend; any patch-level intervention.
 
 ---
 
-## 9. Follow-up experiments (recommended, in order of value)
+## 9. Follow-up experiments (in order of value — 9.1, 9.2, 9.3 and 9.5 have been run)
 
-### 9.1 Fixed-score comparison — the design that removes the confound
+### 9.1 Fixed-score comparison — the design that removes the confound → **done on the Mac side**
 
 `request.abc` bypasses the ABC sampling stage entirely (`yue2/pipeline.py`, "Using provided
-score"; the UI exposes it as the optional ABC input in `01 // GENERATE` and via `03 // EDIT`).
-Feed the **reference CUDA `score.abc`** as the exact score on both platforms and generate with
-several seeds each (3–5 per platform; short songs keep the Mac cost manageable). Composition,
-key, tempo, progression and melody are then identical everywhere; only the performance
-(semantic stage) and the rendering (NAR/VAE) are drawn — which is exactly the layer the
-listening notes ("vocals, instruments, arrangement") point at. Listen blind (§9.5). This is
-the experiment that can support or refute "MPS is systematically worse".
+score"; the UI exposes it as the optional ABC input in `01 // GENERATE`, via `03 // EDIT`, and
+as `abc_path` in `07 // BATCH`). Feed the **reference CUDA `score.abc`** as the exact score and
+generate with several seeds: composition, key, tempo, progression and melody are then identical
+everywhere; only the performance (semantic stage) and the rendering (NAR/VAE) are drawn — which
+is exactly the layer the listening notes ("vocals, instruments, arrangement") point at.
+
+**Run (M4 Pro, `07 // BATCH`, batch `20260916-045609-batch-fixedabc`, settings identical to
+Control 2).** Six rows:
+
+- *Validation row* — Control 2's own `score.abc` with seed 831001. Its semantic prefix
+  re-tokenised to Control 2's exactly (3 017 ABC ids, 3 903-token prefix), and the run reproduced
+  Control 2 **byte for byte** (`abc_tokens.npy`, `prefix.npy`, `semantic.npy`, `latent.npy`,
+  `audio.flac`), with the ABC stage skipped (`external_prefix_tokens: 3017`, 0 s). The
+  fixed-score path is therefore equivalent to the generated path.
+- *Five takes* — the reference's `score.abc` with seeds 831001–831005. Every one carries the
+  reference's exact 3 959-token semantic prefix (`prefix.npy` = `41941da1…`); each is a new
+  performance draw (first differing semantic token 0–2 against the reference).
+
+| Take | semantic tokens | unique | entropy | Duration | RMS (mono) | Crest | Centroid | > 8 kHz | Bass 60–150 Hz | 3-s RMS σ | P10–P95 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| A · CUDA reference (CUDA performance, CUDA render) | 7 123 | 4 682 | 11.91 | 284.9 s | 0.155 | 16.2 dB | 2 895 Hz | 10.4 % | 46.6 % | 5.5 dB | 14.1 dB |
+| B · Mac re-render of A (§9.3) | 7 123 | 4 682 | 11.91 | 284.9 s | 0.155 | 16.2 dB | 2 894 Hz | 10.4 % | 46.6 % | 5.5 dB | 14.1 dB |
+| M · s831001 | 7 139 | 4 868 | 11.99 | 285.6 s | 0.163 | 15.8 dB | 3 956 Hz | 17.4 % | 40.0 % | 3.2 dB | 8.2 dB |
+| M · s831002 | 7 157 | 4 824 | 11.98 | 286.3 s | 0.206 | 13.7 dB | 3 347 Hz | 14.0 % | 41.3 % | 3.6 dB | 8.4 dB |
+| M · s831003 | 7 141 | 4 753 | 11.95 | 285.6 s | 0.128 | 17.9 dB | 3 576 Hz | 14.7 % | 42.8 % | 4.0 dB | 10.9 dB |
+| M · s831004 | 7 108 | 4 762 | 11.96 | 284.3 s | 0.149 | 16.5 dB | 3 369 Hz | 12.4 % | 45.4 % | 3.2 dB | 5.1 dB |
+| M · s831005 | 7 131 | 4 605 | 11.87 | 285.2 s | 0.194 | 14.2 dB | 3 032 Hz | 11.2 % | 55.5 % | 6.4 dB | 17.0 dB |
+
+Estimators as in §2.3. Semantic timings were 594–600 s per take (≈ 12 tok/s) and NAR 629–633 s.
+
+**Reading.** Token-level, the Mac performances are the reference's equals (length, diversity,
+entropy; no truncation). Five of five are brighter than A — but A is the darkest take in the
+whole pool of this document (the FP8 CUDA take sits at 3 373 Hz, inside the Mac range), and
+under the null hypothesis that A and the five Mac takes are exchangeable, A being the darkest
+has probability 1/6. Loudness and dynamics vary widely between Mac performances (RMS 0.128 to
+0.206, P10–P95 5 to 17 dB): the semantic stage decides how dense the mix is, and it decides it
+differently every draw. None of this is a quality judgement; that is §9.5.
+
+**Not run:** CUDA-side seeds on the same score (needs a CUDA machine again). The CUDA side of
+the comparison is therefore one performance. Note for a future CUDA session: seed 831001 with
+the reference score should reproduce the reference `semantic.npy` (`e8a09373…`) exactly — same
+prefix, same RNG stream, same kernels — which is the CUDA-side equivalent of the validation row.
 
 *Reproduction note.* An exact score must reach the tokenizer **byte for byte**: `score.abc`
 ends with a newline and that newline is part of the last ABC token (7360 in the reference
@@ -814,21 +880,19 @@ the L4 with the CUDA 32-step render as baseline, so the two are not the same yar
 are one-variable changes against a same-machine or same-GPU baseline, and the ordering below
 28 dB is unambiguous: 8 steps moved further than 16, which moved further than 48).
 
-**Listening (single listener, not blind, one pair).** Comparing the reference against the
-NAR + VAE re-render — identical composition, identical performance tokens, identical noise —
-the listener preferred the **Mac render**. The direction should not be over-read (one pair,
-listener aware of the provenance), but the sign is decisive for the open question: the same
-listener who rated the Mac takes "clearly worse" (§4.7) does not find the Mac *rendering* worse
-on identical music. Two cheap calibrations remain open: reference vs the VAE-only render
-(indistinguishable by construction at 110 dB — a check on preference noise), and the reverse
-direction (Mac tokens re-rendered on CUDA) once a CUDA machine is available again.
+**Listening.** A first, non-blind A/B of the reference against the NAR + VAE re-render —
+identical composition, identical performance tokens, identical noise — came out in favour of
+the **Mac render**. The blind test in §9.5 then rated the reference 3, its Mac re-render 4 and
+its VAE-only re-decode (identical audio to within 110 dB) also 4: the "preference" is the same
+size as the listener's own repeat noise, so the honest statement is that **the Mac rendering is
+indistinguishable from the CUDA rendering at this listener's resolution** — not better, and
+certainly not worse. The reverse direction (Mac tokens re-rendered on CUDA) remains untested
+and would need a CUDA machine.
 
-Consequence for the open question: whatever makes a Mac take sound "clearly worse" is not
-rendering. It is either the composition family (§8) or the semantic stage — §9.1 and §9.4.
-The cheapest next step needs no CUDA machine: generate several seeds on the Mac with the
-reference `score.abc` fixed (§9.1) and compare them with the reference and its Mac re-render.
+Consequence: whatever made the E/126 Mac takes sound "clearly worse" is not rendering. §9.1
+and §9.5 then tested the remaining candidate, the semantic stage, on a fixed composition.
 
-### 9.4 Teacher-forced logit comparison — quantifies the numeric gap without sampling
+### 9.4 Teacher-forced logit comparison — quantifies the numeric gap without sampling (open; no longer a quality question)
 
 Force the CUDA run's token sequence through the model on each platform via the same
 incremental `StaticKVCache` path the sampler uses (not a single prefill — the MPS decode kernel
@@ -836,15 +900,66 @@ differs from the prefill kernel), and record per-position top-k probabilities. R
 KL(p_CUDA ‖ p_MPS), argmax agreement and entropy difference **as a function of position**. A
 KL that is small and flat means the platforms differ only by chaotic amplification of
 negligible noise; a KL that grows with context length is the signature of an attention-
-precision effect and would be a mechanism worth fixing.
+precision effect and would be a mechanism worth fixing. After §9.5 this is a measurement of
+the numeric gap for its own sake — the perceptual question it was meant to serve is answered.
 
-### 9.5 Blind multi-seed listening
+### 9.5 Blind listening on the fixed score → **done: no platform deficit**
 
-Most efficient on the fixed score of §9.1: shuffle N ≥ 5 takes per platform, listen blind
-(ideally with a second listener), and compare the distributions of ratings. With free seeds the
-same design also works, but family-to-family variance adds to the noise, so it needs more takes
-per platform. Include the fp32 take. Either way, this — not a single seed — is the only design
-that can support "MPS quality is systematically worse".
+**Bundle.** Eight takes — the seven of §9.1 (A, the CUDA reference; B, its Mac NAR + VAE
+re-render; the five Mac performances) plus C, A's Mac VAE-only re-decode from §9.3, identical
+to A to within 110 dB and included as a decoy — were copied under random codes with every provenance field scrubbed
+(`device`, timings, `rerender` blocks, the ABC text, run ids) and served through the app's own
+listening page (`yue2_groove.vendor.listen`). The code → source key was kept on another
+machine and opened only after the ratings were handed in. One listener (the author), one
+session, repeated listening, one overall rating per take on a 1–5 scale. The composition is
+identical in every case, so the rating can only respond to performance and rendering.
+
+| Code | Rating | Identity |
+|---|---|---|
+| T70 | **5** | M · Mac performance, seed 831003 |
+| T25 | 4 | **C** · VAE-only re-decode of A (identical audio, decoy) |
+| T66 | 4 | **B** · Mac NAR + VAE re-render of A (CUDA performance) |
+| T81 | 4 | M · Mac performance, seed 831005 |
+| T78 | 3 | **A** · CUDA reference (CUDA performance, CUDA render) |
+| T98 | 3 | M · Mac performance, seed 831004 |
+| T60 | 2 | M · Mac performance, seed 831002 |
+| T87 | 2 | M · Mac performance, seed 831001 |
+
+**Reading.**
+
+1. *Noise floor: 1 point.* A and C are the same audio to within 110 dB and were rated 3 and 4.
+   A one-point difference between any two takes in this table is therefore not a signal; two
+   points or more may be.
+2. *Rendering: indistinguishable.* The Mac render of the CUDA performance (B, 4) scored above
+   the CUDA render (A, 3) — by exactly the amount the identical decoy did (C, 4). The 28.6 dB
+   acoustic-stage difference of §9.3 is below this listener's repeatability; the non-blind
+   "preference" for the Mac render in the first A/B is not reproduced as a preference, only as
+   "no difference".
+3. *Performance: no platform deficit.* The five Mac-sampled performances of the CUDA
+   composition were rated 5, 4, 3, 2, 2; the single CUDA-sampled performance 3 (directly) and
+   4, 4 (through its re-renders). The best-rated take in the bundle is a Mac performance, the
+   two worst are Mac performances, and the CUDA performance sits in the middle of the Mac
+   spread. The means (Mac 3.2, CUDA 3.7) differ by less than the noise floor. With the
+   composition fixed, the platform explains nothing visible in these ratings; the draw does.
+4. *What the ratings track, tentatively (n = 5).* Ratings rise with dynamic range —
+   P10–P95 10.9 dB → 5, 17.0 → 4, 5.1 → 3, 8.4 → 2, 8.2 → 2 — and the loudest, most
+   compressed performance (s831002, crest 13.7 dB) and the brightest (s831001, 3 956 Hz) are the
+   two rated 2. The prompt asks for "quiet-loud dynamics"; the listener rewarded performances
+   that delivered it. Brightness on its own does not predict the rating (s831003 at 3 576 Hz
+   was the favourite).
+
+**Conclusion of the investigation.** Step by step: the same seed lands on different
+composition families by RNG design (§6.1); rendering the same performance on MPS is
+indistinguishable from CUDA (§9.3, §9.5); sampling the same composition on MPS produces
+performances rated across the whole scale around the CUDA one (§9.1, §9.5). What was heard
+as "clearly worse on the Mac" was the E/126 draw of this song — one composition the listener
+liked less — judged non-blind. Nothing measured or heard in this document points at the
+platform.
+
+**Limits.** One listener, one session, a 1-point noise floor, one CUDA performance against
+five Mac performances (§8.5); the test rules out a large deficit, not a small one. A second
+listener and five CUDA seeds on the same score would sharpen it; neither changes what the
+present ratings show.
 
 ### 9.6 Common-RNG run (demoted)
 
@@ -852,7 +967,8 @@ Forcing CPU sampling on CUDA aligns only the random stream, not the kernels. Giv
 non-zero perturbation flipped a token within a few hundred draws, a common-RNG CUDA run would
 almost certainly produce a *third* take, and whether it lands in Fm/130 or E/126 would depend
 on whether the first flip precedes token 27. It answers "are the logits bit-equal" (no), not
-"do the numerics matter for quality". §9.4 answers the latter directly.
+"do the numerics matter for quality" — §9.5 answered that by listening, and §9.4 would measure
+the gap itself.
 
 ---
 
@@ -895,6 +1011,17 @@ Verification checklist for a comparable run: same `weights.*.sha256`, same
 `local_env.json` recording the intended `device`/`dtype`. For cross-platform comparisons,
 also record the **sampling RNG device** (§6.1) — it is currently implicit in the device — and
 compare `abc_tokens.npy` before comparing anything downstream.
+
+**Fixed-score takes and the blind bundle (§9.1, §9.5).** In `07 // BATCH`, one JSONL row per
+seed with the same `style` / `lyrics` / `cot` / `cfg_scale` as the reference `request.json`
+and `"abc_path"` pointing (absolute path) at a byte-exact copy of the reference `score.abc`;
+include one row with the *Mac* control's own `score.abc` and its seed as a validation row — it
+must reproduce that control byte for byte. Check every take's `prefix.npy` hash against the
+reference before listening. The blind bundle was a one-off script: copy each take's
+`audio.flac` under a random code, write `request.json` / `config.json` / `result.json` with
+`device`, timings, `rerender` blocks, the ABC text and run ids removed, build the page with
+`python -m yue2_groove.vendor.listen <cases> --output <dir>`, and keep the code → source key
+elsewhere until the ratings are in.
 
 ---
 
@@ -973,7 +1100,21 @@ Upstream runtime (identical in all runs)
     "M1Max_bf16 vs M4Pro_fp32": 313,
     "L4 vs any MPS": 26
   },
-  "audio_pcm_snr_db": {"L4_2.10 vs L4_2.14": 119, "L4_ODE32 vs L4_ODE48": 28}
+  "audio_pcm_snr_db": {"L4_2.10 vs L4_2.14": 119, "L4_ODE32 vs L4_ODE48": 28},
+  "follow_up": {
+    "same_machine_repeat": {"id": "20260916-031521-Something_True_M4PRO_CFG15", "vs": "20260916-005839", "artifacts_identical": true},
+    "rerender_of_reference_on_M4Pro": {
+      "vae_only": {"id": "20260916-035647-rerender-vae-Something_True_CFG15", "snr_db_vs_cuda": 109.8},
+      "nar_vae_32": {"id": "20260916-040751-rerender-nar-Something_True_CFG15", "snr_db_vs_cuda": 28.6, "latent_rms_delta_over_std": 0.022},
+      "nar_vae_16": {"id": "20260917-162741-rerender-nar16-Something_True_CFG15", "snr_db_vs_mac32": 21.1},
+      "nar_vae_8":  {"id": "20260917-155954-rerender-nar8-Something_True_CFG15",  "snr_db_vs_mac32": 16.6}
+    },
+    "fixed_score_batch": {"id": "20260916-045609-batch-fixedabc", "score": "reference 20260915-142716 score.abc", "platform": "mps/M4Pro",
+                          "validation_row_reproduces_control2": true, "seeds": [831001, 831002, 831003, 831004, 831005]},
+    "blind_listening": {"listener": "author", "scale": "1-5 overall", "noise_floor_points": 1,
+                        "ratings": {"A_cuda_reference": 3, "B_mac_rerender_of_A": 4, "C_vae_only_redecode_of_A": 4,
+                                    "M_s831001": 2, "M_s831002": 2, "M_s831003": 5, "M_s831004": 3, "M_s831005": 4}}
+  }
 }
 ```
 
@@ -984,4 +1125,6 @@ The run directories (each containing `result.json`, `config.json`, `request.json
 `audio.flac`) are archived together with the other validation artifacts. Every number in this
 document is derived from those files; `result.json` additionally carries the per-stage timings
 and artifact hashes recorded by the app at generation time. All artifact hashes were re-verified
-against the archive for this revision.
+against the archive for this revision. The follow-up runs of §9 (the M4 Pro repeat, the
+re-renders, the fixed-score batch and the blind bundle with its key) live in the M4 Pro's run
+directory and are listed by id in Appendix B.

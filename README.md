@@ -258,7 +258,8 @@ More on the Apple Silicon story, with measurements: [docs/MACOS_MPS.md](docs/MAC
 The Linux + NVIDIA story, with measured VRAM, memory budget and FP8 numbers:
 [docs/LINUX_CUDA.md](docs/LINUX_CUDA.md).
 Why the same seed produces a different song on macOS than on CUDA — five controlled runs,
-two experiments, and the sampler-level cause: [docs/CROSS_PLATFORM.md](docs/CROSS_PLATFORM.md).
+two experiments, the sampler-level cause, and a blind listening test on a fixed composition
+that finds no platform deficit: [docs/CROSS_PLATFORM.md](docs/CROSS_PLATFORM.md).
 
 ## Cover from audio (SheetSage2)
 

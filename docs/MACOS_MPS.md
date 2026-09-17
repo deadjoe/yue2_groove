@@ -10,7 +10,10 @@ dependency level. These notes record what was verified and how.
 > seed does not reproduce across platforms** — and not across Macs either: an M1 Max and an
 > M4 Pro on the same CPU stream agreed for 122 ABC tokens and then diverged, because any kernel
 > numeric difference eventually flips a sampled token. On one Mac, however, a repeat run is
-> bit-exact end to end (verified on the M4 Pro, `audio.flac` included).
+> bit-exact end to end (verified on the M4 Pro, `audio.flac` included). Quality-wise, a blind
+> test on a fixed composition found no MPS deficit: Mac performances were rated across the whole
+> scale around the CUDA one, and the Mac rendering of a CUDA performance was indistinguishable
+> from the CUDA rendering (CROSS_PLATFORM.md §9.5).
 
 ## Tested configuration
 
