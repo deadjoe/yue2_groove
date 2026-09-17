@@ -8,9 +8,13 @@ half precision has to bypass that guard on purpose.  This script measures what i
   `--mode autocast`  fp32 weights, convolutions autocast to bf16/fp16
 
 Both decode the *same* latent (`--source/latent.npy`) with the same tiling as a run, and report
-SNR against the fp32 decode of that latent, plus the spectral side effects.  Numbers printed for
-`20260915-142716-Something_True_CFG15/latent.npy` on an M4 Pro (MPS, torch 2.14.0, standard
-`YuE2-Vae`, core 1024 / halo 16):
+SNR against the fp32 decode of that latent, plus the spectral side effects.  Every variant loads a
+**fresh VAE instance**: a half-precision run leaves state behind that shifts a later fp32-weight
+autocast run by ~2 dB (38.6 instead of 40.9 for bf16, 43.2 instead of 59.1 for fp16), so the
+measurement is only reproducible from a clean instance.
+
+Numbers printed for `20260915-142716-Something_True_CFG15/latent.npy` on an M4 Pro (MPS, torch
+2.14.0, standard `YuE2-Vae`, core 1024 / halo 16):
 
 | mode | bf16 | fp16 |
 |---|---|---|
@@ -76,25 +80,21 @@ def main(argv=None) -> int:
     device = torch.device(args.device)
     vae_dir = adapter.resolve_model(args.vae, local_files_only=True)
     z = torch.as_tensor(np.load(src / "latent.npy", allow_pickle=False), dtype=torch.float32).T.unsqueeze(0)
-    vae = YuE2VAE.from_pretrained(vae_dir, decoder_only=True, device=str(device), local_files_only=True)
-    original_decode, original_latent = vae.decode, vae._latent
 
-    def decode_tiled() -> np.ndarray:
+    def decode(vae: YuE2VAE) -> tuple[np.ndarray, float]:
+        t0 = time.perf_counter()
         with torch.inference_mode():
             audio = vae.decode_tiled(z, core_frames=args.core_frames, halo_frames=args.halo_frames,
                                      output_device="cpu")
         if device.type == "mps":
             torch.mps.synchronize()
-        return audio[0].float().clamp(-1, 1).T.contiguous().numpy()
+        return audio[0].float().clamp(-1, 1).T.contiguous().numpy(), time.perf_counter() - t0
 
-    def install(mode: str, dtype: torch.dtype) -> None:
-        """Patch the VAE for one variant.  Always from a clean fp32 baseline: `weights` halves the
-        decoder weights themselves and so must also drop the FP32 guard in `_latent`, while
-        `autocast` keeps the weights in fp32 and only casts the convolutions."""
-        vae._latent, vae.decode = original_latent, original_decode
-        vae.decoder.to(torch.float32)
-        if dtype == torch.float32:
-            return
+    def load(mode: str | None, dtype: torch.dtype) -> YuE2VAE:
+        """A fresh fp32 VAE with one measurement patch installed (None = untouched upstream path)."""
+        vae = YuE2VAE.from_pretrained(vae_dir, decoder_only=True, device=str(device), local_files_only=True)
+        if mode is None or dtype == torch.float32:
+            return vae
         if mode == "weights":
             def latent_nocheck(latent):
                 latent = torch.as_tensor(latent)
@@ -104,50 +104,46 @@ def main(argv=None) -> int:
                     raise ValueError("VAE latents contain non-finite values")
                 return latent
 
-            def decode(latent):
+            def decode_half(latent):
                 value = vae._latent(latent)
                 with torch.autocast(device_type=device.type, enabled=False):
                     return vae.decoder(value.to(device=device, dtype=dtype)).float()
 
-            vae._latent = latent_nocheck
+            vae._latent = latent_nocheck  # the guard the half-precision port has to drop
             vae.decoder.to(dtype)
         else:
-            def decode(latent):
+            def decode_half(latent):
                 # The fp32 cast must stay outside the autocast context, or autocast lowers it again.
                 value = vae._latent(latent).to(device=device, dtype=torch.float32)
                 with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
                     return vae.decoder(value).float()
+        vae.decode = decode_half
+        return vae
 
-        vae.decode = decode
-
-    install("fp32", torch.float32)
-    t0 = time.perf_counter()
-    ref = decode_tiled()
+    ref, ref_seconds = decode(load(None, torch.float32))
     centroid, above8k = spectral(ref)
-    print(f"[vae] fp32 reference decode: {time.perf_counter() - t0:.1f}s, "
-          f"centroid {centroid:.1f} Hz, >8k {above8k:.3f}%  ({src.name})", flush=True)
+    print(f"[vae] fp32 reference decode: {ref_seconds:.1f}s, centroid {centroid:.1f} Hz, "
+          f">8k {above8k:.3f}%  ({src.name})", flush=True)
 
     results = {}
     modes = ["weights", "autocast"] if args.mode == "both" else [args.mode]
     for mode in modes:
         for dtype in (torch.bfloat16, torch.float16):
-            install(mode, dtype)
-            t0 = time.perf_counter()
-            out = decode_tiled()
-            elapsed = time.perf_counter() - t0
+            out, elapsed = decode(load(mode, dtype))
             stats = compare(ref, out)
             results.setdefault(mode, {})[str(dtype)[6:]] = stats
-            print(f"[vae] {mode:8s} {str(dtype)[6:]:8s} weights+activations | "
-                  f"decode {elapsed:.1f}s | vs fp32: max|Δ|={stats['max_abs_delta']:.3e} "
-                  f"rmsΔ={stats['rms_delta']:.3e} SNR={stats['snr_db']:.1f} dB | "
-                  f"centroid {stats['centroid_hz']:.1f} Hz (Δ{stats['centroid_hz'] - centroid:+.1f}), "
-                  f">8k {stats['magnitude_above_8k_pct']:.3f}% | nonfinite={stats['nonfinite']}", flush=True)
+            print(f"[vae] {mode:8s} {str(dtype)[6:]:8s} | decode {elapsed:.1f}s | "
+                  f"vs fp32: max|Δ|={stats['max_abs_delta']:.3e} rmsΔ={stats['rms_delta']:.3e} "
+                  f"SNR={stats['snr_db']:.1f} dB | centroid {stats['centroid_hz']:.1f} Hz "
+                  f"(Δ{stats['centroid_hz'] - centroid:+.1f}), >8k "
+                  f"{stats['magnitude_above_8k_pct']:.3f}% | nonfinite={stats['nonfinite']}", flush=True)
 
     out_path = Path(args.out).expanduser().resolve()
     out_path.write_text(json.dumps({"source": str(src), "latent": "latent.npy", "vae": str(vae_dir),
                                     "device": str(device), "torch": torch.__version__,
                                     "core_frames": args.core_frames, "halo_frames": args.halo_frames,
-                                    "fp32_reference": {"centroid_hz": centroid, "magnitude_above_8k_pct": above8k},
+                                    "fp32_reference": {"centroid_hz": centroid, "magnitude_above_8k_pct": above8k,
+                                                       "seconds": ref_seconds},
                                     "variants": results}, indent=2) + "\n")
     print(f"[vae] wrote {out_path}", flush=True)
     return 0
