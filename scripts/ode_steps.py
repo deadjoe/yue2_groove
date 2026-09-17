@@ -41,7 +41,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from rerender import compare_audio, compare_latents, finalize, sha256  # noqa: E402
 
-from yue2_groove import adapter  # noqa: E402
+from yue2_groove import adapter, config  # noqa: E402
 
 
 def parse_args(argv=None):
@@ -52,8 +52,8 @@ def parse_args(argv=None):
     ap.add_argument("--device", default="mps")
     ap.add_argument("--dtype", default="bfloat16", choices=["bfloat16", "float32"])
     ap.add_argument("--runs", default=str(Path.home() / "github/deadjoe/yue2_groove/runs"))
-    ap.add_argument("--model", default="m-a-p/YuE2-3B")
-    ap.add_argument("--vae", default="m-a-p/YuE2-Vae")
+    ap.add_argument("--model", default=config.default_model(), help="local model directory or Hub id")
+    ap.add_argument("--vae", default=config.default_vae(), help="local decoder directory or Hub id")
     ap.add_argument("--bf16-latent", action="store_true",
                     help="also measure the baseline's 32-step latent rounded to bf16 before the VAE")
     return ap.parse_args(argv)
@@ -75,12 +75,17 @@ def main(argv=None) -> int:
     if base is None:
         print("[ode] no --baseline: comparisons are against the source render only")
 
+    model_dir = adapter.resolve_model(args.model, local_files_only=True)
+    vae_dir = adapter.resolve_model(args.vae, local_files_only=True)
+    if not any(model_dir.glob("*.safetensors")):
+        print(f"[ode] no safetensors in {model_dir} — pass --model/--vae (or set YUE2_GROOVE_MODEL / "
+              "YUE2_GROOVE_VAE) to a local model directory")
+        return 2
     pipe, dtype_loaded = adapter.load_pipeline(
-        adapter.resolve_model(args.model, local_files_only=True),
-        vae=adapter.resolve_model(args.vae, local_files_only=True),
-        device=args.device, dtype=args.dtype, backend="torch", quantization="none", offload_ar=False,
-        memory_budget_gib=float(cfg.get("memory_budget_gib", 24)), ode_steps=int(gen["ode_steps"]),
-        vae_core_frames=int(cfg["vae_core_frames"]), revision="", vae_revision="", local_files_only=True)
+        model_dir, vae=vae_dir, device=args.device, dtype=args.dtype, backend="torch",
+        quantization="none", offload_ar=False, memory_budget_gib=float(cfg.get("memory_budget_gib", 24)),
+        ode_steps=int(gen["ode_steps"]), vae_core_frames=int(cfg["vae_core_frames"]),
+        revision="", vae_revision="", local_files_only=True)
 
     # The weights must be the ones that produced the source run, or the render is not comparable.
     for name in ("mot", "vae"):

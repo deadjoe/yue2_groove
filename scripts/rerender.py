@@ -26,7 +26,7 @@ import numpy as np
 import soundfile as sf
 import torch
 
-from yue2_groove import adapter
+from yue2_groove import adapter, config
 
 
 def sha256(path: Path) -> str:
@@ -106,8 +106,8 @@ def main() -> int:
     ap.add_argument("--device", default="mps")
     ap.add_argument("--dtype", default="bfloat16", choices=["bfloat16", "float32"])
     ap.add_argument("--runs", default=str(Path.home() / "github/deadjoe/yue2_groove/runs"))
-    ap.add_argument("--model", default="m-a-p/YuE2-3B")
-    ap.add_argument("--vae", default="m-a-p/YuE2-Vae")
+    ap.add_argument("--model", default=config.default_model(), help="local model directory or Hub id")
+    ap.add_argument("--vae", default=config.default_vae(), help="local decoder directory or Hub id")
     ap.add_argument("--label", default="")
     args = ap.parse_args()
     if args.finalize:
