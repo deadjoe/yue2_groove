@@ -224,8 +224,8 @@ Same request, seed, and budget (24), changing only the ODE solver steps:
 - Listening impression (single listener, not blind): 48 steps was *slightly* better than 32 for a ~10 % total runtime cost — diminishing returns. The protocol default of 32 is a reasonable production setting; 48–64 is a "final render" choice.
 
 Below the default, measured on an M4 Pro by re-rendering this run's tokens with the same noise and
-comparing against that machine's own 32-step render (method and decoder-side numbers in
-[CROSS_PLATFORM.md](CROSS_PLATFORM.md) §9.3):
+comparing against that machine's own 32-step render (`scripts/ode_steps.py`; method and decoder-side
+numbers in [CROSS_PLATFORM.md](CROSS_PLATFORM.md) §9.3):
 
 | ODE steps | NAR | latent RMS Δ / std | latent corr | SNR vs that machine's 32-step render |
 |---|---|---|---|---|

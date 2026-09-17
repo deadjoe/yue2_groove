@@ -10,15 +10,16 @@ half precision has to bypass that guard on purpose.  This script measures what i
 Both decode the *same* latent (`--source/latent.npy`) with the same tiling as a run, and report
 SNR against the fp32 decode of that latent, plus the spectral side effects.  Every variant loads a
 **fresh VAE instance**: a half-precision run leaves state behind that shifts a later fp32-weight
-autocast run by ~2 dB (38.6 instead of 40.9 for bf16, 43.2 instead of 59.1 for fp16), so the
-measurement is only reproducible from a clean instance.
+autocast run by ~2 dB (38.6 instead of 40.9 for bf16, 43.2 instead of 59.1 for fp16), and re-typing
+weights that a previous half-precision pass already rounded reads fp16 as 43.4 dB instead of
+54.3 dB.  One instance per row is what makes the numbers reproducible.
 
 Numbers printed for `20260915-142716-Something_True_CFG15/latent.npy` on an M4 Pro (MPS, torch
 2.14.0, standard `YuE2-Vae`, core 1024 / halo 16):
 
 | mode | bf16 | fp16 |
 |---|---|---|
-| weights + activations | 35.3 dB | 43.4 dB |
+| weights + activations | 35.3 dB | 54.3 dB |
 | autocast (fp32 weights) | 40.9 dB | 59.1 dB |
 
 For scale: a different PyTorch build of the fp32 stack moves the same render 119 dB, a bf16

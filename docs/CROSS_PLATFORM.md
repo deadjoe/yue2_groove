@@ -775,7 +775,8 @@ against 2.3 % / 0.99973 for CUDA's own ODE 32 → 48 change.
   is the dominant contributor, not that the difference is exactly the NAR's.
 
 **Solver steps and decoder precision (M4 Pro, one change at a time).** Two follow-on
-measurements from the same harness — same tokens, same CPU-generated noise, seed 831001:
+measurements from the same harness — same tokens, same CPU-generated noise, seed 831001 — produced
+by `scripts/ode_steps.py` (steps) and `scripts/vae_decoder_precision.py` (decoder):
 
 | Change, against that machine's own 32-step render | Latent Δ / corr | vs the Mac 32-step render | vs the CUDA reference |
 |---|---|---|---|
@@ -787,13 +788,19 @@ Re-render runs `…155954-rerender-nar8-…` and `…162741-rerender-nar16-…` 
 and `latent.npy`); NAR time 164 s and 323 s against 629 s for 32 steps, i.e. linear in the step
 count. Decoder precision was measured separately, holding the latent fixed (the reference run's
 `latent.npy`, decoded by the standard fp32 VAE at core 1024 / halo 16; baseline = the fp32
-decode of that same latent):
+decode of that same latent), with `scripts/vae_decoder_precision.py`:
 
 | Decoder | SNR vs the fp32 decode of the same latent |
 |---|---|
-| fp16 weights + activations | 43.4 dB |
+| fp16 autocast, fp32 weights | 59.1 dB |
+| fp16 weights + activations | 54.3 dB |
 | bf16 autocast, fp32 weights | 40.9 dB |
 | bf16 weights + activations | 35.3 dB |
+
+Every row needs a **freshly loaded** VAE. A half-precision pass leaves the module in a state that
+shifts a later fp32-weight autocast run by ~2 dB (38.6 / 43.2 dB instead of 40.9 / 59.1), and
+re-typing weights that a previous pass already rounded to bf16 reads an fp16 decoder as 43.4 dB
+instead of 54.3 dB — the one number here that a one-pass measurement gets wrong.
 
 Three things follow. The **latent is not a precision lever**: the NAR output already carries bf16
 precision, so rounding it changes nothing — and the 133 dB residual is the PCM_24 container's own
