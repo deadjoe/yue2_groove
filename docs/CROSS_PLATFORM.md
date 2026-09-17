@@ -35,7 +35,7 @@ FP8 run used here) and [MACOS_MPS.md](MACOS_MPS.md) (MPS support notes and the S
 | 3 | **torch version is not a cause — and Exp A turned out to be a zero-perturbation test.** | Exp A: CUDA, torch 2.10 vs 2.14 → `abc_tokens.npy`, `semantic.npy` **and `latent.npy` byte-identical** (AR *and* NAR bit-exact). Only `audio.flac` differs: max \|Δ\| = 6.4 × 10⁻⁶ full-scale, SNR 119 dB — last-bit differences in the fp32 VAE convolutions, far below audibility. Exp A therefore says nothing about how robust sampling is to numeric perturbation. |
 | 4 | **Numeric precision changes the take but not the family — and the fp32 take was never evaluated by ear.** | Exp B: MPS, float32 instead of bfloat16 → diverges from the bf16 take at **ABC token 122**, stays in the E/126 family, **1.65× slower**. Its spectral balance is the closest of all Mac takes to the CUDA reference (§4.4). "No quality gain" is *not* established. |
 | 5 | **Any real numeric perturbation flips a sampled token within a few hundred ABC tokens, on both platforms.** MPS is not special in this respect; the same-seed takes are *not* reproducible across Macs. | First divergence (ABC token index): FP8 vs BF16 on the **same L4** = 225; M1 Max vs M4 Pro (both bf16) = 122; M4 bf16 vs fp32 = 122; M1 bf16 vs M4 fp32 = 313. Score hashes differ on every pair. |
-| 6 | **The five-take comparison cannot establish whether MPS quality is worse** — platform is perfectly confounded with composition family (Fm/130 vs E/126), and the measurable differences track the draw, not the platform. **Tested afterwards on a fixed composition, blind: no platform deficit.** Five Mac performances of the CUDA reference's score were rated 5 / 4 / 3 / 2 / 2 against 3 for the CUDA performance (its two re-renders 4 / 4); the best-rated take was a Mac performance. | The **FP8 CUDA take is nearly as bright as the Mac takes** (centroid 3 373 Hz vs 3 463–3 551) and the **M4 fp32 take is as dark as the CUDA reference** (3 010 vs 2 895) (§4.4). The "static harmony" is a three-chord I–♭VII–IV rock song with a one-chord riff intro — a stylistic outcome, not a defect (§4.1). Blind ratings and the 1-point noise floor: §9.5. |
+| 6 | **The five-take comparison cannot establish whether MPS quality is worse** — platform is perfectly confounded with composition family (Fm/130 vs E/126), and the measurable differences track the draw, not the platform. **Tested afterwards on a fixed composition, blind: no platform deficit.** Five Mac performances of the CUDA reference's score were rated 5 / 4 / 3 / 2 / 2 against 3 for the CUDA performance (its two re-renders 4 / 4); the best-rated take was a Mac performance. | The **FP8 CUDA take is nearly as bright as the Mac takes** (centroid 3 373 Hz vs 3 463–3 551) and the **M4 fp32 take is as dark as the CUDA reference** (3 010 vs 2 895) (§4.4); five CUDA performances of the fixed score span 2 895–4 298 Hz, two of them brighter than any Mac take (§9.1). The "static harmony" is a three-chord I–♭VII–IV rock song with a one-chord riff intro — a stylistic outcome, not a defect (§4.1). Blind ratings and the 1-point noise floor: §9.5. |
 | 7 | The platforms also use **different attention/execution paths by design** — now bounded for the acoustic stage: re-rendering the CUDA tokens on the M4 Pro gives **SNR 110 dB for the VAE** and **28.6 dB for NAR + VAE**, the latter essentially the same as CUDA's own ODE 32 → 48 change (28.0 dB), with the spectrum unchanged (§9.3); blind, the Mac render of the same performance was indistinguishable from the CUDA render (§9.5). The AR stage remains numerically unquantified (§9.4), but its output was rated blind without a platform deficit. | CUDA: `execution: cuda_graph`, `attention: flash`, both CFG branches in one batch. MPS: `execution: eager`, `attention: sdpa`, `repeat_interleave` K/V expansion, CFG branches as two batch-1 forwards. |
 
 **Practical consequences**
@@ -707,11 +707,12 @@ for completeness.
 4. **Output-level, not op-level.** No per-token logit comparison was performed, so §6.2–6.3
    remain candidates rather than a measured mechanism for any residual numeric effect — a
    question that is now academic for quality (§9.5) but still open as a measurement (§9.4).
-5. **One CUDA performance against five Mac performances.** The fixed-score test has a single
-   CUDA-sampled performance (the reference, rated once directly and twice through its
-   re-renders) against five Mac-sampled ones, so it compares a point to a distribution, not two
-   distributions. Five CUDA seeds on the same score (§9.1) would close that; the present result
-   already fails to show any deficit direction.
+5. **The blind ratings so far compare one CUDA performance against five Mac performances.**
+   The rated bundle has a single CUDA-sampled performance (the reference, rated once directly
+   and twice through its re-renders) against five Mac-sampled ones — a point against a
+   distribution. Five CUDA seeds on the same score now exist (§9.1) and are packed with the five
+   Mac takes as a second blind bundle, not yet rated; at the signal level the two sets are
+   indistinguishable (§9.1).
 6. **Exp A is a null test of numeric robustness.** It shows torch 2.10 and 2.14 are bit-exact
    on this GPU, not that sampling tolerates perturbation; the FP8 run is the only CUDA
    perturbation data point, and it is a single sample of a heavy-tailed quantity (first flip
@@ -734,7 +735,7 @@ for completeness.
 
 ## 9. Follow-up experiments (in order of value — 9.1, 9.2, 9.3 and 9.5 have been run)
 
-### 9.1 Fixed-score comparison — the design that removes the confound → **done on the Mac side**
+### 9.1 Fixed-score comparison — the design that removes the confound → **done on both sides**
 
 `request.abc` bypasses the ABC sampling stage entirely (`yue2/pipeline.py`, "Using provided
 score"; the UI exposes it as the optional ABC input in `01 // GENERATE`, via `03 // EDIT`, and
@@ -775,10 +776,26 @@ has probability 1/6. Loudness and dynamics vary widely between Mac performances 
 0.206, P10–P95 5 to 17 dB): the semantic stage decides how dense the mix is, and it decides it
 differently every draw. None of this is a quality judgement; that is §9.5.
 
-**Not run:** CUDA-side seeds on the same score (needs a CUDA machine again). The CUDA side of
-the comparison is therefore one performance. Note for a future CUDA session: seed 831001 with
-the reference score should reproduce the reference `semantic.npy` (`e8a09373…`) exactly — same
-prefix, same RNG stream, same kernels — which is the CUDA-side equivalent of the validation row.
+**CUDA side (L4, second session, 2026-09-17; runs `20260917-19…-E10-fixedscore-s831001…5`).**
+The same five seeds with the same exact score on an L4. Seed 831001 reproduced the reference
+`semantic.npy` / `latent.npy` / `audio.flac` **byte for byte** — the CUDA-side validation row
+(same prefix, same RNG stream, same kernels; ABC stage skipped). The other four are new CUDA
+performances of the composition:
+
+| Take | semantic tokens | unique | entropy | Duration | RMS (mono) | Crest | Centroid | > 8 kHz | Bass 60–150 Hz | 3-s RMS σ | P10–P95 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| CUDA · s831001 (= A) | 7 123 | 4 682 | 11.91 | 284.9 s | 0.155 | 16.2 dB | 2 895 Hz | 10.4 % | 46.6 % | 5.5 dB | 14.1 dB |
+| CUDA · s831002 | 7 145 | 4 770 | 11.95 | 285.8 s | 0.184 | 14.7 dB | **4 121 Hz** | 19.0 % | 45.3 % | 5.0 dB | 14.2 dB |
+| CUDA · s831003 | 7 183 | 4 737 | 11.93 | 287.3 s | 0.146 | 16.7 dB | **4 298 Hz** | 19.7 % | 36.9 % | 2.8 dB | 7.1 dB |
+| CUDA · s831004 | 7 152 | 4 785 | 11.98 | 286.1 s | 0.129 | 17.7 dB | 3 142 Hz | 11.9 % | 38.3 % | 4.2 dB | 9.5 dB |
+| CUDA · s831005 | 7 087 | 4 839 | 11.98 | 283.5 s | 0.139 | 17.1 dB | 3 232 Hz | 12.4 % | 47.6 % | 5.5 dB | 15.0 dB |
+
+**This closes the brightness question.** Five CUDA performances of the same score span
+2 895–4 298 Hz; two of them are brighter than any of the five Mac performances (3 032–3 956 Hz).
+Means: CUDA 3 538 Hz, Mac 3 456 Hz. Loudness, crest and dynamic range overlap the same way
+(P10–P95: CUDA 7–15 dB, Mac 5–17 dB). Brightness, density and dynamics are properties of the
+draw; the reference A was simply the darkest draw in either set. Nothing in these ten takes
+separates the platforms at the token or signal level.
 
 *Reproduction note.* An exact score must reach the tokenizer **byte for byte**: `score.abc`
 ends with a newline and that newline is part of the last ABC token (7360 in the reference
@@ -958,8 +975,10 @@ platform.
 
 **Limits.** One listener, one session, a 1-point noise floor, one CUDA performance against
 five Mac performances (§8.5); the test rules out a large deficit, not a small one. A second
-listener and five CUDA seeds on the same score would sharpen it; neither changes what the
-present ratings show.
+listener would sharpen it. The five CUDA performances of the same score (§9.1) are packed with
+the five Mac performances as a second blind bundle (ten takes, random codes, key kept apart);
+rating it gives the symmetric five-vs-five comparison and, since the Mac five were rated once
+already, a test-retest estimate for the listener. It is built and awaiting a listening session.
 
 ### 9.6 Common-RNG run (demoted)
 
@@ -1113,7 +1132,10 @@ Upstream runtime (identical in all runs)
                           "validation_row_reproduces_control2": true, "seeds": [831001, 831002, 831003, 831004, 831005]},
     "blind_listening": {"listener": "author", "scale": "1-5 overall", "noise_floor_points": 1,
                         "ratings": {"A_cuda_reference": 3, "B_mac_rerender_of_A": 4, "C_vae_only_redecode_of_A": 4,
-                                    "M_s831001": 2, "M_s831002": 2, "M_s831003": 5, "M_s831004": 3, "M_s831005": 4}}
+                                    "M_s831001": 2, "M_s831002": 2, "M_s831003": 5, "M_s831004": 3, "M_s831005": 4}},
+    "fixed_score_batch_cuda": {"ids": "20260917-193551 … 20260917-195440-E10-fixedscore-s831001..5", "platform": "cuda/L4 (second host)",
+                               "seed_831001_reproduces_reference": true, "centroid_hz": [2895, 4121, 4298, 3142, 3232]},
+    "blind_listening_2": {"status": "built, not rated", "cases": 10, "composition": "reference score", "cuda": 5, "mac": 5}
   }
 }
 ```

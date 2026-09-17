@@ -26,9 +26,9 @@ single file that imports `yue2` (`yue2_groove/adapter.py`) is covered by contrac
 that fail loudly when an upstream release changes something the UI depends on.
 
 > **Platforms.** Developed and tested on macOS / Apple Silicon (MPS). Linux + NVIDIA CUDA
-> is validated end-to-end — generation through the UI, first pass on an NVIDIA L4. See
-> [docs/LINUX_CUDA.md](docs/LINUX_CUDA.md) for the measured VRAM budget, ODE-step cost and
-> FP8 findings.
+> is validated end-to-end — generation and Cover, two sessions on NVIDIA L4 hosts. See
+> [docs/LINUX_CUDA.md](docs/LINUX_CUDA.md) for the measured VRAM budgets (24 / 16 / 12 GB),
+> ODE-step cost, FP8 findings and cross-host reproducibility.
 
 ## Screenshots
 
@@ -56,7 +56,9 @@ that fail loudly when an upstream release changes something the UI depends on.
 
 - Python 3.10 or newer and [uv](https://docs.astral.sh/uv/) (`pip` also works, see below).
 - Apple Silicon Mac with 32 GB or more unified memory (developed on a 64 GB machine), or a
-  Linux machine with an NVIDIA GPU of 24 GB (upstream's validated configuration).
+  Linux machine with an NVIDIA GPU of 24 GB (upstream's validated configuration). Measured on an
+  L4: a 16 GB memory budget runs everything the app can produce, and 12 GB runs the unquantized
+  model at CFG 1.0 or for shorter songs — see [docs/LINUX_CUDA.md](docs/LINUX_CUDA.md) §3.
 - About 8 GB of disk for the model weights (`m-a-p/YuE2-3B` + `m-a-p/YuE2-Vae`), which
   download from Hugging Face on first use.
 - The model weights are licensed **CC BY-NC 4.0 (non-commercial)** by the YuE2 project.
@@ -218,9 +220,11 @@ compiled without FlashAttention (the Windows CUDA wheels, ROCm) or a pre-Ampere 
 fails at the first decode step with `RuntimeError: USE_FLASH_ATTENTION was not enabled for
 build`. The app asks torch first (`torch.backends.cuda.is_flash_attention_available()` and the
 GPU's compute capability) and on such hosts runs upstream's own eager decoder instead —
-`BACKEND = torch-eager`, the same code path MPS uses: same model and weights, no CUDA graphs,
-slower per token. The status line and each run's `local_env.json` say when this happened.
-Linux hosts with a FlashAttention-capable build and an Ampere-or-newer GPU are not affected.
+`BACKEND = torch-eager`, the same code path MPS uses: same model and weights, no CUDA graphs.
+Measured on an L4: 1.8× slower per semantic token and about 1.5× end to end, ~700 MiB more
+VRAM, and a different take for the same seed (different kernels). The status line and each
+run's `local_env.json` say when this happened. Linux hosts with a FlashAttention-capable build
+and an Ampere-or-newer GPU are not affected.
 
 **Pre-downloading the weights** (optional, faster than letting the first generation do it):
 
