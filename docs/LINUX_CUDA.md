@@ -223,6 +223,21 @@ Same request, seed, and budget (24), changing only the ODE solver steps:
 - The AR output is **bit-identical**, so this is a clean A/B of the acoustic solver alone.
 - Listening impression (single listener, not blind): 48 steps was *slightly* better than 32 for a ~10 % total runtime cost — diminishing returns. The protocol default of 32 is a reasonable production setting; 48–64 is a "final render" choice.
 
+Below the default, measured on an M4 Pro by re-rendering this run's tokens with the same noise and
+comparing against that machine's own 32-step render (method and decoder-side numbers in
+[CROSS_PLATFORM.md](CROSS_PLATFORM.md) §9.3):
+
+| ODE steps | NAR | latent RMS Δ / std | latent corr | SNR vs that machine's 32-step render |
+|---|---|---|---|---|
+| 32 | 629 s | — | — | — |
+| 16 | 323 s | 5.6 % | 0.99842 | **21.1 dB** |
+| 8 | 164 s | 9.4 % | 0.99557 | **16.6 dB** |
+
+Time stays linear in the step count (164 / 323 / 629 s for 8 / 16 / 32 here; ~2.2 s per step on
+the L4 above). The two directions are not symmetric in effect: 32 → 48 was a change the listener
+rated *slightly* better, while 32 → 16 and 32 → 8 land 21.1 and 16.6 dB away from the same
+32-step render — a different render, not merely a cheaper one.
+
 ---
 
 ## 6. Artifacts and reproduction

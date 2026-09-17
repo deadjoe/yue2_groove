@@ -774,6 +774,38 @@ against 2.3 % / 0.99973 for CUDA's own ODE 32 → 48 change.
 - SNR and max \|Δ\| are not additive across stages: "VAE high, NAR + VAE at 28 dB" means the NAR
   is the dominant contributor, not that the difference is exactly the NAR's.
 
+**Solver steps and decoder precision (M4 Pro, one change at a time).** Two follow-on
+measurements from the same harness — same tokens, same CPU-generated noise, seed 831001:
+
+| Change, against that machine's own 32-step render | Latent Δ / corr | vs the Mac 32-step render | vs the CUDA reference |
+|---|---|---|---|
+| NAR 32 → 16 steps | RMS Δ 5.6 % of std · corr 0.99842 | **21.1 dB** | 21.3 dB |
+| NAR 32 → 8 steps | RMS Δ 9.4 % of std · corr 0.99557 | **16.6 dB** | 16.8 dB |
+| 32-step latent rounded to bf16 before the fp32 VAE | **bit-identical** — 0 of 455 872 values | **133 dB** | 28.6 dB |
+
+Re-render runs `…155954-rerender-nar8-…` and `…162741-rerender-nar16-…` (each holds `audio.flac`
+and `latent.npy`); NAR time 164 s and 323 s against 629 s for 32 steps, i.e. linear in the step
+count. Decoder precision was measured separately, holding the latent fixed (the reference run's
+`latent.npy`, decoded by the standard fp32 VAE at core 1024 / halo 16; baseline = the fp32
+decode of that same latent):
+
+| Decoder | SNR vs the fp32 decode of the same latent |
+|---|---|
+| fp16 weights + activations | 43.4 dB |
+| bf16 autocast, fp32 weights | 40.9 dB |
+| bf16 weights + activations | 35.3 dB |
+
+Three things follow. The **latent is not a precision lever**: the NAR output already carries bf16
+precision, so rounding it changes nothing — and the 133 dB residual is the PCM_24 container's own
+quantisation (step 2⁻²³ against an RMS of 0.16 ≈ 133 dB), not a decode difference: two decodes of
+the same latent in one process are bit-identical. The **decoder is the sensitive end** — bf16
+costs 35.3 dB, and it is where a port that stores the VAE in half precision changes the audio in
+exchange for a few hundred MB. And **halving the solver is a bigger change than the model's own
+knob**: 16 and 8 steps move the render 21.1 and 16.6 dB, against 28.0 dB for 32 → 48 (measured on
+the L4 with the CUDA 32-step render as baseline, so the two are not the same yardstick — but both
+are one-variable changes against a same-machine or same-GPU baseline, and the ordering below
+28 dB is unambiguous: 8 steps moved further than 16, which moved further than 48).
+
 **Listening (single listener, not blind, one pair).** Comparing the reference against the
 NAR + VAE re-render — identical composition, identical performance tokens, identical noise —
 the listener preferred the **Mac render**. The direction should not be over-read (one pair,
