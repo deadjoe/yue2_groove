@@ -212,6 +212,16 @@ either flag the app opens in SONG and remembers your last choice per browser.
 `--device auto` picks CUDA → MPS → CPU; `--dtype auto` is bfloat16 on CUDA/MPS (the
 checkpoint dtype) and float32 on CPU.
 
+**CUDA without FlashAttention.** Upstream's CUDA-graph decoder (`BACKEND = torch`) calls the
+FlashAttention kernel directly and only checks that the operator exists — so a PyTorch build
+compiled without FlashAttention (the Windows CUDA wheels, ROCm) or a pre-Ampere GPU (RTX 20xx)
+fails at the first decode step with `RuntimeError: USE_FLASH_ATTENTION was not enabled for
+build`. The app asks torch first (`torch.backends.cuda.is_flash_attention_available()` and the
+GPU's compute capability) and on such hosts runs upstream's own eager decoder instead —
+`BACKEND = torch-eager`, the same code path MPS uses: same model and weights, no CUDA graphs,
+slower per token. The status line and each run's `local_env.json` say when this happened.
+Linux hosts with a FlashAttention-capable build and an Ampere-or-newer GPU are not affected.
+
 **Pre-downloading the weights** (optional, faster than letting the first generation do it):
 
 ```bash

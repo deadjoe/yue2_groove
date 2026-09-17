@@ -146,18 +146,37 @@ def _pipe_key(device, dtype, backend, quantization, offload_ar, budget, ode_step
             revision or "", vae_revision or "", bool(offline))
 
 
+FLASH_FALLBACK_NOTE = ("this PyTorch build or GPU cannot run FlashAttention; using upstream's "
+                       "eager decoder instead of CUDA graphs (slower per token, same model)")
+
+
+def _effective_backend(device: str, backend: str) -> tuple[str, str]:
+    """Route a CUDA host that cannot run upstream's FlashAttention decode kernel to torch-eager.
+
+    Only the ``torch`` backend on a CUDA device is ever remapped.  A Linux host with a
+    FlashAttention-capable torch build and an Ampere-or-newer GPU keeps the CUDA-graph path
+    untouched; MPS and CPU never consult the probe.  Returns ``(backend, reason)``.
+    """
+    if device == "cuda" and backend == "torch" and not adapter.cuda_flash_attention_usable():
+        return "torch-eager", FLASH_FALLBACK_NOTE
+    return backend, ""
+
+
 def load_pipeline(device, dtype, backend, quantization, offload_ar, budget, ode_steps,
                   vae_core_frames, model, vae_choice, vae_custom, revision, vae_revision,
                   offline, progress=gr.Progress()):
     """(Re)load the pipeline. Reuses the existing one when settings are unchanged."""
     global _PIPE, _PIPE_KEY
     device = _pick_device(device)
+    backend, fallback = _effective_backend(device, backend)
+    fallback = f" ({fallback})" if fallback else ""
     vae_path, vae_name = resolve_vae(vae_choice, vae_custom)
     cores = None if vae_core_frames == "auto" else int(vae_core_frames)
     key = _pipe_key(device, dtype, backend, quantization, offload_ar, budget, ode_steps,
                     cores, model, vae_path, revision, vae_revision, offline)
     if _PIPE is not None and _PIPE_KEY == key:
-        return _PIPE, f"Model ready: device={device} dtype={dtype} backend={backend} vae={vae_name}"
+        return _PIPE, (f"Model ready: device={device} dtype={dtype} backend={backend}{fallback} "
+                       f"vae={vae_name}")
     if backend == "vllm" and device != "cuda":
         raise gr.Error("vLLM backend requires NVIDIA CUDA; use torch here (MPS falls back to eager)")
     if quantization == "fp8" and device != "cuda":
@@ -173,7 +192,7 @@ def load_pipeline(device, dtype, backend, quantization, offload_ar, budget, ode_
             ode_steps=ode_steps, vae_core_frames=cores, revision=revision,
             vae_revision=vae_revision, local_files_only=offline)
         _PIPE, _PIPE_KEY = pipe, key
-    note = (f"Loaded: device={device} dtype={used_dtype} backend={backend} "
+    note = (f"Loaded: device={device} dtype={used_dtype} backend={backend}{fallback} "
             f"vae={vae_name} ode_steps={ode_steps} cores={cores or 'auto'}")
     return _PIPE, note
 

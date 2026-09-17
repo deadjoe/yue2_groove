@@ -46,6 +46,29 @@ def yue2_version() -> str:
         return "unknown"
 
 
+def cuda_flash_attention_usable(device=None) -> bool:
+    """True when upstream's CUDA-graph decoder can run its FlashAttention kernel here.
+
+    ``yue2.cuda_graph.GraphAR`` (yue2-v0.1.6) selects FlashAttention whenever the ATen op
+    is registered — which is every CUDA build, including builds compiled without it (the
+    Windows wheels, ROCm), where the first decode step raises ``USE_FLASH_ATTENTION was not
+    enabled for build``, and Turing GPUs (sm_75), where the kernel itself refuses to run.
+    This asks torch about both conditions so the UI can route such hosts to upstream's
+    eager decoder instead.  A torch too old to answer is assumed capable (prior behaviour).
+    """
+    import torch
+    if not torch.cuda.is_available():
+        return False
+    built = getattr(torch.backends.cuda, "is_flash_attention_available", None)
+    if built is not None and not built():
+        return False
+    try:
+        major, _minor = torch.cuda.get_device_capability(device)
+    except Exception:  # noqa: BLE001 — unknown device: leave the decision to upstream
+        return True
+    return major >= 8
+
+
 # ── protocol objects ─────────────────────────────────────────────────────────
 
 def sampling(**fields):
