@@ -784,9 +784,10 @@ by `scripts/ode_steps.py` (steps) and `scripts/vae_decoder_precision.py` (decode
 | NAR 32 → 8 steps | RMS Δ 9.4 % of std · corr 0.99557 | **16.6 dB** | 16.8 dB |
 | 32-step latent rounded to bf16 before the fp32 VAE | **bit-identical** — 0 of 455 872 values | **133 dB** | 28.6 dB |
 
-Re-render runs `…155954-rerender-nar8-…` and `…162741-rerender-nar16-…` (each holds `audio.flac`
-and `latent.npy`); NAR time 164 s and 323 s against 629 s for 32 steps, i.e. linear in the step
-count. Decoder precision was measured separately, holding the latent fixed (the reference run's
+Re-render runs `…155954-rerender-nar8-…` and `…162741-rerender-nar16-…` — complete run
+directories, finalized like the 2a/2b re-renders so `04 // LIBRARY` and `05 // TOOLS` accept them;
+their NAR time is 164 s and 323 s against 629 s for 32 steps, i.e. linear in the step count. Decoder
+precision was measured separately, holding the latent fixed (the reference run's
 `latent.npy`, decoded by the standard fp32 VAE at core 1024 / halo 16; baseline = the fp32
 decode of that same latent), with `scripts/vae_decoder_precision.py`:
 
