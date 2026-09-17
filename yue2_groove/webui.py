@@ -156,6 +156,11 @@ def _effective_backend(device: str, backend: str) -> tuple[str, str]:
     Only the ``torch`` backend on a CUDA device is ever remapped.  A Linux host with a
     FlashAttention-capable torch build and an Ampere-or-newer GPU keeps the CUDA-graph path
     untouched; MPS and CPU never consult the probe.  Returns ``(backend, reason)``.
+
+    Temporary: works around yue2-v0.1.6 selecting FlashAttention by op presence alone
+    (upstream PR #166 fixes it and keeps CUDA graphs via cuDNN/SDPA).  The contract test
+    ``test_cuda_graph_still_selects_flash_attention_by_op_presence_only`` fails once the
+    installed upstream carries that fix — remove this function and its callers then.
     """
     if device == "cuda" and backend == "torch" and not adapter.cuda_flash_attention_usable():
         return "torch-eager", FLASH_FALLBACK_NOTE

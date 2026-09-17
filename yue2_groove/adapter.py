@@ -55,6 +55,7 @@ def cuda_flash_attention_usable(device=None) -> bool:
     enabled for build``, and Turing GPUs (sm_75), where the kernel itself refuses to run.
     This asks torch about both conditions so the UI can route such hosts to upstream's
     eager decoder instead.  A torch too old to answer is assumed capable (prior behaviour).
+    Temporary until upstream asks torch itself (PR #166); ``tests/test_contract.py`` says when.
     """
     import torch
     if not torch.cuda.is_available():

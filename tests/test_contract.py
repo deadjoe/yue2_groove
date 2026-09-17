@@ -105,3 +105,30 @@ def test_saved_artifacts_are_what_the_library_reads(tmp_path):
     html = library.render_info_html(item, details)
     assert "bfloat16" in html and "audio.flac" in html
     assert json.loads((directory / "result.json").read_text())["audio_seconds"] == pytest.approx(1.0)
+
+
+def test_cuda_graph_still_selects_flash_attention_by_op_presence_only():
+    """Guards the UI's torch-eager fallback (``webui._effective_backend``).
+
+    yue2-v0.1.6 picks FlashAttention whenever ``torch.ops.aten._flash_attention_forward``
+    is registered — true on builds that cannot run it (a raising stub) and on pre-Ampere
+    GPUs — so the UI routes such CUDA hosts to upstream's eager decoder.  Upstream PR #166
+    replaces that check with ``torch.backends.cuda.can_use_flash_attention`` and falls back
+    to cuDNN / SDPA *with CUDA graphs kept*.  Once the installed upstream asks torch itself,
+    the UI fallback is not just redundant but harmful (it would pin those hosts to the slower
+    eager path), so this test fails on purpose to say: retire it.
+    """
+    from yue2 import cuda_graph
+
+    source = inspect.getsource(cuda_graph)
+    retire = ("Upstream now checks FlashAttention availability itself. Retire the workaround: "
+              "remove webui._effective_backend / FLASH_FALLBACK_NOTE and the call in "
+              "webui.load_pipeline, adapter.cuda_flash_attention_usable, "
+              "tests/test_flash_fallback.py, the README paragraph 'CUDA without FlashAttention', "
+              "and then this test.")
+    assert not any(name in source for name in
+                   ("can_use_flash_attention", "is_flash_attention_available")), retire
+    assert 'hasattr(torch.ops.aten, "_flash_attention_forward")' in source, (
+        "Upstream changed how GraphAR selects its attention backend; re-check whether the "
+        "torch-eager fallback in webui._effective_backend is still needed.")
+
