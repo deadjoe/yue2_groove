@@ -88,10 +88,14 @@ def main(argv=None) -> int:
         return audio[0].float().clamp(-1, 1).T.contiguous().numpy()
 
     def install(mode: str, dtype: torch.dtype) -> None:
-        """Patch the VAE for one variant.  `weights` halves the decoder weights themselves and so
-        must also drop the FP32 guard in `_latent`; `autocast` keeps fp32 weights."""
-        half = dtype != torch.float32
-        if mode == "weights" and half:
+        """Patch the VAE for one variant.  Always from a clean fp32 baseline: `weights` halves the
+        decoder weights themselves and so must also drop the FP32 guard in `_latent`, while
+        `autocast` keeps the weights in fp32 and only casts the convolutions."""
+        vae._latent, vae.decode = original_latent, original_decode
+        vae.decoder.to(torch.float32)
+        if dtype == torch.float32:
+            return
+        if mode == "weights":
             def latent_nocheck(latent):
                 latent = torch.as_tensor(latent)
                 if latent.ndim != 3 or latent.shape[1] != vae.config.latent_dim:
@@ -100,21 +104,17 @@ def main(argv=None) -> int:
                     raise ValueError("VAE latents contain non-finite values")
                 return latent
 
-            vae._latent = latent_nocheck
-
             def decode(latent):
                 with torch.autocast(device_type=device.type, enabled=False):
                     return vae.decoder(vae._latent(latent).to(device=device, dtype=dtype)).float()
 
+            vae._latent = latent_nocheck
             vae.decoder.to(dtype)
-        elif mode == "autocast" and half:
+        else:
             def decode(latent):
                 with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
                     return vae.decoder(vae._latent(latent).to(device=device, dtype=torch.float32)).float()
-        else:
-            vae._latent, vae.decode = original_latent, original_decode
-            vae.decoder.to(torch.float32)
-            return
+
         vae.decode = decode
 
     install("fp32", torch.float32)
