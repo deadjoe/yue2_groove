@@ -122,7 +122,8 @@ def main() -> int:
     ap.add_argument("--stage", choices=["vae", "nar"])
     ap.add_argument("--device", default="mps")
     ap.add_argument("--dtype", default="bfloat16", choices=["bfloat16", "float32"])
-    ap.add_argument("--runs", default=str(Path.home() / "github/deadjoe/yue2_groove/runs"))
+    ap.add_argument("--runs", default=str(config.runs_dir()),
+                    help="run directory root (default: $YUE2_GROOVE_RUNS or ./runs, like the app)")
     ap.add_argument("--model", default=config.default_model(), help="local model directory or Hub id")
     ap.add_argument("--vae", default=config.default_vae(), help="local decoder directory or Hub id")
     ap.add_argument("--label", default="")
@@ -222,7 +223,7 @@ def main() -> int:
         "seed": seed, "ode_steps": gen["ode_steps"], "context": gen["context"],
         "vae_core_frames": cfg["vae_core_frames"], "vae_decode": "halo_crop",
         "device": str(pipe.device), "dtype": dtype_loaded, "torch": torch.__version__,
-        "yue2": adapter.yue2_version(), "host": platform.node(), "machine": platform.machine(),
+        "yue2": adapter.yue2_version(), "machine": platform.machine(),
         "weights": pipe.weights, "runtime_sha256": getattr(pipe, "runtime_sha256", None),
         "timing": timing,
         "outputs_sha256": {"audio.flac": sha256(out / "audio.flac"), "latent.npy": sha256(out / "latent.npy")},
