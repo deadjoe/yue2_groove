@@ -95,6 +95,11 @@ def finalize(out: Path) -> None:
                            "source_inputs_sha256": meta["source_inputs_sha256"],
                            "comparison_vs_source": meta["comparison_vs_source"]}}
     (out / "result.json").write_text(json.dumps(result, indent=2) + "\n")
+    if not (out / "local_env.json").exists():
+        (out / "local_env.json").write_text(json.dumps({
+            "tool": "yue2_groove", "dtype": meta.get("dtype"), "device": meta.get("device"),
+            "torch": meta.get("torch"), "yue2": meta.get("yue2"),
+            "note": f"rerender {stage} of {src.name} (see rerender.json)"}, indent=2) + "\n")
 
 
 def main() -> int:
