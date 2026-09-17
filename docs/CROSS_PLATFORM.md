@@ -34,7 +34,7 @@ FP8 run used here) and [MACOS_MPS.md](MACOS_MPS.md) (MPS support notes and the S
 | 4 | **Numeric precision changes the take but not the family — and the fp32 take was never evaluated by ear.** | Exp B: MPS, float32 instead of bfloat16 → diverges from the bf16 take at **ABC token 122**, stays in the E/126 family, **1.65× slower**. Its spectral balance is the closest of all Mac takes to the CUDA reference (§4.4). "No quality gain" is *not* established. |
 | 5 | **Any real numeric perturbation flips a sampled token within a few hundred ABC tokens, on both platforms.** MPS is not special in this respect; the same-seed takes are *not* reproducible across Macs. | First divergence (ABC token index): FP8 vs BF16 on the **same L4** = 225; M1 Max vs M4 Pro (both bf16) = 122; M4 bf16 vs fp32 = 122; M1 bf16 vs M4 fp32 = 313. Score hashes differ on every pair. |
 | 6 | **Whether MPS quality is systematically worse is *not* established — and cannot be from this design.** Platform is perfectly confounded with composition family (Fm/130 vs E/126). The measurable differences track the draw, not the platform. | The **FP8 CUDA take is nearly as bright as the Mac takes** (centroid 3 373 Hz vs 3 463–3 551) and the **M4 fp32 take is as dark as the CUDA reference** (3 010 vs 2 895) (§4.4). The "static harmony" is a three-chord I–♭VII–IV rock song with a one-chord riff intro — a stylistic outcome, not a defect (§4.1). |
-| 7 | The platforms also use **different attention/execution paths by design** (a secondary, unquantified difference). | CUDA: `execution: cuda_graph`, `attention: flash`, both CFG branches in one batch. MPS: `execution: eager`, `attention: sdpa`, `repeat_interleave` K/V expansion, CFG branches as two batch-1 forwards. |
+| 7 | The platforms also use **different attention/execution paths by design** — now bounded for the acoustic stage: re-rendering the CUDA tokens on the M4 Pro gives **SNR 110 dB for the VAE** and **28.6 dB for NAR + VAE**, the latter essentially the same as CUDA's own ODE 32 → 48 change (28.0 dB), with the spectrum unchanged (§9.3). The AR stage remains unquantified (§9.4). | CUDA: `execution: cuda_graph`, `attention: flash`, both CFG branches in one batch. MPS: `execution: eager`, `attention: sdpa`, `repeat_interleave` K/V expansion, CFG branches as two batch-1 forwards. |
 
 **Practical consequences**
 
@@ -42,7 +42,8 @@ FP8 run used here) and [MACOS_MPS.md](MACOS_MPS.md) (MPS support notes and the S
   fixable: different RNG algorithms, different `multinomial` implementations, and reduced-
   precision kernel differences amplified by autoregressive sampling.
 - Same seed ≠ same song **across Macs** either (M1 Max vs M4 Pro share only 122 ABC tokens).
-  Same-machine reproducibility on MPS has not been tested (§9.2).
+  On **one** Mac the pipeline is bit-exact end to end: a repeat run on the M4 Pro reproduced every
+  artifact, `audio.flac` included (§9.2).
 - torch version alignment is **tested and has no effect** (bit-exact AR/NAR). float32 on MPS
   **changes the take** (like any perturbation) and was **not evaluated by ear**; there is no
   evidence here that it is a quality mode, and it costs 1.65×.
@@ -614,7 +615,12 @@ for completeness.
   platforms (§4.2); no NaN/Inf in any latent tensor.
 - **torch build** — tested, bit-exact through NAR (§5).
 - **A platform-specific rendering signature in brightness or dynamics** — the FP8 CUDA take
-  and the M4 fp32 take break the pattern in both directions (§4.4).
+  and the M4 fp32 take break the pattern in both directions (§4.4), and re-rendering the CUDA
+  tokens on the M4 Pro leaves the spectrum unchanged to four significant figures (§9.3).
+- **The VAE** — cross-platform decode of identical latents differs at −110 dB (§9.3).
+- **The NAR as a large effect** — cross-platform synthesis from identical tokens and noise
+  differs by the same amount as CUDA's own ODE 32 → 48 change (§9.3); anything beyond
+  "subtle" is excluded.
 
 ---
 
@@ -627,7 +633,7 @@ for completeness.
   does not reproduce on the other.
 - **Same seed ≠ same song across Macs either.** The M1 Max and M4 Pro takes share only 122 ABC
   tokens. Treat a seed as reproducible only on one machine with one torch build and one dtype —
-  and even that has not yet been verified on MPS (§9.2).
+  there it *is* reproducible, bit-exact through the FLAC (verified on the M4 Pro, §9.2).
 - **Seed re-rolling is the practical lever** — the first random token decides the family, so
   different seeds explore genuinely different songs.
 - **`float32` is not a documented quality mode.** It costs ~1.65× time, produces a different
@@ -679,9 +685,9 @@ for completeness.
    on this GPU, not that sampling tolerates perturbation; the FP8 run is the only CUDA
    perturbation data point, and it is a single sample of a heavy-tailed quantity (first flip
    index).
-6. **Same-machine reproducibility on MPS is untested.** No MPS run was repeated on the same
-   machine with the same settings. The formerly non-deterministic MPS attention kernel
-   ([MACOS_MPS.md](MACOS_MPS.md)) makes this worth an explicit check rather than an assumption.
+6. **Same-machine reproducibility on MPS was verified once, on one machine.** A repeat of the
+   fixed request on the M4 Pro reproduced every artifact byte for byte (§9.2). The M1 Max has
+   not been repeated, and other torch builds are untested.
 7. **Two Apple GPUs, one macOS version, one torch build on the Mac side.** macOS 26.6.2 and
    torch 2.14.0 throughout; other combinations are untested.
 8. **Memory numbers** come from periodic sampling (5 s on CUDA, 20 s on the Macs), so brief
@@ -708,24 +714,79 @@ key, tempo, progression and melody are then identical everywhere; only the perfo
 listening notes ("vocals, instruments, arrangement") point at. Listen blind (§9.5). This is
 the experiment that can support or refute "MPS is systematically worse".
 
-### 9.2 Same-machine repeat — is MPS reproducible at all?
+*Reproduction note.* An exact score must reach the tokenizer **byte for byte**: `score.abc`
+ends with a newline and that newline is part of the last ABC token (7360 in the reference
+run), so `encode(score.abc)` reproduces the original `abc_tokens.npy` and the original
+semantic prefix only from the unmodified file. `07 // BATCH` with `abc_path` reads the file
+raw and does reproduce it (verified against both the reference and Control 2); the ABC text
+box in `01 // GENERATE` applies `strip()` and therefore yields a different last token and a
+different take. Copy the file with `cp`, not through an editor.
 
-Re-run the fixed request on the M4 Pro with identical settings and compare `abc_tokens.npy`
-and `semantic.npy` hashes. Ten minutes; decides whether "reproducible on one Mac" may be
-claimed.
+### 9.2 Same-machine repeat — is MPS reproducible at all? → **done: bit-exact**
 
-### 9.3 Cross-platform re-rendering — isolates the acoustic stage
+The fixed request was re-run on the M4 Pro with identical settings (run
+`20260916-031521-Something_True_M4PRO_CFG15`; `request.json` and `config.json` identical to
+Control 2 apart from the run id). Every artifact matched Control 2 byte for byte:
+
+| Artifact | Control 2 (`…005839`) | Repeat (`…031521`) |
+|---|---|---|
+| `abc_tokens.npy` | `cec10145…` | `cec10145…` |
+| `semantic.npy` | `99d780be…` | `99d780be…` |
+| `latent.npy` | `d79e3705…` | `d79e3705…` |
+| `audio.flac` | `6ed915a4…` | `6ed915a4…` |
+
+Timings agreed within 1 % (e2e 1 236 s vs 1 231 s). So on one Mac with one torch build and
+one dtype the whole pipeline — AR sampling, NAR, and the VAE — is deterministic; a seed is a
+valid label for a take there. The M1 ≠ M4 divergence in §4.1 is therefore a cross-chip kernel
+difference, not run-to-run noise.
+
+### 9.3 Cross-platform re-rendering — isolates the acoustic stage → **done: VAE cleared, NAR within an ODE-step of CUDA**
 
 The NAR noise is CPU-generated on every platform (§6.1), so rendering the CUDA run's tokens
-on a Mac uses the *same* noise and the *same* tokens; only kernel numerics differ. Two levels:
+on a Mac uses the *same* noise and the *same* tokens; only kernel numerics differ. Both levels
+were run on the M4 Pro (bf16, MPS, torch 2.14.0, weights verified against the reference run,
+`ode_steps` / `context` / `vae_core_frames` read from the reference `config.json`) with a
+stand-alone script; outputs are full run directories (`…035647-rerender-vae-…`,
+`…040751-rerender-nar-…`) usable in `04 // LIBRARY` and `05 // TOOLS`.
 
-- VAE only: decode the CUDA run's `latent.npy` on the Mac (`06 // DECODE`, ~10 s) and compare
-  with the CUDA `audio.flac` at sample level.
-- NAR + VAE: call `yue2.nar.synthesize(model, prefix, codec, seed)` on the Mac with the CUDA
-  run's `prefix.npy` / `semantic.npy` (10–15 min), then decode. Compare against the CUDA audio
-  and against the ODE 32-vs-48 reference point (SNR 28 dB): a Mac render far above 28 dB SNR
-  rules out the acoustic stage; a render below it is a real, listenable platform difference on
-  identical music.
+| Level | Input from the CUDA reference | Sample-level vs reference `audio.flac` | Spectrum (ref → Mac) |
+|---|---|---|---|
+| **VAE only** | `latent.npy` | max \|Δ\| 5.6 × 10⁻⁵ · RMS Δ 5.2 × 10⁻⁷ · **SNR 109.8 dB** · 26.7 % samples identical | centroid 2 894.6 → 2 894.6 Hz · >8 kHz 10.389 → 10.389 % |
+| **NAR + VAE** | `prefix.npy` + `semantic.npy`, seed 831001 | max \|Δ\| 0.45 · RMS Δ 6.0 × 10⁻³ · **SNR 28.6 dB** | centroid 2 894.6 → 2 894.0 Hz · >8 kHz 10.389 → 10.383 % · RMS 0.15458 → 0.15459 |
+| *(calibration)* CUDA ODE 32 → 48 | same tokens, same GPU | RMS Δ 6.4 × 10⁻³ · **SNR 28.0 dB** | — |
+
+Latents, NAR + VAE level: RMS Δ = 2.2 % of the reference latent's std, correlation 0.99975 —
+against 2.3 % / 0.99973 for CUDA's own ODE 32 → 48 change.
+
+**Reading.**
+
+- The **VAE** differs across platforms at the −110 dB level (cuDNN vs Metal fp32 convolutions;
+  cu128 vs cu130 on one GPU was −119 dB). It is excluded as a source of any audible difference.
+- The **NAR** on MPS differs from CUDA by the same magnitude as changing the ODE step count
+  on CUDA — a perturbation the listener rated as *"slightly better"* for 48 vs 32 steps
+  (LINUX_CUDA.md §5), i.e. subtle. Its spectral balance is unchanged to four significant
+  figures, so **the Mac takes' brightness (§4.4) cannot come from the acoustic stage**.
+- ~28 dB is *expected* to be the floor any non-bit-exact NAR will show — a mechanism inference
+  from two data points, not a measurement: 32 midpoint steps turn tiny velocity differences
+  into phase differences that the sample-level SNR counts in full. If so, the metric cannot
+  rank platform against solver-step; listening can, and for the first time the comparison is
+  on identical music — reference vs `…040751-rerender-nar-…` in `05 // TOOLS`.
+- SNR and max \|Δ\| are not additive across stages: "VAE high, NAR + VAE at 28 dB" means the NAR
+  is the dominant contributor, not that the difference is exactly the NAR's.
+
+**Listening (single listener, not blind, one pair).** Comparing the reference against the
+NAR + VAE re-render — identical composition, identical performance tokens, identical noise —
+the listener preferred the **Mac render**. The direction should not be over-read (one pair,
+listener aware of the provenance), but the sign is decisive for the open question: the same
+listener who rated the Mac takes "clearly worse" (§4.7) does not find the Mac *rendering* worse
+on identical music. Two cheap calibrations remain open: reference vs the VAE-only render
+(indistinguishable by construction at 110 dB — a check on preference noise), and the reverse
+direction (Mac tokens re-rendered on CUDA) once a CUDA machine is available again.
+
+Consequence for the open question: whatever makes a Mac take sound "clearly worse" is not
+rendering. It is either the composition family (§8) or the semantic stage — §9.1 and §9.4.
+The cheapest next step needs no CUDA machine: generate several seeds on the Mac with the
+reference `score.abc` fixed (§9.1) and compare them with the reference and its Mac re-render.
 
 ### 9.4 Teacher-forced logit comparison — quantifies the numeric gap without sampling
 

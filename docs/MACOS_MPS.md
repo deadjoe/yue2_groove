@@ -9,8 +9,8 @@ dependency level. These notes record what was verified and how.
 > platform-specific RNG device (CUDA generator on CUDA, CPU generator on MPS), so **the same
 > seed does not reproduce across platforms** — and not across Macs either: an M1 Max and an
 > M4 Pro on the same CPU stream agreed for 122 ABC tokens and then diverged, because any kernel
-> numeric difference eventually flips a sampled token. Same-machine reproducibility on MPS has
-> not been tested.
+> numeric difference eventually flips a sampled token. On one Mac, however, a repeat run is
+> bit-exact end to end (verified on the M4 Pro, `audio.flac` included).
 
 ## Tested configuration
 
