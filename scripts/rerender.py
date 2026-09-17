@@ -19,7 +19,13 @@ config.json / result.json out of that directory's rerender.json, so 04 // LIBRAR
 rerender.json (e.g. "nar16") names the variant in the request id and the result records.
 """
 from __future__ import annotations
-import argparse, hashlib, json, platform, sys, time
+
+import argparse
+import hashlib
+import json
+import platform
+import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -35,16 +41,20 @@ def sha256(path: Path) -> str:
 
 def spectral(x: np.ndarray, sr: int):
     m = x.mean(1) if x.ndim == 2 else x
-    S = np.abs(np.fft.rfft(m)); f = np.fft.rfftfreq(len(m), 1 / sr)
+    S = np.abs(np.fft.rfft(m))
+    f = np.fft.rfftfreq(len(m), 1 / sr)
     return {"centroid_hz": float((f * S).sum() / S.sum()),
             "magnitude_above_8k_pct": float(S[f > 8000].sum() / S.sum() * 100),
             "rms_mono": float(np.sqrt((m ** 2).mean()))}
 
 
 def compare_audio(ref: np.ndarray, new: np.ndarray, sr: int):
-    n = min(len(ref), len(new)); a, b = ref[:n], new[:n]; d = a - b
-    rms_a = float(np.sqrt((a ** 2).mean())); rms_d = float(np.sqrt((d ** 2).mean()))
-    return {"samples_compared": int(n), "length_ref": int(len(ref)), "length_new": int(len(new)),
+    n = min(len(ref), len(new))
+    a, b = ref[:n], new[:n]
+    d = a - b
+    rms_a = float(np.sqrt((a ** 2).mean()))
+    rms_d = float(np.sqrt((d ** 2).mean()))
+    return {"samples_compared": int(n), "length_ref": len(ref), "length_new": len(new),
             "max_abs_delta": float(np.abs(d).max()), "rms_delta": rms_d,
             "snr_db": float(20 * np.log10(rms_a / rms_d)) if rms_d > 0 else float("inf"),
             "fraction_identical_samples": float((a == b).mean()),
@@ -52,7 +62,9 @@ def compare_audio(ref: np.ndarray, new: np.ndarray, sr: int):
 
 
 def compare_latents(ref: np.ndarray, new: np.ndarray):
-    n = min(len(ref), len(new)); a, b = ref[:n].astype(np.float64), new[:n].astype(np.float64); d = a - b
+    n = min(len(ref), len(new))
+    a, b = ref[:n].astype(np.float64), new[:n].astype(np.float64)
+    d = a - b
     return {"frames_compared": int(n), "max_abs_delta": float(np.abs(d).max()),
             "rms_delta": float(np.sqrt((d ** 2).mean())),
             "rms_delta_over_ref_std": float(np.sqrt((d ** 2).mean()) / a.std()),
@@ -116,7 +128,9 @@ def main() -> int:
     ap.add_argument("--label", default="")
     args = ap.parse_args()
     if args.finalize:
-        finalize(Path(args.source).resolve()); print(f"[rerender] finalized {args.source}"); return 0
+        finalize(Path(args.source).resolve())
+        print(f"[rerender] finalized {args.source}")
+        return 0
     if not args.stage:
         ap.error("--stage is required")
 
@@ -151,7 +165,8 @@ def main() -> int:
             return 2
         print(f"[rerender] {name} weights {have[:16] if have else '?'}… {'== source' if want == have else '(source hash unavailable)'}", flush=True)
     if pipe.generation_config.context != gen["context"]:
-        print(f"[rerender] ABORT: context {pipe.generation_config.context} != source {gen['context']}"); return 2
+        print(f"[rerender] ABORT: context {pipe.generation_config.context} != source {gen['context']}")
+        return 2
 
     inputs = {}
     timing = {"load_seconds": load_seconds}

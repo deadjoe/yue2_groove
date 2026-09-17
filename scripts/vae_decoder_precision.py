@@ -40,8 +40,9 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from yue2.modeling_vae import YuE2VAE  # noqa: E402
-from yue2_groove import adapter  # noqa: E402
+from yue2.modeling_vae import YuE2VAE
+
+from yue2_groove import adapter
 
 
 def parse_args(argv=None):

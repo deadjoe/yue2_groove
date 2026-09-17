@@ -39,9 +39,9 @@ import soundfile as sf
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from rerender import compare_audio, compare_latents, finalize, sha256  # noqa: E402
+from rerender import compare_audio, compare_latents, finalize, sha256
 
-from yue2_groove import adapter, config  # noqa: E402
+from yue2_groove import adapter, config
 
 
 def parse_args(argv=None):
@@ -120,7 +120,7 @@ def main(argv=None) -> int:
         print(line, flush=True)
         return out
 
-    from yue2.nar import synthesize  # noqa: E402
+    from yue2.nar import synthesize
 
     for steps in steps_list:
         model = pipe._load_model(for_nar=True)  # pipe.decode() parks the model on the CPU after each decode
