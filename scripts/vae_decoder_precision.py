@@ -105,15 +105,18 @@ def main(argv=None) -> int:
                 return latent
 
             def decode(latent):
+                value = vae._latent(latent)
                 with torch.autocast(device_type=device.type, enabled=False):
-                    return vae.decoder(vae._latent(latent).to(device=device, dtype=dtype)).float()
+                    return vae.decoder(value.to(device=device, dtype=dtype)).float()
 
             vae._latent = latent_nocheck
             vae.decoder.to(dtype)
         else:
             def decode(latent):
+                # The fp32 cast must stay outside the autocast context, or autocast lowers it again.
+                value = vae._latent(latent).to(device=device, dtype=torch.float32)
                 with torch.autocast(device_type=device.type, dtype=dtype, enabled=True):
-                    return vae.decoder(vae._latent(latent).to(device=device, dtype=torch.float32)).float()
+                    return vae.decoder(value).float()
 
         vae.decode = decode
 
