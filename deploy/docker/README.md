@@ -66,7 +66,7 @@ Create a pod from this image with port `7860/http` exposed; RunPod's proxy URL
 `https://<pod-id>-7860.proxy.runpod.net` is the app. The base image's `/start.sh` stays the
 entrypoint (sshd with `PUBLIC_KEY`, Jupyter with `JUPYTER_PASSWORD`, as on any RunPod pod);
 it calls `/pre_start.sh`, which starts `groove-start`. Weights download from Hugging Face in
-about 1.5 minutes inside RunPod's datacenters; a network volume mounted at `/data` makes it
+about half a minute inside RunPod's datacenters (31 s measured, `hf_transfer`); a network volume mounted at `/data` makes it
 instant on later pods in the same datacenter.
 
 ## Progress protocol (for launchers)
