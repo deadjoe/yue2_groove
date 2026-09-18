@@ -4,6 +4,12 @@
 # GROOVE_PROGRESS_TOKEN). Steps: weights | verify | start | ready | failed.
 set -uo pipefail
 cd /app
+# never run twice in one container (a second /start.sh hook, a manual start over ssh, …)
+PIDFILE=/run/groove-start.pid
+if [[ -f "$PIDFILE" ]] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+  echo "[groove-start] already running (pid $(cat "$PIDFILE"))"; exit 0
+fi
+echo $$ > "$PIDFILE"
 PORT="${YUE2_GROOVE_PORT:-7860}"
 GROOVE_PROGRESS_URL="${GROOVE_PROGRESS_URL:-}"
 GROOVE_PROGRESS_TOKEN="${GROOVE_PROGRESS_TOKEN:-}"
