@@ -39,7 +39,7 @@ RUN uv venv env --python 3.12 \
 #    downloaded at first start.
 RUN uv python install 3.11 \
  && uv venv .venv-sheetsage2 --python 3.11 \
- && uv pip install --python .venv-sheetsage2/bin/python huggingface-hub==0.36.0 \
+ && uv pip install --python .venv-sheetsage2/bin/python huggingface-hub==0.36.0 hf_transfer \
  && uv pip install --python .venv-sheetsage2/bin/python torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu126 \
  && .venv-sheetsage2/bin/hf download m-a-p/SheetSage2 requirements.txt --local-dir /tmp/sheetsage2 \
  && uv pip install --python .venv-sheetsage2/bin/python -r /tmp/sheetsage2/requirements.txt \
