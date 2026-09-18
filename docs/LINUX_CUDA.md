@@ -293,7 +293,9 @@ env/bin/python -m yue2_groove --host 0.0.0.0 --port 7860 --no-preload --auth use
 
 Install torch **before** the app: otherwise the app's dependency resolution pulls PyPI's torch (with its
 separate `nvidia-*` CUDA wheels, several GB) only for the cu128 wheel to replace it. On one cloud host
-with ~4 MB/s to PyPI that first, wasted install took 26 minutes. Session-2 run IDs (all in the archive):
+with ~4 MB/s to PyPI that first, wasted install took 26 minutes. The same environment is available
+pre-built as a container image — `ghcr.io/deadjoe/yue2_groove`, see [deploy/docker/README.md](../deploy/docker/README.md) —
+which turns this whole setup into an image pull. Session-2 run IDs (all in the archive):
 
 ```
 20260917-185421-E1-reference-budget24        reference request on a second L4 host — bit-identical to 9/15

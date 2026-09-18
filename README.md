@@ -28,7 +28,9 @@ that fail loudly when an upstream release changes something the UI depends on.
 > **Platforms.** Developed and tested on macOS / Apple Silicon (MPS). Linux + NVIDIA CUDA
 > is validated end-to-end — generation and Cover, two sessions on NVIDIA L4 hosts. See
 > [docs/LINUX_CUDA.md](docs/LINUX_CUDA.md) for the measured VRAM budgets (24 / 16 / 12 GB),
-> ODE-step cost, FP8 findings and cross-host reproducibility.
+> ODE-step cost, FP8 findings and cross-host reproducibility. A ready-made Linux + CUDA
+> container image (also the way to run the Linux path on Windows via Docker Desktop / WSL2)
+> is described in [deploy/docker/README.md](deploy/docker/README.md).
 
 ## Screenshots
 
