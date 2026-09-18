@@ -69,6 +69,10 @@ it calls `/pre_start.sh`, which starts `groove-start`. Weights download from Hug
 about half a minute inside RunPod's datacenters (31 s measured, `hf_transfer`); a network volume mounted at `/data` makes it
 instant on later pods in the same datacenter.
 
+[yue2_groove_pod](https://github.com/deadjoe/yue2_groove_pod) is a phone-sized launcher for
+exactly this: a Cloudflare Worker that creates the cheapest in-stock pod from this image,
+follows the progress protocol below, hands back the URL and deletes the pod on a time limit.
+
 ## Progress protocol (for launchers)
 
 `groove-start` reports `{"step", "status", "message", "ts", "pod"}` with
