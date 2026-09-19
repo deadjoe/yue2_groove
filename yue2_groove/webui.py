@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import contextlib
 
 try:
     import fcntl  # Unix only; optional macOS F_FULLFSYNC in _fsync_fd
@@ -66,6 +67,7 @@ except ImportError:  # Windows (and any host without the module)
 import html
 import importlib.util
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -84,6 +86,7 @@ from .vendor import abc_tools
 
 # Where generated works are stored; main() may override it with --runs.
 RUNS = config.runs_dir()
+log = logging.getLogger("yue2_groove")
 
 _PIPE = None
 _PIPE_KEY = None
@@ -179,7 +182,7 @@ def load_pipeline(device, dtype, backend, quantization, offload_ar, budget, ode_
     cores = None if vae_core_frames == "auto" else int(vae_core_frames)
     key = _pipe_key(device, dtype, backend, quantization, offload_ar, budget, ode_steps,
                     cores, model, vae_path, revision, vae_revision, offline)
-    if _PIPE is not None and _PIPE_KEY == key:
+    if _PIPE is not None and key == _PIPE_KEY:
         return _PIPE, (f"Model ready: device={device} dtype={dtype} backend={backend}{fallback} "
                        f"vae={vae_name}")
     if backend == "vllm" and device != "cuda":
@@ -206,10 +209,8 @@ def unload_pipeline():
     global _PIPE, _PIPE_KEY
     with _LOCK:
         if _PIPE is not None:
-            try:
+            with contextlib.suppress(Exception):   # closing must never raise
                 adapter.close_pipeline(_PIPE)
-            except Exception:  # noqa: BLE001, S110 — closing must never raise
-                pass
         _PIPE, _PIPE_KEY = None, None
     if torch.backends.mps.is_available():
         torch.mps.empty_cache()
@@ -222,7 +223,7 @@ def _get_pipe(device, dtype, backend, quantization, offload_ar, budget, ode_step
     cores = None if vae_core_frames == "auto" else int(vae_core_frames)
     key = _pipe_key(_pick_device(device), dtype, backend, quantization, offload_ar, budget,
                     ode_steps, cores, model, vae_path, revision, vae_revision, offline)
-    if _PIPE is None or _PIPE_KEY != key:
+    if _PIPE is None or key != _PIPE_KEY:
         return load_pipeline(device, dtype, backend, quantization, offload_ar, budget,
                              ode_steps, vae_core_frames, model, vae_choice, vae_custom,
                              revision, vae_revision, offline, progress)
@@ -250,6 +251,11 @@ def _write_local_env(directory: Path, pipe, note: str = "") -> None:
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     except Exception:  # noqa: BLE001, S110 — provenance must never fail a run
         pass
+
+
+def _run_dir(*parts: str) -> Path:
+    """A fresh, time-stamped directory name under RUNS: 20260919-213000-<parts…>."""
+    return RUNS / "-".join((time.strftime("%Y%m%d-%H%M%S"), *parts))
 
 
 def _slug(text: str) -> str:
@@ -339,17 +345,13 @@ PENDING_FILE = "pending.json"
 
 
 def _fsync_fd(fd: int) -> None:
-    try:
+    with contextlib.suppress(OSError):
         os.fsync(fd)
-    except OSError:
-        pass
     # macOS: fsync only reaches the drive cache, F_FULLFSYNC reaches the media.
     # fcntl is absent on Windows; skip the extra flush there.
     if fcntl is not None and hasattr(fcntl, "F_FULLFSYNC"):
-        try:
+        with contextlib.suppress(OSError):
             fcntl.fcntl(fd, fcntl.F_FULLFSYNC)
-        except OSError:
-            pass
 
 
 def _fsync_path(path) -> None:
@@ -360,10 +362,8 @@ def _fsync_path(path) -> None:
     try:
         _fsync_fd(fd)
     finally:
-        try:
+        with contextlib.suppress(OSError):
             os.close(fd)
-        except OSError:
-            pass
 
 
 def _fsync_tree(directory) -> None:
@@ -420,7 +420,7 @@ def _run_generation(pipe, request, outdir, *, abc_sampling, semantic_sampling, p
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     _write_pending(outdir, "running")
-    print(f"[yue2_groove] run start: {outdir}", flush=True)
+    log.info("run start: %s", outdir)
     counts = {"abc": 0, "semantic": 0}
     abc_budget = abc_sampling.max_tokens if request.cot != "off" else 0
     sem_budget = semantic_sampling.max_tokens
@@ -456,13 +456,13 @@ def _run_generation(pipe, request, outdir, *, abc_sampling, semantic_sampling, p
     except Exception as exc:
         _write_pending(outdir, "cancelled" if isinstance(exc, InterruptedError) else "failed",
                        error=f"{type(exc).__name__}: {exc}")
-        print(f"[yue2_groove] run unfinished: {outdir} — {type(exc).__name__}: {exc}", flush=True)
+        log.warning("run unfinished: %s — %s: %s", outdir, type(exc).__name__, exc)
         raise
     # flush the artifacts first, then remove the marker: the run only stops being
     # "pending" once it is actually on disk
     _fsync_tree(outdir)
     _clear_pending(outdir)
-    print(f"[yue2_groove] run done: {outdir}", flush=True)
+    log.info("run done: %s", outdir)
     return song, result, time.perf_counter() - t0
 
 
@@ -516,8 +516,7 @@ def generate(style, lyrics, cot, seed, cfg_scale, abc_text, out_id, preset,
                                ode_steps, vae_core_frames, model, vae_choice, vae_custom,
                                revision, vae_revision, offline, progress)
         progress(0.02, desc="Starting generation…")
-        outdir = RUNS / (f"{time.strftime('%Y%m%d-%H%M%S')}-"
-                         f"{request.id if request.id != 'song' else _slug(style)}")
+        outdir = _run_dir(request.id if request.id != "song" else _slug(style))
         song, result, elapsed = _run_generation(
             pipe, request, outdir, abc_sampling=abc_sampling, semantic_sampling=sem_sampling,
             progress=progress, note=note)
@@ -576,7 +575,7 @@ def generate_all_modes(style, lyrics, seed, cfg_scale, abc_text, out_id,
         pipe, note = _get_pipe(device, dtype, backend, quantization, offload_ar, budget,
                                ode_steps, vae_core_frames, model, vae_choice, vae_custom,
                                revision, vae_revision, offline, progress)
-        root = RUNS / f"{time.strftime('%Y%m%d-%H%M%S')}-allmodes-{_slug(base_id)}"
+        root = _run_dir("allmodes", _slug(base_id))
         results, files, done_dirs = [], [], []
         for position, mode in enumerate(ALL_MODES):
             mode_dir = root / mode
@@ -691,8 +690,7 @@ def plan_only(style, lyrics, cot, seed, cfg_scale, out_id,
                                revision, vae_revision, offline, progress)
         progress(0.05, desc="Planning score…")
         plan = adapter.plan(pipe, request, abc_sampling=abc_sampling, cancelled=_CANCEL.is_set)
-        outdir = RUNS / (f"{time.strftime('%Y%m%d-%H%M%S')}-"
-                         f"{request.id if request.id != 'song' else _slug(style)}-plan")
+        outdir = _run_dir(request.id if request.id != "song" else _slug(style), "plan")
         plan.save(outdir)
         files = [str(outdir / n) for n in ("score.abc", "plan.json", "abc_tokens.npy", "prefix.npy")
                  if (outdir / n).exists()]
@@ -749,7 +747,7 @@ def decode_run(source_dir, latent_file, dec_vae_choice, dec_vae_custom, dec_vae_
         audio = adapter.decode(pipe, latents, full=bool(full_decode), vae=override,
                                on_progress=on_progress)
         seconds = time.perf_counter() - t0
-        outdir = RUNS / f"{time.strftime('%Y%m%d-%H%M%S')}-decode-{_slug(vae_name)}"
+        outdir = _run_dir("decode", _slug(vae_name))
         outdir.mkdir(parents=True, exist_ok=True)
         sf.write(outdir / "audio.flac", audio, 48000, subtype="PCM_24")
         np.save(outdir / "latent.npy", latents.astype(np.float32))
@@ -804,7 +802,7 @@ def batch_generate(jsonl_text, jsonl_file, out_id,
         pipe, note = _get_pipe(device, dtype, backend, quantization, offload_ar, budget,
                                ode_steps, vae_core_frames, model, vae_choice, vae_custom,
                                revision, vae_revision, offline, progress)
-        outdir = RUNS / f"{time.strftime('%Y%m%d-%H%M%S')}-batch-{_slug(out_id or 'batch')}"
+        outdir = _run_dir("batch", _slug(out_id or "batch"))
         outdir.mkdir(parents=True, exist_ok=True)
         allowed = {"style", "tags", "lyrics", "cot", "seed", "abc", "cfg_scale", "id"}
         results, failures = [], 0
@@ -921,7 +919,7 @@ def make_comparison(paths_text, progress=gr.Progress()):
     for src in sources:
         if not (Path(src) / "result.json").is_file():
             raise gr.Error(f"Not a valid YuE2 run directory (result.json missing): {src}")
-    outdir = RUNS / f"{time.strftime('%Y%m%d-%H%M%S')}-comparison"
+    outdir = _run_dir("comparison")
     progress(0.2, desc="Building listening comparison…")
     cmd = [sys.executable, "-m", "yue2_groove.vendor.listen", *sources, "--output", str(outdir)]
     res = subprocess.run(cmd, capture_output=True, timeout=1800, check=False,
@@ -1164,8 +1162,7 @@ def cover_generate(style, lyrics, abc_text, task, keep_voice, seed, cfg_scale,
         pipe, note = _get_pipe(device, dtype, backend, quantization, offload_ar, budget,
                                ode_steps, vae_core_frames, model, vae_choice, vae_custom,
                                revision, vae_revision, offline, progress)
-        outdir = RUNS / (f"{time.strftime('%Y%m%d-%H%M%S')}-cover-"
-                         f"{_slug(request.id if request.id != 'song' else style)}")
+        outdir = _run_dir("cover", _slug(request.id if request.id != "song" else style))
         song, result, elapsed = _run_generation(
             pipe, request, outdir, abc_sampling=abc_sampling, semantic_sampling=sem_sampling,
             progress=progress, note=note)
@@ -1387,7 +1384,7 @@ def _song_stage_track(stage: str) -> str:
     keys = [key for key, _label in _SONG_STAGES]
     current = keys.index(stage) if stage in keys else 0
     cells = []
-    for index, (key, label) in enumerate(_SONG_STAGES):
+    for index, (_key, label) in enumerate(_SONG_STAGES):
         classes = ["bb-stage"]
         if index == current:
             classes.append("bb-stage-current")
@@ -1689,8 +1686,7 @@ def edit_generate(style, lyrics, cot, seed, cfg_scale, abc_text, baseline_abc, s
         pipe, note = _get_pipe(device, dtype, backend, quantization, offload_ar, budget,
                                ode_steps, vae_core_frames, model, vae_choice, vae_custom,
                                revision, vae_revision, offline, progress)
-        outdir = RUNS / (f"{time.strftime('%Y%m%d-%H%M%S')}-edit-"
-                         f"{_slug(request.id if request.id != 'song' else style)}")
+        outdir = _run_dir("edit", _slug(request.id if request.id != "song" else style))
         manifest = edit_flow.build_edit_manifest(
             source_rel=source_rel or "", before_abc=baseline_abc or "", after_abc=abc,
             cot=cot, seed=int(seed), cfg_scale=float(cfg_scale) if cfg_scale else None,
@@ -3332,6 +3328,10 @@ def main():
     # PyTorch initialises the MPS allocator, so the watermark guard applies here
     # too (serve.sh sources it, a direct `python -m yue2_groove` did not).
     config.load_env()
+    # the process log: the same "[yue2_groove] …" lines on stdout that serve.sh
+    # and the Docker entrypoint have always captured
+    logging.basicConfig(level=logging.INFO, format="[yue2_groove] %(message)s",
+                        stream=sys.stdout)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=7860)
@@ -3355,10 +3355,8 @@ def main():
     parser.add_argument("--no-preload", action="store_true", help="Do not preload the model at startup")
     args = parser.parse_args()
     global RUNS
-    if args.runs:
-        RUNS = Path(args.runs).expanduser().resolve()
-    else:
-        RUNS = config.runs_dir()      # honour YUE2_GROOVE_RUNS from .env
+    # --runs wins; otherwise honour YUE2_GROOVE_RUNS from .env
+    RUNS = Path(args.runs).expanduser().resolve() if args.runs else config.runs_dir()
     if args.sheetsage_python:
         os.environ["YUE2_GROOVE_SHEETSAGE_PYTHON"] = args.sheetsage_python
 
@@ -3389,9 +3387,9 @@ def main():
             try:
                 load_pipeline(device, dtype, "torch", "none", False, 24, 32, "auto",
                               args.model, args.vae, "", "", "", False)
-                print("[yue2_groove] model preload complete", flush=True)
+                log.info("model preload complete")
             except Exception as exc:  # noqa: BLE001
-                print(f"[yue2_groove] preload failed (will retry on first generation): {exc}", flush=True)
+                log.warning("preload failed (will retry on first generation): %s", exc)
         threading.Thread(target=preload, daemon=True).start()
     demo.launch(server_name=args.host, server_port=args.port, theme=bb_theme(),
                 css=BEARBONE_CSS,

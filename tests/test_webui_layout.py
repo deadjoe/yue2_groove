@@ -65,7 +65,7 @@ def test_media_queries_never_target_the_outer_frame() -> None:
     for block in blocks:
         for selector in _selectors(block):
             first = selector.split()[0]
-            assert not any(first == tok or first.startswith(tok + ".") or first.startswith(tok + ":")
+            assert not any(first == tok or first.startswith((tok + ".", tok + ":"))
                            for tok in OUTER_FRAME), (
                 f"{selector!r} inside @media only exists prefixed with "
                 "`.gradio-container… .contain` after prefix_css, so it never matches")

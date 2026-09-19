@@ -59,7 +59,21 @@ line-length = 100
 extend-exclude = ["yue2_groove/vendor", "yue2_groove/static"]
 
 [tool.ruff.lint]
-select = ["E4", "E7", "E9", "F", "I", "UP", "RUF", "C4", "ISC", "PLW1510", "S110", "BLE001"]
+select = ["E4", "E7", "E9", "F", "I", "UP", "RUF", "C4", "ISC", "S110", "BLE001",
+          "B", "SIM", "PIE", "RET", "PERF", "PLC", "PLE", "PLW", "T20"]
 # RUF001-003: the UI copy intentionally uses typographic dashes;
-# RUF005: explicit list concatenation in the Gradio wiring reads better than splats.
-ignore = ["RUF001", "RUF002", "RUF003", "RUF005"]
+# RUF005: explicit list concatenation in the Gradio wiring reads better than splats;
+# B008: `progress=gr.Progress()` is how Gradio injects the progress tracker;
+# SIM117: nested `with gr.Row(): with gr.Column():` IS the layout tree;
+# PLC0415: adapter.py imports `yue2` lazily on purpose (the UI must import without it);
+# PLW0603: the pipeline / worker singletons are module state by design;
+# PERF203: a try inside a loop is the per-line protocol of the SheetSage2 driver.
+ignore = ["RUF001", "RUF002", "RUF003", "RUF005", "B008", "SIM117", "PLC0415", "PLW0603",
+          "PERF203"]
+
+[tool.ruff.lint.per-file-ignores]
+# stdout is the protocol of the driver (JSON lines to the parent) and of the scripts
+"yue2_groove/sheetsage_driver.py" = ["T201"]
+"scripts/*" = ["T201"]
+"deploy/*" = ["T201"]
+"tests/*" = ["T201"]

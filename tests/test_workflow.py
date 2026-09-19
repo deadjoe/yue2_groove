@@ -16,7 +16,7 @@ def make_run(root: Path, name: str, kind: str, *, request=None, abc=None, edit_s
              with_baseline=False, finished=False, group_of=None) -> Path:
     d = root / name
     d.mkdir(parents=True)
-    request = request if request is not None else {"id": name.split("-")[-1], "style": "pop",
+    request = request if request is not None else {"id": name.rsplit("-", maxsplit=1)[-1], "style": "pop",
                                                    "lyrics": "la", "cot": "full", "seed": 7}
     if kind == "group":
         (d / "run.json").write_text("{}", encoding="utf-8")

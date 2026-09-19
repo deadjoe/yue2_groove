@@ -307,8 +307,8 @@ def serve(args) -> int:
     model_provenance = provenance(args, model, device, dtype)
     print(READY_PREFIX + json.dumps(
         {"model": args.model, "device": device, "dtype": dtype}, ensure_ascii=False), flush=True)
-    for line in sys.stdin:
-        line = line.strip()
+    for raw in sys.stdin:
+        line = raw.strip()
         if not line:
             continue
         try:

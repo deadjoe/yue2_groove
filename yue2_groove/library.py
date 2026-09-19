@@ -13,6 +13,7 @@ script are ``static/library.css`` and ``static/library.js``.
 """
 from __future__ import annotations
 
+import contextlib
 import html
 import json
 import re
@@ -87,10 +88,8 @@ def _dir_bytes(path: Path) -> int:
     try:
         for entry in path.rglob("*"):
             if entry.is_file():
-                try:
+                with contextlib.suppress(OSError):
                     total += entry.stat().st_size
-                except OSError:
-                    pass
     except OSError:
         pass
     return total
@@ -263,10 +262,8 @@ def details(path) -> dict:
     try:
         for entry in sorted(path.iterdir()):
             if entry.is_file():
-                try:
+                with contextlib.suppress(OSError):
                     files.append({"name": entry.name, "bytes": entry.stat().st_size})
-                except OSError:
-                    pass
     except OSError:
         pass
     return {"path": str(path), "request": request, "result": result, "config": config,
@@ -418,9 +415,9 @@ def render_info_html(item: dict, det: dict) -> str:
     provenance = []
     for key, name in (("mot", "MODEL"), ("vae", "VAE")):
         for filename, meta in (((result.get("weights") or {}).get(key) or {}).get("files") or {}).items():
-            meta = meta or {}
+            info = meta or {}
             provenance.append((f"{name} WEIGHT",
-                               f"{filename} · {format_bytes(meta.get('bytes'))} · {str(meta.get('sha256', ''))[:12]}"))
+                               f"{filename} · {format_bytes(info.get('bytes'))} · {str(info.get('sha256', ''))[:12]}"))
     if config.get("runtime_sha256"):
         provenance.append(("RUNTIME SHA", str(config["runtime_sha256"])[:12]))
     if config.get("validation_status"):
@@ -431,9 +428,9 @@ def render_info_html(item: dict, det: dict) -> str:
     if files:
         out.append('<div class="bb-lib-section">files</div>'
                    '<table class="bb-lib-table bb-lib-filetable"><tbody>')
-        for entry in files:
-            out.append(f'<tr><td>{html.escape(entry["name"])}</td>'
-                       f'<td>{html.escape(format_bytes(entry["bytes"]))}</td></tr>')
+        out.extend(f'<tr><td>{html.escape(entry["name"])}</td>'
+                   f'<td>{html.escape(format_bytes(entry["bytes"]))}</td></tr>'
+                   for entry in files)
         out.append('</tbody></table>')
     out.append('</div>')
     return "".join(out)

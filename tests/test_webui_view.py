@@ -208,7 +208,7 @@ def test_render_song_with_a_song_shows_stage_score_player(isolated_runs: Path) -
     assert out[3].count("bb-stage-current") == 1
     assert out[5]["visible"] is True and out[5]["value"].endswith("audio.flac")
     assert 'data-bb-abc-text="' in out[6] and "X:1" in out[6]
-    visible = {key: part["visible"] for key, part in zip(webui._SONG_ACTIONS, out[7:14])}
+    visible = {key: part["visible"] for key, part in zip(webui._SONG_ACTIONS, out[7:14], strict=True)}
     assert visible == {"listen": True, "render": False, "edit": True, "retry": True,
                        "check": False, "send": False, "library": True}
     assert out[10]["value"] == "TRY SEED 6"
@@ -218,7 +218,7 @@ def test_render_song_with_a_song_shows_stage_score_player(isolated_runs: Path) -
 def test_render_song_plan_offers_render(isolated_runs: Path) -> None:
     make_plan(isolated_runs)
     out = webui.render_song(str((isolated_runs / "20260913-130000-plan").resolve()))
-    visible = {key: part["visible"] for key, part in zip(webui._SONG_ACTIONS, out[7:14])}
+    visible = {key: part["visible"] for key, part in zip(webui._SONG_ACTIONS, out[7:14], strict=True)}
     assert visible["render"] is True and visible["listen"] is False
     assert out[5]["visible"] is False      # a plan has no audio yet
 
@@ -226,7 +226,7 @@ def test_render_song_plan_offers_render(isolated_runs: Path) -> None:
 def test_render_song_transcription_offers_send(isolated_runs: Path) -> None:
     make_transcription(isolated_runs)
     out = webui.render_song("transcriptions/20260913-140000-ref")
-    visible = {key: part["visible"] for key, part in zip(webui._SONG_ACTIONS, out[7:14])}
+    visible = {key: part["visible"] for key, part in zip(webui._SONG_ACTIONS, out[7:14], strict=True)}
     assert visible["render"] is True and visible["send"] is True
     assert "TRANSCRIPTION" in out[2]
 

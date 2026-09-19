@@ -26,6 +26,7 @@ the next call starts a fresh one.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import queue
@@ -212,10 +213,8 @@ def _terminate(process: subprocess.Popen) -> None:
 
 def _read_failure(output_dir: Path, stderr_tail: str) -> str:
     record = {}
-    try:
+    with contextlib.suppress(OSError, ValueError):
         record = json.loads((output_dir / "failure.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        pass
     message = str(record.get("error") or "").strip()
     warnings = record.get("warnings") or []
     if warnings:
@@ -272,7 +271,7 @@ class _Worker:
             except queue.Empty:
                 if not self.alive():
                     raise SheetsageFailed(
-                        "SheetSage2 worker exited while loading: " + self.stderr_tail())
+                        "SheetSage2 worker exited while loading: " + self.stderr_tail()) from None
                 continue
             if line is None:
                 raise SheetsageFailed("SheetSage2 worker exited while loading: " + self.stderr_tail())
@@ -358,10 +357,9 @@ class _Worker:
                 done, total = event.get("done"), event.get("total")
                 fraction = (done / total) if (isinstance(done, (int, float)) and total) else None
                 if progress is not None:
-                    try:
+                    # a UI callback must never kill the job
+                    with contextlib.suppress(Exception):
                         progress(fraction, "Transcribing…" + (f" {done}/{total}" if total else ""))
-                    except Exception:  # noqa: BLE001, S110 — a UI callback must never kill the job
-                        pass
             elif line.startswith(RESULT_PREFIX):
                 try:
                     reply = json.loads(line[len(RESULT_PREFIX):])
@@ -411,10 +409,8 @@ def _reap_idle_worker() -> bool:
 def _reaper_loop() -> None:
     while True:
         time.sleep(_REAPER_TICK)
-        try:
+        with contextlib.suppress(Exception):   # the reaper must never kill the process
             _reap_idle_worker()
-        except Exception:  # noqa: BLE001, S110 — the reaper must never kill the process
-            pass
 
 
 def _ensure_worker(cmd: list[str], idle_seconds: float) -> _Worker:
@@ -491,10 +487,8 @@ def transcribe(audio_path, *, output_dir=None, task: str = "melody-full",
 
     def report(fraction, description):
         if progress is not None:
-            try:
+            with contextlib.suppress(Exception):   # a UI callback must never kill the job
                 progress(fraction, description)
-            except Exception:  # noqa: BLE001, S110 — a UI callback must never kill the job
-                pass
 
     warm = config.sheetsage_keep_warm() if keep_warm is None else bool(keep_warm)
     if warm:
@@ -546,10 +540,8 @@ def transcribe(audio_path, *, output_dir=None, task: str = "melody-full",
             lines.put(None)
 
     def pump_stderr():
-        try:
+        with contextlib.suppress(OSError, ValueError):   # the pipe closes when the child exits
             stderr_lines.extend(process.stderr)
-        except (OSError, ValueError):  # the pipe closes when the child exits
-            pass
 
     stdout_thread = threading.Thread(target=pump_stdout, daemon=True)
     stderr_thread = threading.Thread(target=pump_stderr, daemon=True)
