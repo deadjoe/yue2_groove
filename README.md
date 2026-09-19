@@ -383,7 +383,12 @@ The lint rule set lives in `[tool.ruff]` (pyproject.toml) so CI and local runs u
 same gate; `yue2_groove/vendor/` is excluded because it is an upstream byte-identical
 copy (see NOTICE).
 
-- `yue2_groove/webui.py` — the Gradio app (all tabs, theme, client-side helpers).
+- `yue2_groove/webui/` — the Gradio app: `runtime.py` (the one pipeline, the one job, the
+  run directory), one `*_tab.py` per Studio tab, `song_view.py` (the SONG director),
+  `theme.py` + `frontend.py` (stylesheet assembly, page head, bundled scripts),
+  `layout.py` (`build_ui`), `cli.py` (`main`).
+- `yue2_groove/static/` — the bundled frontend: the stylesheet and every client script
+  (served through `allowed_paths`; `tests/test_static_assets.py` is their gate).
 - `yue2_groove/library.py` — the Library backend; standard library only, reads run
   directories by file convention and never imports `yue2`.
 - `yue2_groove/adapter.py` — every call into `yue2`; keep it that way.

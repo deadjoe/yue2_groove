@@ -304,8 +304,9 @@ def test_yue2_is_imported_only_by_adapter_py() -> None:
 
 
 def test_webui_never_imports_transformers() -> None:
-    assert not any(name == "transformers" or name.startswith("transformers.")
-                   for name in _imported_modules(PACKAGE / "webui.py"))
+    for path in sorted((PACKAGE / "webui").glob("*.py")):
+        assert not any(name == "transformers" or name.startswith("transformers.")
+                       for name in _imported_modules(path)), path.name
 
 
 def test_sheetsage_env_does_not_leak_into_yue2_config(monkeypatch) -> None:

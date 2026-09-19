@@ -23,7 +23,7 @@ def test_release_version_is_consistent() -> None:
 
 
 def test_footer_credits_the_repository(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr(webui, "RUNS", tmp_path / "runs")
+    monkeypatch.setattr(webui.runtime, "RUNS", tmp_path / "runs")
     (tmp_path / "runs").mkdir()
     demo = webui.build_ui({"device": "cpu", "dtype": "float32", "model": "m-a-p/YuE2-3B",
                            "vae": "standard", "tab": 0, "status": ""})

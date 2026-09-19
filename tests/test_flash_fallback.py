@@ -70,34 +70,34 @@ def _probe(monkeypatch, value):
     def probe(device=None):
         calls.append(device)
         return value
-    monkeypatch.setattr(webui.adapter, "cuda_flash_attention_usable", probe)
+    monkeypatch.setattr(webui.runtime.adapter, "cuda_flash_attention_usable", probe)
     return calls
 
 
 def test_cuda_torch_is_remapped_only_when_flash_is_unusable(monkeypatch):
     _probe(monkeypatch, False)
-    backend, reason = webui._effective_backend("cuda", "torch")
+    backend, reason = webui.runtime.effective_backend("cuda", "torch")
     assert backend == "torch-eager"
-    assert reason == webui.FLASH_FALLBACK_NOTE and "FlashAttention" in reason
+    assert reason == webui.runtime.FLASH_FALLBACK_NOTE and "FlashAttention" in reason
 
 
 def test_cuda_torch_keeps_cuda_graphs_when_flash_works(monkeypatch):
     _probe(monkeypatch, True)
-    assert webui._effective_backend("cuda", "torch") == ("torch", "")
+    assert webui.runtime.effective_backend("cuda", "torch") == ("torch", "")
 
 
 @pytest.mark.parametrize("device", ["mps", "cpu"])
 @pytest.mark.parametrize("backend", ["torch", "torch-eager"])
 def test_non_cuda_devices_never_consult_the_probe(monkeypatch, device, backend):
     calls = _probe(monkeypatch, False)                   # would remap if it were consulted
-    assert webui._effective_backend(device, backend) == (backend, "")
+    assert webui.runtime.effective_backend(device, backend) == (backend, "")
     assert calls == []
 
 
 @pytest.mark.parametrize("backend", ["torch-eager", "vllm"])
 def test_other_cuda_backends_are_untouched(monkeypatch, backend):
     calls = _probe(monkeypatch, False)
-    assert webui._effective_backend("cuda", backend) == (backend, "")
+    assert webui.runtime.effective_backend("cuda", backend) == (backend, "")
     assert calls == []
 
 
@@ -108,20 +108,20 @@ def test_load_pipeline_records_the_fallback_in_the_note_and_cache_key(monkeypatc
     def fake_load(model, **kwargs):
         seen.update(kwargs)
         return object(), "bfloat16"
-    monkeypatch.setattr(webui.adapter, "load_pipeline", fake_load)
-    monkeypatch.setattr(webui, "unload_pipeline", lambda: None)
-    monkeypatch.setattr(webui, "_pick_device", lambda device: "cuda")
-    monkeypatch.setattr(webui, "resolve_vae", lambda choice, custom: ("/vae", "standard"))
+    monkeypatch.setattr(webui.runtime.adapter, "load_pipeline", fake_load)
+    monkeypatch.setattr(webui.runtime, "unload_pipeline", lambda: None)
+    monkeypatch.setattr(webui.runtime, "pick_device", lambda device: "cuda")
+    monkeypatch.setattr(webui.runtime, "resolve_vae", lambda choice, custom: ("/vae", "standard"))
     _probe(monkeypatch, False)
-    monkeypatch.setattr(webui, "_PIPE", None)
-    monkeypatch.setattr(webui, "_PIPE_KEY", None)
+    monkeypatch.setattr(webui.runtime, "_PIPE", None)
+    monkeypatch.setattr(webui.runtime, "_PIPE_KEY", None)
     args = ("auto", "bfloat16", "torch", "none", False, 24, 32, "auto", "m", "standard", "",
             "", "", False)
-    pipe, note = webui.load_pipeline(*args, progress=None)
+    pipe, note = webui.runtime.load_pipeline(*args, progress=None)
     assert seen["backend"] == "torch-eager"
-    assert "backend=torch-eager" in note and webui.FLASH_FALLBACK_NOTE in note
+    assert "backend=torch-eager" in note and webui.runtime.FLASH_FALLBACK_NOTE in note
     # A second call with the same UI settings reuses the pipe and repeats the reason.
-    pipe2, note2 = webui.load_pipeline(*args, progress=None)
+    pipe2, note2 = webui.runtime.load_pipeline(*args, progress=None)
     assert pipe2 is pipe and note2.startswith("Model ready") and "torch-eager" in note2
 
 
@@ -131,14 +131,14 @@ def test_load_pipeline_passes_torch_through_when_flash_works(monkeypatch):
     def fake_load(model, **kwargs):
         seen.update(kwargs)
         return object(), "bfloat16"
-    monkeypatch.setattr(webui.adapter, "load_pipeline", fake_load)
-    monkeypatch.setattr(webui, "unload_pipeline", lambda: None)
-    monkeypatch.setattr(webui, "_pick_device", lambda device: "cuda")
-    monkeypatch.setattr(webui, "resolve_vae", lambda choice, custom: ("/vae", "standard"))
+    monkeypatch.setattr(webui.runtime.adapter, "load_pipeline", fake_load)
+    monkeypatch.setattr(webui.runtime, "unload_pipeline", lambda: None)
+    monkeypatch.setattr(webui.runtime, "pick_device", lambda device: "cuda")
+    monkeypatch.setattr(webui.runtime, "resolve_vae", lambda choice, custom: ("/vae", "standard"))
     _probe(monkeypatch, True)
-    monkeypatch.setattr(webui, "_PIPE", None)
-    monkeypatch.setattr(webui, "_PIPE_KEY", None)
-    _pipe, note = webui.load_pipeline("auto", "bfloat16", "torch", "none", False, 24, 32, "auto",
+    monkeypatch.setattr(webui.runtime, "_PIPE", None)
+    monkeypatch.setattr(webui.runtime, "_PIPE_KEY", None)
+    _pipe, note = webui.runtime.load_pipeline("auto", "bfloat16", "torch", "none", False, 24, 32, "auto",
                                       "m", "standard", "", "", "", False, progress=None)
     assert seen["backend"] == "torch"
     assert "backend=torch " in note and "FlashAttention" not in note

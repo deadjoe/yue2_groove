@@ -18,7 +18,7 @@ webui = pytest.importorskip("yue2_groove.webui")
 
 @pytest.fixture(autouse=True)
 def isolated_runs(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(webui, "RUNS", tmp_path / "runs")
+    monkeypatch.setattr(webui.runtime, "RUNS", tmp_path / "runs")
     (tmp_path / "runs").mkdir()
     return tmp_path / "runs"
 
@@ -56,7 +56,7 @@ def install_fakes(monkeypatch, state):
         if progress:
             progress(0.5)
         if state.get("cancel_after") is not None and len(state["calls"]) >= state["cancel_after"]:
-            webui._CANCEL.set()
+            webui.runtime.CANCEL.set()
         if state.get("fail_mode") == request.cot:
             raise RuntimeError(f"{request.cot} exploded")
         (outdir / "audio.flac").write_bytes(b"fLaC")
@@ -68,16 +68,16 @@ def install_fakes(monkeypatch, state):
         return "/tmp/index.html", '<a href="/x">OPEN COMPARISON PAGE ↗</a>', \
             "page: /tmp/index.html\nneeds_review: 0"
 
-    monkeypatch.setattr(webui, "_get_pipe", lambda *a, **k: (object(), "note"))
-    monkeypatch.setattr(webui, "_run_generation", fake_run_generation)
-    monkeypatch.setattr(webui, "make_comparison", fake_comparison)
+    monkeypatch.setattr(webui.runtime, "get_pipe", lambda *a, **k: (object(), "note"))
+    monkeypatch.setattr(webui.runtime, "run_generation", fake_run_generation)
+    monkeypatch.setattr(webui.tools_tab, "make_comparison", fake_comparison)
 
 
 def test_all_modes_runs_full_melody_off_and_builds_the_comparison(monkeypatch) -> None:
     state = {"calls": []}
     install_fakes(monkeypatch, state)
 
-    yields = list(webui.generate_all_modes(*all_modes_args()))
+    yields = list(webui.generate_tab.generate_all_modes(*all_modes_args()))
     assert all(len(chunk) == 7 for chunk in yields)          # matches the 6 wired outputs
     status, files, link, *_idle = yields[-1]
 
@@ -103,7 +103,7 @@ def test_all_modes_retains_a_failed_mode_and_compares_the_rest(monkeypatch) -> N
     state = {"calls": [], "fail_mode": "melody"}
     install_fakes(monkeypatch, state)
 
-    yields = list(webui.generate_all_modes(*all_modes_args()))
+    yields = list(webui.generate_tab.generate_all_modes(*all_modes_args()))
     assert all(len(chunk) == 7 for chunk in yields)
     status, _files, _link, *_idle = yields[-1]
 
@@ -120,7 +120,7 @@ def test_all_modes_cancel_stops_between_modes(monkeypatch) -> None:
     state = {"calls": [], "cancel_after": 1}
     install_fakes(monkeypatch, state)
 
-    yields = list(webui.generate_all_modes(*all_modes_args()))
+    yields = list(webui.generate_tab.generate_all_modes(*all_modes_args()))
     status, *_rest = yields[-1]
 
     assert [call["cot"] for call in state["calls"]] == ["full"]
@@ -134,17 +134,17 @@ def test_all_modes_cancel_stops_between_modes(monkeypatch) -> None:
 
 def test_all_modes_refuses_an_abc_input() -> None:
     with pytest.raises(gr.Error, match="text-only"):
-        next(webui.generate_all_modes(*all_modes_args(abc_text="X:1\nT:\nrest")))
+        next(webui.generate_tab.generate_all_modes(*all_modes_args(abc_text="X:1\nT:\nrest")))
 
 
 def test_all_modes_respects_the_running_lock() -> None:
-    webui._RUNNING.acquire()
+    webui.runtime.RUNNING.acquire()
     try:
-        yields = list(webui.generate_all_modes(*all_modes_args()))
+        yields = list(webui.generate_tab.generate_all_modes(*all_modes_args()))
         assert all(len(chunk) == 7 for chunk in yields)
         assert "already running" in yields[0][0]
     finally:
-        webui._RUNNING.release()
+        webui.runtime.RUNNING.release()
 
 
 def test_scan_batches_includes_all_modes_groups(isolated_runs: Path) -> None:
@@ -153,7 +153,7 @@ def test_scan_batches_includes_all_modes_groups(isolated_runs: Path) -> None:
         (group / mode).mkdir(parents=True)
         (group / mode / "result.json").write_text("{}", encoding="utf-8")
     (group / "run.json").write_text("{}", encoding="utf-8")
-    choices = webui._scan_batches()
+    choices = webui.generate_tab.scan_batches()
     assert [label for label, _path in choices] and "-allmodes-" in choices[0][0]
-    filled = webui._fill_from_batch(choices[0][0])
+    filled = webui.generate_tab.fill_from_batch(choices[0][0])
     assert filled.splitlines() == [str(group / "full"), str(group / "melody"), str(group / "off")]

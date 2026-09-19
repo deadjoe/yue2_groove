@@ -56,11 +56,11 @@ def _build():
 def isolated_runs(tmp_path: Path, monkeypatch):
     runs = tmp_path / "runs"
     runs.mkdir()
-    monkeypatch.setattr(webui, "RUNS", runs)
+    monkeypatch.setattr(webui.runtime, "RUNS", runs)
 
 
 def test_media_queries_never_target_the_outer_frame() -> None:
-    blocks = _media_blocks(webui.BEARBONE_CSS)
+    blocks = _media_blocks(webui.theme.BEARBONE_CSS)
     assert blocks, "the phone / tablet / touch rules are expected to be @media blocks"
     for block in blocks:
         for selector in _selectors(block):
@@ -72,7 +72,7 @@ def test_media_queries_never_target_the_outer_frame() -> None:
 
 
 def test_frame_scales_with_clamp_instead_of_a_breakpoint() -> None:
-    css = webui.BASE_CSS
+    css = webui.theme.BASE_CSS
     frame = css.split(".gradio-container {", 1)[1].split("}", 1)[0]
     assert "clamp(" in frame and "padding:" in frame
     assert "max-width: 1400px !important" in frame
@@ -86,15 +86,15 @@ def test_blocks_fill_width_removes_gradios_width_steps() -> None:
 
 def test_tab_strip_container_query_rides_in_the_head() -> None:
     # prefix_css drops @container from css=; the head is mounted verbatim, after it
-    assert "@container (" not in webui.BEARBONE_CSS
-    head = webui.LAYOUT_HEAD_CSS
+    assert "@container (" not in webui.theme.BEARBONE_CSS
+    head = webui.frontend.LAYOUT_HEAD_CSS
     assert head.startswith('<style id="bb-layout">') and head.rstrip().endswith("</style>")
     assert "#bb-main { container-type: inline-size; }" in head
     assert "@container (width <= 900px)" in head and "@container (width <= 660px)" in head
     assert ".tabs .overflow-dropdown { display: contents !important; }" in head
-    assert head in webui._head_html("song")
+    assert head in webui.frontend.head_html("song")
     # the viewport copies are gone: one rule set, keyed on the column that holds the tabs
-    for block in _media_blocks(webui.BEARBONE_CSS):
+    for block in _media_blocks(webui.theme.BEARBONE_CSS):
         assert ".tab-wrapper" not in block and ".overflow-menu" not in block
 
 
@@ -109,6 +109,6 @@ def test_tabs_live_in_the_queried_column() -> None:
 def test_empty_chrome_placeholders_collapse() -> None:
     # gr.HTML pads an empty .html-container 12px top and bottom; two of them
     # plus the column gaps stacked to a blank 88px band under the header
-    css = webui.BASE_CSS
+    css = webui.theme.BASE_CSS
     assert ("#bb-current-band-wrap .html-container, #bb-busy-wrap .html-container "
             "{ padding: 0 !important; }") in css

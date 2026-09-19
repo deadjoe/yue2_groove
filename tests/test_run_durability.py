@@ -43,20 +43,20 @@ class _Song:
 
 def _run(monkeypatch, tmp_path, *, fail=None):
     outdir = tmp_path / "runs" / "20260913-120000-Test"
-    monkeypatch.setattr(webui.adapter, "generate", lambda *a, **k: _Song(fail))
-    return webui._run_generation(
+    monkeypatch.setattr(webui.runtime.adapter, "generate", lambda *a, **k: _Song(fail))
+    return webui.runtime.run_generation(
         object(), _Request(), outdir, abc_sampling=_Sampling(), semantic_sampling=_Sampling(),
         progress=lambda *a, **k: None, note=""), outdir
 
 
 def _pending(outdir: Path) -> dict:
-    return json.loads((outdir / webui.PENDING_FILE).read_text(encoding="utf-8"))
+    return json.loads((outdir / webui.runtime.PENDING_FILE).read_text(encoding="utf-8"))
 
 
 def test_a_finished_run_clears_its_pending_marker(tmp_path, monkeypatch) -> None:
     _result, outdir = _run(monkeypatch, tmp_path)
     assert (outdir / "audio.flac").is_file() and (outdir / "result.json").is_file()
-    assert not (outdir / webui.PENDING_FILE).exists()   # cleared only after the flush
+    assert not (outdir / webui.runtime.PENDING_FILE).exists()   # cleared only after the flush
 
 
 def test_a_failed_run_keeps_an_incomplete_marker(tmp_path, monkeypatch) -> None:
@@ -78,7 +78,7 @@ def test_library_lists_and_labels_an_incomplete_run(tmp_path) -> None:
     run = runs / "20260913-120000-Grand-piano"
     run.mkdir(parents=True)
     (run / "audio.flac").write_bytes(b"fLaC")
-    (run / webui.PENDING_FILE).write_text(
+    (run / webui.runtime.PENDING_FILE).write_text(
         json.dumps({"status": "failed", "error": "MPS backend out of memory"}),
         encoding="utf-8")
 
@@ -97,7 +97,7 @@ def test_library_lists_a_run_that_only_has_the_marker(tmp_path) -> None:
     runs = tmp_path / "runs"
     run = runs / "20260913-120000-Grand-piano"
     run.mkdir(parents=True)
-    (run / webui.PENDING_FILE).write_text('{"status": "running"}', encoding="utf-8")
+    (run / webui.runtime.PENDING_FILE).write_text('{"status": "running"}', encoding="utf-8")
     items = library.scan(runs)
     assert len(items) == 1 and items[0]["pending"] is True
     assert "INCOMPLETE" in library.label(items[0])
@@ -107,7 +107,7 @@ def test_a_cancelled_pending_only_run_can_be_deleted(tmp_path) -> None:
     runs = tmp_path / "runs"
     run = runs / "20260914-013606-Grand_Piano_CFG15"
     run.mkdir(parents=True)
-    (run / webui.PENDING_FILE).write_text('{"status": "cancelled"}', encoding="utf-8")
+    (run / webui.runtime.PENDING_FILE).write_text('{"status": "cancelled"}', encoding="utf-8")
     assert [item["rel"] for item in library.scan(runs)] == ["20260914-013606-Grand_Piano_CFG15"]
 
     ok, message = library.delete(runs, ["20260914-013606-Grand_Piano_CFG15"])
@@ -125,17 +125,17 @@ def test_delete_still_refuses_a_directory_without_artifacts(tmp_path) -> None:
 
 def test_edit_and_cover_choices_skip_incomplete_runs(tmp_path, monkeypatch) -> None:
     runs = tmp_path / "runs"
-    monkeypatch.setattr(webui, "RUNS", runs)
+    monkeypatch.setattr(webui.runtime, "RUNS", runs)
     good = runs / "20260913-120000-Good"
     good.mkdir(parents=True)
     (good / "score.abc").write_text("X:1\nK:C\nC4|\n", encoding="utf-8")
     bad = runs / "20260913-130000-Bad"
     bad.mkdir(parents=True)
-    (bad / webui.PENDING_FILE).write_text('{"status": "failed"}', encoding="utf-8")
+    (bad / webui.runtime.PENDING_FILE).write_text('{"status": "failed"}', encoding="utf-8")
 
-    assert [value for _label, value in webui.edit_choices()["choices"]] == \
+    assert [value for _label, value in webui.edit_tab.edit_choices()["choices"]] == \
         ["20260913-120000-Good"]
-    assert [value for _label, value in webui.cover_choices()["choices"]] == \
+    assert [value for _label, value in webui.cover_tab.cover_choices()["choices"]] == \
         ["20260913-120000-Good"]
     # the Library itself still shows the incomplete run
     assert {item["rel"] for item in library.scan(runs)} == \
@@ -146,11 +146,11 @@ def test_fsync_fd_without_fcntl(tmp_path, monkeypatch):
     """Windows has no fcntl; durability must still fsync via os.fsync alone."""
     import os
 
-    monkeypatch.setattr(webui, "fcntl", None)
+    monkeypatch.setattr(webui.runtime, "fcntl", None)
     path = tmp_path / "artifact.bin"
     path.write_bytes(b"ok")
     fd = os.open(path, os.O_RDONLY)
     try:
-        webui._fsync_fd(fd)  # must not raise when fcntl is missing
+        webui.runtime._fsync_fd(fd)  # must not raise when fcntl is missing
     finally:
         os.close(fd)

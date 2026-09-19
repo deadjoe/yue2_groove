@@ -25,11 +25,11 @@ VENDORED = {"abcjs-basic-min.js"}
 
 
 def _referenced_files() -> list[str]:
-    return re.findall(r'<script src="/gradio_api/file=[^"]*/static/([^"]+)"', webui._head_html("auto"))
+    return re.findall(r'<script src="/gradio_api/file=[^"]*/static/([^"]+)"', webui.frontend.head_html("auto"))
 
 
 def _inline_scripts() -> list[str]:
-    return re.findall(r"<script>(.*?)</script>", webui._head_html("auto"), flags=re.S)
+    return re.findall(r"<script>(.*?)</script>", webui.frontend.head_html("auto"), flags=re.S)
 
 
 def _node_check(source: str, label: str) -> None:
@@ -50,7 +50,7 @@ def test_every_bundled_script_is_referenced_once_and_exists() -> None:
 
 
 def test_server_data_precedes_the_script_that_reads_it() -> None:
-    head = webui._head_html("auto")
+    head = webui.frontend.head_html("auto")
     for data, script in (("__BB_TIPS__", "tips.js"), ("__BB_EXAMPLES__", "example.js"),
                          ("__BB_SAMPLING_DEFAULTS__", "sampling-knobs.js"),
                          ("__BB_VIEW_MODE__", "view.js")):
@@ -77,12 +77,12 @@ def test_inline_head_scripts_parse() -> None:
 def test_event_js_snippets_parse() -> None:
     # the `js=` handlers Gradio wraps are arrow functions: parse them as expressions
     for name in ("THEME_TOGGLE_JS", "RAIL_TOGGLE_JS", "SAMPLING_VIEW_TOGGLE_JS", "SONG_LISTEN_JS"):
-        _node_check("(" + getattr(webui, name) + ")", name)
-    _node_check("(" + webui.VIEW_SET_JS("song") + ")", "VIEW_SET_JS")
+        _node_check("(" + getattr(webui.frontend, name) + ")", name)
+    _node_check("(" + webui.frontend.VIEW_SET_JS("song") + ")", "VIEW_SET_JS")
 
 
 def test_stylesheets_are_files_and_joined_in_order() -> None:
-    css = webui.BEARBONE_CSS
+    css = webui.theme.BEARBONE_CSS
     base = config.static_text("bearbone.css")
     lib = config.static_text("library.css")
     assert base in css and lib in css
