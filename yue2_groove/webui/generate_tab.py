@@ -72,8 +72,9 @@ def generate(style, lyrics, cot, seed, cfg_scale, abc_text, out_id, preset,
              progress=gr.Progress()):
     """Generator: disables the action buttons until the run finishes."""
     style, lyrics = runtime.request_texts(style, lyrics)   # empty input is an error
-    abc_sampling = runtime.sampling(abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max, "ABC phase")
-    sem_sampling = runtime.sampling(sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max, "semantic phase")
+    abc_sampling, sem_sampling = runtime.sampling_pair(
+        abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
+        sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max)
     kwargs = {}
     if (out_id or "").strip():
         kwargs["id"] = out_id.strip()
@@ -90,20 +91,20 @@ def generate(style, lyrics, cot, seed, cfg_scale, abc_text, out_id, preset,
     except (ValueError, TypeError) as exc:
         raise gr.Error(f"Invalid request: {exc}") from exc
 
-    runtime.CANCEL.clear()
-    if not runtime.RUNNING.acquire(blocking=False):
+    settings = runtime.RuntimeSettings(
+        device, dtype, backend, quantization, offload_ar, budget, ode_steps,
+        vae_core_frames, model, vae_choice, vae_custom, revision, vae_revision, offline)
+    if not runtime.try_start_job():
         # A fast double-click can queue a second run before the button disables.
         # Keep the buttons as they are (the running job owns them).
-        yield gr.update(), gr.update(), "Another job is already running — wait for it to finish",\
+        yield gr.update(), gr.update(), runtime.BUSY_MESSAGE,\
             gr.update(), gr.update(), gr.update(), gr.skip()
         return
     busy = (gr.update(interactive=False), gr.update(interactive=False))
     idle = (gr.update(interactive=True), gr.update(interactive=True))
     try:
         yield gr.update(), gr.update(), "Starting generation…", gr.update(), *busy, gr.skip()
-        pipe, note = runtime.get_pipe(device, dtype, backend, quantization, offload_ar, budget,
-                               ode_steps, vae_core_frames, model, vae_choice, vae_custom,
-                               revision, vae_revision, offline, progress)
+        pipe, note = runtime.get_pipe(settings, progress)
         progress(0.02, desc="Starting generation…")
         outdir = runtime.run_dir(request.id if request.id != "song" else runtime.slug(style))
         song, result, elapsed = runtime.run_generation(
@@ -112,13 +113,10 @@ def generate(style, lyrics, cot, seed, cfg_scale, abc_text, out_id, preset,
         yield str(outdir / "audio.flac"), (song.abc or ""),\
             runtime.generation_status(song, result, outdir, elapsed, request, note),\
             runtime.artifact_files(outdir, bool(song.abc)), *idle, str(outdir)
-    except InterruptedError as exc:
-        yield gr.update(), gr.update(), f"Cancelled: {exc}", gr.update(), *idle, gr.skip()
-    except Exception as exc:  # noqa: BLE001
-        yield gr.update(), gr.update(),\
-            f"Generation failed: {type(exc).__name__}: {exc}", gr.update(), *idle, gr.skip()
+    except Exception as exc:  # noqa: BLE001 — the UI reports, never crashes
+        yield gr.update(), gr.update(), runtime.failure_text(exc), gr.update(), *idle, gr.skip()
     finally:
-        runtime.RUNNING.release()
+        runtime.end_job()
 
 
 ALL_MODES = ("full", "melody", "off")
@@ -147,13 +145,15 @@ def generate_all_modes(style, lyrics, seed, cfg_scale, abc_text, out_id,
         adapter.song_request(style=style, lyrics=lyrics, cot="full", seed=int(seed), id=base_id)
     except (ValueError, TypeError) as exc:
         raise gr.Error(f"Invalid request: {exc}") from exc
-    abc_sampling = runtime.sampling(abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max, "ABC phase")
-    sem_sampling = runtime.sampling(sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max,
-                             "semantic phase")
+    abc_sampling, sem_sampling = runtime.sampling_pair(
+        abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
+        sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max)
 
-    runtime.CANCEL.clear()
-    if not runtime.RUNNING.acquire(blocking=False):
-        yield ("Another job is already running — wait for it to finish",
+    settings = runtime.RuntimeSettings(
+        device, dtype, backend, quantization, offload_ar, budget, ode_steps,
+        vae_core_frames, model, vae_choice, vae_custom, revision, vae_revision, offline)
+    if not runtime.try_start_job():
+        yield (runtime.BUSY_MESSAGE,
                gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.skip())
         return
     busy = (gr.update(interactive=False),) * 3
@@ -161,9 +161,7 @@ def generate_all_modes(style, lyrics, seed, cfg_scale, abc_text, out_id,
     try:
         yield ("Starting ALL MODES (full → melody → off)…",
                gr.update(), gr.update(), *busy, gr.skip())
-        pipe, note = runtime.get_pipe(device, dtype, backend, quantization, offload_ar, budget,
-                               ode_steps, vae_core_frames, model, vae_choice, vae_custom,
-                               revision, vae_revision, offline, progress)
+        pipe, note = runtime.get_pipe(settings, progress)
         root = runtime.run_dir("allmodes", runtime.slug(base_id))
         results, files, done_dirs = [], [], []
         for position, mode in enumerate(ALL_MODES):
@@ -244,7 +242,7 @@ def generate_all_modes(style, lyrics, seed, cfg_scale, abc_text, out_id,
         yield (f"ALL MODES failed: {type(exc).__name__}: {exc}",
                gr.update(), gr.update(), *idle, gr.skip())
     finally:
-        runtime.RUNNING.release()
+        runtime.end_job()
 
 
 def plan_only(style, lyrics, cot, seed, cfg_scale, out_id,
@@ -265,18 +263,18 @@ def plan_only(style, lyrics, cot, seed, cfg_scale, out_id,
     except (ValueError, TypeError) as exc:
         raise gr.Error(f"Invalid request: {exc}") from exc
 
-    runtime.CANCEL.clear()
-    if not runtime.RUNNING.acquire(blocking=False):
-        yield gr.update(), "Another job is already running — wait for it to finish",\
+    settings = runtime.RuntimeSettings(
+        device, dtype, backend, quantization, offload_ar, budget, ode_steps,
+        vae_core_frames, model, vae_choice, vae_custom, revision, vae_revision, offline)
+    if not runtime.try_start_job():
+        yield gr.update(), runtime.BUSY_MESSAGE,\
             gr.update(), gr.update(), gr.update(), gr.skip()
         return
     busy = (gr.update(interactive=False), gr.update(interactive=False))
     idle = (gr.update(interactive=True), gr.update(interactive=True))
     try:
         yield gr.update(), "Planning score…", gr.update(), *busy, gr.skip()
-        pipe, note = runtime.get_pipe(device, dtype, backend, quantization, offload_ar, budget,
-                               ode_steps, vae_core_frames, model, vae_choice, vae_custom,
-                               revision, vae_revision, offline, progress)
+        pipe, note = runtime.get_pipe(settings, progress)
         progress(0.05, desc="Planning score…")
         plan = adapter.plan(pipe, request, abc_sampling=abc_sampling, cancelled=runtime.CANCEL.is_set)
         outdir = runtime.run_dir(request.id if request.id != "song" else runtime.slug(style), "plan")
@@ -284,13 +282,10 @@ def plan_only(style, lyrics, cot, seed, cfg_scale, out_id,
         files = [str(outdir / n) for n in ("score.abc", "plan.json", "abc_tokens.npy", "prefix.npy")
                  if (outdir / n).exists()]
         yield (plan.abc or ""), f"Plan saved: {outdir}\n{note}", files, *idle, str(outdir)
-    except InterruptedError as exc:
-        yield gr.update(), f"Cancelled: {exc}", gr.update(), *idle, gr.skip()
-    except Exception as exc:  # noqa: BLE001
-        yield gr.update(), f"Planning failed: {type(exc).__name__}: {exc}", gr.update(), *idle,\
-            gr.skip()
+    except Exception as exc:  # noqa: BLE001 — the UI reports, never crashes
+        yield gr.update(), runtime.failure_text(exc, "Planning"), gr.update(), *idle, gr.skip()
     finally:
-        runtime.RUNNING.release()
+        runtime.end_job()
 
 
 def decode_run(source_dir, latent_file, dec_vae_choice, dec_vae_custom, dec_vae_revision,
@@ -309,15 +304,16 @@ def decode_run(source_dir, latent_file, dec_vae_choice, dec_vae_custom, dec_vae_
     if latents.ndim != 2 or latents.shape[1] != 64:
         raise gr.Error(f"Latent shape must be [T,64], got {latents.shape}")
 
-    if not runtime.RUNNING.acquire(blocking=False):
-        yield gr.update(), "Another job is already running — wait for it to finish",\
+    settings = runtime.RuntimeSettings(
+        device, dtype, backend, quantization, offload_ar, budget, ode_steps,
+        vae_core_frames, model, gen_vae_choice, gen_vae_custom, revision, gen_vae_revision, offline)
+    if not runtime.try_start_job():
+        yield gr.update(), runtime.BUSY_MESSAGE,\
             gr.update(), gr.skip()
         return
     try:
         yield gr.update(), "Decoding…", gr.update(interactive=False), gr.skip()
-        pipe, note = runtime.get_pipe(device, dtype, backend, quantization, offload_ar, budget,
-                               ode_steps, vae_core_frames, model, gen_vae_choice, gen_vae_custom,
-                               revision, gen_vae_revision, offline, progress)
+        pipe, note = runtime.get_pipe(settings, progress)
         override = None
         if dec_vae_choice != "keep":
             override, vae_name = runtime.resolve_vae(dec_vae_choice, dec_vae_custom)
@@ -351,11 +347,10 @@ def decode_run(source_dir, latent_file, dec_vae_choice, dec_vae_custom, dec_vae_
                   f"VAE={vae_name}  mode={'full' if full_decode else 'tiled'}  "
                   f"source={path}\nrun directory: {outdir}\n{note}")
         yield str(outdir / "audio.flac"), status, gr.update(interactive=True), str(outdir)
-    except Exception as exc:  # noqa: BLE001
-        yield gr.update(), f"Decode failed: {type(exc).__name__}: {exc}",\
-            gr.update(interactive=True), gr.skip()
+    except Exception as exc:  # noqa: BLE001 — the UI reports, never crashes
+        yield gr.update(), runtime.failure_text(exc, "Decode"), gr.update(interactive=True), gr.skip()
     finally:
-        runtime.RUNNING.release()
+        runtime.end_job()
 
 
 def batch_generate(jsonl_text, jsonl_file, out_id,
@@ -378,19 +373,20 @@ def batch_generate(jsonl_text, jsonl_file, out_id,
     ids = [r.get("id") for r in rows]
     if any(x is None for x in ids) or len(set(ids)) != len(ids):
         raise gr.Error("Every line needs a unique id")
-    abc_sampling = runtime.sampling(abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max, "ABC phase")
-    sem_sampling = runtime.sampling(sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max, "semantic phase")
+    abc_sampling, sem_sampling = runtime.sampling_pair(
+        abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
+        sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max)
 
-    runtime.CANCEL.clear()
-    if not runtime.RUNNING.acquire(blocking=False):
-        yield gr.update(), "Another job is already running — wait for it to finish",\
+    settings = runtime.RuntimeSettings(
+        device, dtype, backend, quantization, offload_ar, budget, ode_steps,
+        vae_core_frames, model, vae_choice, vae_custom, revision, vae_revision, offline)
+    if not runtime.try_start_job():
+        yield gr.update(), runtime.BUSY_MESSAGE,\
             gr.update(), gr.skip()
         return
-    yield gr.update(), "Starting batch…", gr.update(interactive=False), gr.skip()
     try:
-        pipe, note = runtime.get_pipe(device, dtype, backend, quantization, offload_ar, budget,
-                               ode_steps, vae_core_frames, model, vae_choice, vae_custom,
-                               revision, vae_revision, offline, progress)
+        yield gr.update(), "Starting batch…", gr.update(interactive=False), gr.skip()
+        pipe, note = runtime.get_pipe(settings, progress)
         outdir = runtime.run_dir("batch", runtime.slug(out_id or "batch"))
         outdir.mkdir(parents=True, exist_ok=True)
         allowed = {"style", "tags", "lyrics", "cot", "seed", "abc", "cfg_scale", "id"}
@@ -450,11 +446,10 @@ def batch_generate(jsonl_text, jsonl_file, out_id,
                   f"({total / max(1, len(results)):.0f}s per song)\n"
                   f"run directory: {outdir}\n{note}")
         yield results, status, gr.update(interactive=True), str(outdir)
-    except Exception as exc:  # noqa: BLE001
-        yield gr.update(), f"Batch failed: {type(exc).__name__}: {exc}",\
-            gr.update(interactive=True), gr.skip()
+    except Exception as exc:  # noqa: BLE001 — the UI reports, never crashes
+        yield gr.update(), runtime.failure_text(exc, "Batch"), gr.update(interactive=True), gr.skip()
     finally:
-        runtime.RUNNING.release()
+        runtime.end_job()
 
 
 

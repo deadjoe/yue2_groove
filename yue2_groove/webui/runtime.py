@@ -22,6 +22,7 @@ import logging
 import os
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import gradio as gr
@@ -78,7 +79,8 @@ def resolve_vae(choice: str, custom: str) -> tuple[str, str]:
     return custom.strip(), "custom"
 
 
-def sampling(temp, top_p, top_k, rep, window, min_tokens, max_tokens, label):
+def sampling(temp, top_p, top_k, rep, window, min_tokens, max_tokens, label: str):
+    """One phase's sampling parameters from the seven slider values."""
     try:
         return adapter.sampling(temperature=float(temp), top_p=float(top_p), top_k=int(top_k),
                                 repetition_penalty=float(rep), penalty_window=int(window),
@@ -87,11 +89,51 @@ def sampling(temp, top_p, top_k, rep, window, min_tokens, max_tokens, label):
         raise gr.Error(f"{label} sampling parameters invalid: {exc}") from exc
 
 
-def _pipe_key(device, dtype, backend, quantization, offload_ar, budget, ode_steps,
-              vae_core_frames, model, vae_path, revision, vae_revision, offline):
-    return (pick_device(device), dtype, backend, quantization, bool(offload_ar),
-            float(budget), int(ode_steps), vae_core_frames, model, vae_path,
-            revision or "", vae_revision or "", bool(offline))
+def sampling_pair(*values):
+    """(abc, semantic) sampling from the 14 ADVANCED // SAMPLING slider values, in
+    the order the sliders are wired: seven for the ABC phase, seven for the semantic
+    phase.  This is the one place that knows that order."""
+    if len(values) != 14:
+        raise gr.Error(f"expected 14 sampling values, got {len(values)}")
+    return sampling(*values[:7], "ABC phase"), sampling(*values[7:], "semantic phase")
+
+
+@dataclass(frozen=True)
+class RuntimeSettings:
+    """The settings rail as one value, in the order its components are wired.
+
+    ``key`` is what identifies a loaded pipeline: the resolved device, the backend
+    after the FlashAttention fallback and the VAE path, so a rail change that does
+    not change the key reuses the loaded model.
+    """
+
+    device: str
+    dtype: str
+    backend: str
+    quantization: str
+    offload_ar: bool
+    budget: float
+    ode_steps: int
+    vae_core_frames: str
+    model: str
+    vae_choice: str
+    vae_custom: str
+    revision: str
+    vae_revision: str
+    offline: bool
+
+    @property
+    def cores(self) -> int | None:
+        return None if self.vae_core_frames == "auto" else int(self.vae_core_frames)
+
+    @property
+    def key(self) -> tuple:
+        device = pick_device(self.device)
+        backend, _ = effective_backend(device, self.backend)
+        vae_path, _ = resolve_vae(self.vae_choice, self.vae_custom)
+        return (device, self.dtype, backend, self.quantization, bool(self.offload_ar),
+                float(self.budget), int(self.ode_steps), self.cores, self.model, vae_path,
+                self.revision or "", self.vae_revision or "", bool(self.offline))
 
 
 FLASH_FALLBACK_NOTE = ("this PyTorch build or GPU cannot run FlashAttention; using upstream's "
@@ -115,24 +157,20 @@ def effective_backend(device: str, backend: str) -> tuple[str, str]:
     return backend, ""
 
 
-def load_pipeline(device, dtype, backend, quantization, offload_ar, budget, ode_steps,
-                  vae_core_frames, model, vae_choice, vae_custom, revision, vae_revision,
-                  offline, progress=gr.Progress()):
+def load_pipeline(settings: RuntimeSettings, progress=None):
     """(Re)load the pipeline. Reuses the existing one when settings are unchanged."""
     global _PIPE, _PIPE_KEY
-    device = pick_device(device)
-    backend, fallback = effective_backend(device, backend)
+    device = pick_device(settings.device)
+    backend, fallback = effective_backend(device, settings.backend)
     fallback = f" ({fallback})" if fallback else ""
-    vae_path, vae_name = resolve_vae(vae_choice, vae_custom)
-    cores = None if vae_core_frames == "auto" else int(vae_core_frames)
-    key = _pipe_key(device, dtype, backend, quantization, offload_ar, budget, ode_steps,
-                    cores, model, vae_path, revision, vae_revision, offline)
+    vae_path, vae_name = resolve_vae(settings.vae_choice, settings.vae_custom)
+    key = settings.key
     if _PIPE is not None and key == _PIPE_KEY:
-        return _PIPE, (f"Model ready: device={device} dtype={dtype} backend={backend}{fallback} "
-                       f"vae={vae_name}")
+        return _PIPE, (f"Model ready: device={device} dtype={settings.dtype} "
+                       f"backend={backend}{fallback} vae={vae_name}")
     if backend == "vllm" and device != "cuda":
         raise gr.Error("vLLM backend requires NVIDIA CUDA; use torch here (MPS falls back to eager)")
-    if quantization == "fp8" and device != "cuda":
+    if settings.quantization == "fp8" and device != "cuda":
         raise gr.Error("FP8 quantization requires NVIDIA CUDA (sm89+)")
 
     unload_pipeline()
@@ -140,17 +178,18 @@ def load_pipeline(device, dtype, backend, quantization, offload_ar, budget, ode_
         progress(0.05, desc="Loading model (first run downloads ~7.3 GB)…")
     with _LOCK:
         pipe, used_dtype = adapter.load_pipeline(
-            model, vae=vae_path, device=device, dtype=dtype, backend=backend,
-            quantization=quantization, offload_ar=offload_ar, memory_budget_gib=budget,
-            ode_steps=ode_steps, vae_core_frames=cores, revision=revision,
-            vae_revision=vae_revision, local_files_only=offline)
+            settings.model, vae=vae_path, device=device, dtype=settings.dtype, backend=backend,
+            quantization=settings.quantization, offload_ar=settings.offload_ar,
+            memory_budget_gib=settings.budget, ode_steps=settings.ode_steps,
+            vae_core_frames=settings.cores, revision=settings.revision,
+            vae_revision=settings.vae_revision, local_files_only=settings.offline)
         _PIPE, _PIPE_KEY = pipe, key
     note = (f"Loaded: device={device} dtype={used_dtype} backend={backend}{fallback} "
-            f"vae={vae_name} ode_steps={ode_steps} cores={cores or 'auto'}")
+            f"vae={vae_name} ode_steps={settings.ode_steps} cores={settings.cores or 'auto'}")
     return _PIPE, note
 
 
-def unload_pipeline():
+def unload_pipeline() -> None:
     global _PIPE, _PIPE_KEY
     with _LOCK:
         if _PIPE is not None:
@@ -161,17 +200,10 @@ def unload_pipeline():
         torch.mps.empty_cache()
 
 
-def get_pipe(device, dtype, backend, quantization, offload_ar, budget, ode_steps,
-              vae_core_frames, model, vae_choice, vae_custom, revision, vae_revision,
-              offline, progress):
-    vae_path, _ = resolve_vae(vae_choice, vae_custom)
-    cores = None if vae_core_frames == "auto" else int(vae_core_frames)
-    key = _pipe_key(pick_device(device), dtype, backend, quantization, offload_ar, budget,
-                    ode_steps, cores, model, vae_path, revision, vae_revision, offline)
-    if _PIPE is None or key != _PIPE_KEY:
-        return load_pipeline(device, dtype, backend, quantization, offload_ar, budget,
-                             ode_steps, vae_core_frames, model, vae_choice, vae_custom,
-                             revision, vae_revision, offline, progress)
+def get_pipe(settings: RuntimeSettings, progress=None):
+    """The loaded pipeline for these settings, loading it first when they changed."""
+    if _PIPE is None or settings.key != _PIPE_KEY:
+        return load_pipeline(settings, progress)
     return _PIPE, "Model ready"
 
 
@@ -226,9 +258,33 @@ def scan_runs():
             if p.is_dir() and not p.name.startswith(".") and _looks_like_run(p)]
 
 
-def cancel_run():
+def cancel_run() -> str:
     CANCEL.set()
     return "Cancel requested — will stop after the current token / ODE step"
+
+
+# ── the one job at a time ──────────────────────────────────────────────────
+# Every generator handler claims the slot, yields its updates inside a try and
+# releases it in a finally; a fast double click that beats the disabled button
+# is refused with BUSY_MESSAGE rather than queued.
+BUSY_MESSAGE = "Another job is already running — wait for it to finish"
+
+
+def try_start_job() -> bool:
+    """Claim the job slot (and clear a stale cancel); False while another job runs."""
+    CANCEL.clear()
+    return RUNNING.acquire(blocking=False)
+
+
+def end_job() -> None:
+    RUNNING.release()
+
+
+def failure_text(exc: BaseException, what: str = "Generation") -> str:
+    """The status line for a job that did not finish (a cancel is not a failure)."""
+    if isinstance(exc, InterruptedError):
+        return f"Cancelled: {exc}"
+    return f"{what} failed: {type(exc).__name__}: {exc}"
 
 
 # ───────────────────── run durability (panic-safe writes) ─────────────────────

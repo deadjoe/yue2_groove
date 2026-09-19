@@ -84,8 +84,9 @@ def main():
     if not args.no_preload:
         def preload():
             try:
-                runtime.load_pipeline(device, dtype, "torch", "none", False, 24, 32, "auto",
-                              args.model, args.vae, "", "", "", False)
+                runtime.load_pipeline(runtime.RuntimeSettings(
+                    device, dtype, "torch", "none", False, 24, 32, "auto",
+                    args.model, args.vae, "", "", "", False))
                 log.info("model preload complete")
             except Exception as exc:  # noqa: BLE001
                 log.warning("preload failed (will retry on first generation): %s", exc)

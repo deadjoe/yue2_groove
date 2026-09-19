@@ -117,11 +117,11 @@ def test_load_pipeline_records_the_fallback_in_the_note_and_cache_key(monkeypatc
     monkeypatch.setattr(webui.runtime, "_PIPE_KEY", None)
     args = ("auto", "bfloat16", "torch", "none", False, 24, 32, "auto", "m", "standard", "",
             "", "", False)
-    pipe, note = webui.runtime.load_pipeline(*args, progress=None)
+    pipe, note = webui.runtime.load_pipeline(webui.runtime.RuntimeSettings(*args))
     assert seen["backend"] == "torch-eager"
     assert "backend=torch-eager" in note and webui.runtime.FLASH_FALLBACK_NOTE in note
     # A second call with the same UI settings reuses the pipe and repeats the reason.
-    pipe2, note2 = webui.runtime.load_pipeline(*args, progress=None)
+    pipe2, note2 = webui.runtime.load_pipeline(webui.runtime.RuntimeSettings(*args))
     assert pipe2 is pipe and note2.startswith("Model ready") and "torch-eager" in note2
 
 
@@ -138,7 +138,7 @@ def test_load_pipeline_passes_torch_through_when_flash_works(monkeypatch):
     _probe(monkeypatch, True)
     monkeypatch.setattr(webui.runtime, "_PIPE", None)
     monkeypatch.setattr(webui.runtime, "_PIPE_KEY", None)
-    _pipe, note = webui.runtime.load_pipeline("auto", "bfloat16", "torch", "none", False, 24, 32, "auto",
-                                      "m", "standard", "", "", "", False, progress=None)
+    _pipe, note = webui.runtime.load_pipeline(webui.runtime.RuntimeSettings(
+        "auto", "bfloat16", "torch", "none", False, 24, 32, "auto", "m", "standard", "", "", "", False))
     assert seen["backend"] == "torch"
     assert "backend=torch " in note and "FlashAttention" not in note

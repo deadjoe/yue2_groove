@@ -59,10 +59,9 @@ def cover_transcribe(audio_path, task, max_seconds, model, device, dtype, revisi
         raise gr.Error("Upload a source audio file first")
     if task not in sheetsage_adapter.TASKS:
         raise gr.Error(f"Unknown transcription task: {task}")
-    runtime.CANCEL.clear()
-    if not runtime.RUNNING.acquire(blocking=False):
+    if not runtime.try_start_job():
         yield (gr.update(), gr.update(),
-               "Another job is already running — wait for it to finish",
+               runtime.BUSY_MESSAGE,
                *((gr.update(),) * 7), gr.update(), gr.update(), gr.skip())
         return
     controls = (gr.update(interactive=False),) * 7
@@ -117,7 +116,7 @@ def cover_transcribe(audio_path, task, max_seconds, model, device, dtype, revisi
             f"Transcription failed: {type(exc).__name__}: {exc}", *idle, gr.update(),\
             gr.update(), gr.skip()
     finally:
-        runtime.RUNNING.release()
+        runtime.end_job()
 
 
 def cover_choices():
@@ -201,13 +200,15 @@ def cover_generate(style, lyrics, abc_text, task, keep_voice, seed, cfg_scale,
                                             request_factory=adapter.song_request)
     except (ValueError, TypeError) as exc:
         raise gr.Error(f"Invalid cover request: {exc}") from exc
-    abc_sampling = runtime.sampling(abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max, "ABC phase")
-    sem_sampling = runtime.sampling(sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max,
-                             "semantic phase")
+    abc_sampling, sem_sampling = runtime.sampling_pair(
+        abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
+        sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max)
 
-    runtime.CANCEL.clear()
-    if not runtime.RUNNING.acquire(blocking=False):
-        yield ("Another job is already running — wait for it to finish",
+    settings = runtime.RuntimeSettings(
+        device, dtype, backend, quantization, offload_ar, budget, ode_steps,
+        vae_core_frames, model, vae_choice, vae_custom, revision, vae_revision, offline)
+    if not runtime.try_start_job():
+        yield (runtime.BUSY_MESSAGE,
                gr.update(), gr.update(), gr.update(), *((gr.update(),) * 7), gr.skip())
         return
     controls = (gr.update(interactive=False),) * 7
@@ -215,9 +216,7 @@ def cover_generate(style, lyrics, abc_text, task, keep_voice, seed, cfg_scale,
     try:
         yield ("Starting cover generation…", gr.update(), gr.update(), gr.update(), *controls,
                gr.skip())
-        pipe, note = runtime.get_pipe(device, dtype, backend, quantization, offload_ar, budget,
-                               ode_steps, vae_core_frames, model, vae_choice, vae_custom,
-                               revision, vae_revision, offline, progress)
+        pipe, note = runtime.get_pipe(settings, progress)
         outdir = runtime.run_dir("cover", runtime.slug(request.id if request.id != "song" else style))
         song, result, elapsed = runtime.run_generation(
             pipe, request, outdir, abc_sampling=abc_sampling, semantic_sampling=sem_sampling,
@@ -225,13 +224,10 @@ def cover_generate(style, lyrics, abc_text, task, keep_voice, seed, cfg_scale,
         yield (runtime.generation_status(song, result, outdir, elapsed, request, note),
                str(outdir / "audio.flac"), (song.abc or ""),
                runtime.artifact_files(outdir, bool(song.abc)), *idle, str(outdir))
-    except InterruptedError as exc:
-        yield f"Cancelled: {exc}", gr.update(), gr.update(), gr.update(), *idle, gr.skip()
-    except Exception as exc:  # noqa: BLE001
-        yield (f"Generation failed: {type(exc).__name__}: {exc}",
-               gr.update(), gr.update(), gr.update(), *idle, gr.skip())
+    except Exception as exc:  # noqa: BLE001 — the UI reports, never crashes
+        yield runtime.failure_text(exc), gr.update(), gr.update(), gr.update(), *idle, gr.skip()
     finally:
-        runtime.RUNNING.release()
+        runtime.end_job()
 
 
 def cover_strip(text, keep_voice):

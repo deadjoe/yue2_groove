@@ -97,9 +97,9 @@ def edit_generate(style, lyrics, cot, seed, cfg_scale, abc_text, baseline_abc, s
         raise gr.Error("CHECK INVARIANTS did not pass: " + (differences or "scores differ") +
                        " — enable ALLOW MELODY/RHYTHM CHANGES if the change is intentional")
     style, lyrics = runtime.request_texts(style, lyrics)
-    abc_sampling = runtime.sampling(abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max, "ABC phase")
-    sem_sampling = runtime.sampling(sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max,
-                             "semantic phase")
+    abc_sampling, sem_sampling = runtime.sampling_pair(
+        abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
+        sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max)
     try:
         request = edit_flow.build_edit_request(style, lyrics, abc, cot=cot, seed=int(seed),
                                                cfg_scale=cfg_scale,
@@ -107,10 +107,12 @@ def edit_generate(style, lyrics, cot, seed, cfg_scale, abc_text, baseline_abc, s
     except (ValueError, TypeError) as exc:
         raise gr.Error(f"Invalid request: {exc}") from exc
 
-    runtime.CANCEL.clear()
-    if not runtime.RUNNING.acquire(blocking=False):
+    settings = runtime.RuntimeSettings(
+        device, dtype, backend, quantization, offload_ar, budget, ode_steps,
+        vae_core_frames, model, vae_choice, vae_custom, revision, vae_revision, offline)
+    if not runtime.try_start_job():
         yield (gr.update(), gr.update(), gr.update(),
-               "Another job is already running — wait for it to finish",
+               runtime.BUSY_MESSAGE,
                *((gr.update(),) * 6), gr.update())
         return
     busy = (gr.update(interactive=False),) * 6
@@ -118,9 +120,7 @@ def edit_generate(style, lyrics, cot, seed, cfg_scale, abc_text, baseline_abc, s
     try:
         yield gr.update(), gr.update(), gr.update(), "Starting edit generation…", *busy,\
             gr.update()
-        pipe, note = runtime.get_pipe(device, dtype, backend, quantization, offload_ar, budget,
-                               ode_steps, vae_core_frames, model, vae_choice, vae_custom,
-                               revision, vae_revision, offline, progress)
+        pipe, note = runtime.get_pipe(settings, progress)
         outdir = runtime.run_dir("edit", runtime.slug(request.id if request.id != "song" else style))
         manifest = edit_flow.build_edit_manifest(
             source_rel=source_rel or "", before_abc=baseline_abc or "", after_abc=abc,
@@ -138,13 +138,10 @@ def edit_generate(style, lyrics, cot, seed, cfg_scale, abc_text, baseline_abc, s
             "\nedit_manifest.json records the source/edit hashes and the invariant result."
         yield str(outdir / "audio.flac"), (song.abc or ""),\
             runtime.artifact_files(outdir, bool(song.abc)), status, *idle, str(outdir)
-    except InterruptedError as exc:
-        yield gr.update(), gr.update(), gr.update(), f"Cancelled: {exc}", *idle, gr.update()
-    except Exception as exc:  # noqa: BLE001
-        yield gr.update(), gr.update(), gr.update(),\
-            f"Generation failed: {type(exc).__name__}: {exc}", *idle, gr.update()
+    except Exception as exc:  # noqa: BLE001 — the UI reports, never crashes
+        yield gr.update(), gr.update(), gr.update(), runtime.failure_text(exc), *idle, gr.update()
     finally:
-        runtime.RUNNING.release()
+        runtime.end_job()
 
 
 def edit_compare(source_rel, last_run):

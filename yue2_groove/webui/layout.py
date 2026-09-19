@@ -780,7 +780,8 @@ def build_ui(defaults):
                          inputs=[model, vae_choice, vae_custom, revision, vae_revision, offline,
                                  verify_hashes],
                          outputs=doctor_out)
-        load_btn.click(lambda *a: runtime.load_pipeline(*a)[1], inputs=model_args, outputs=env_status)
+        load_btn.click(lambda *rail: runtime.load_pipeline(runtime.RuntimeSettings(*rail))[1],
+                       inputs=model_args, outputs=env_status)
         unload_btn.click(lambda: (runtime.unload_pipeline(), "Model unloaded")[1], outputs=env_status)
         current_bridge.change(song_view.publish_current, inputs=[current_bridge],
                               outputs=[current_band, current_bridge])
