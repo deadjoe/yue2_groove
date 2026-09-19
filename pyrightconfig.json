@@ -4,5 +4,6 @@
   "typeCheckingMode": "basic",
   "venvPath": ".",
   "venv": ".venv",
-  "pythonVersion": "3.10"
+  "pythonVersion": "3.10",
+  "pythonPlatform": "Linux"
 }

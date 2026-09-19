@@ -361,10 +361,12 @@ def _fsync_fd(fd: int) -> None:
     with contextlib.suppress(OSError):
         os.fsync(fd)
     # macOS: fsync only reaches the drive cache, F_FULLFSYNC reaches the media.
-    # fcntl is absent on Windows; skip the extra flush there.
-    if fcntl is not None and hasattr(fcntl, "F_FULLFSYNC"):
-        with contextlib.suppress(OSError):
-            fcntl.fcntl(fd, fcntl.F_FULLFSYNC)
+    # fcntl is absent on Windows and the flag is macOS-only; skip the extra flush.
+    if fcntl is not None:
+        full_fsync = getattr(fcntl, "F_FULLFSYNC", None)
+        if full_fsync is not None:
+            with contextlib.suppress(OSError):
+                fcntl.fcntl(fd, full_fsync)
 
 
 def _fsync_path(path) -> None:
