@@ -33,9 +33,10 @@ jobs:
           uv pip install --python .venv/bin/python \
             "yue2-infer @ git+https://github.com/multimodal-art-projection/YuE@${{ matrix.upstream }}" \
             -e ".[test]" --overrides overrides/linux.txt
-      - name: Static check (ruff config + syntax)
+      - name: Static checks (ruff lint, pyright on the package, syntax)
         run: |
           .venv/bin/ruff check .
+          .venv/bin/pyright
           .venv/bin/python -m compileall -q yue2_groove tests scripts
       - name: Model-free tests (library, adapter, upstream contract)
         run: .venv/bin/python -m pytest -q

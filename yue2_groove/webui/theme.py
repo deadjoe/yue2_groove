@@ -1,7 +1,7 @@
 """Bearbone DS v0.2, two scenes: palettes, the Gradio theme and the stylesheet assembly."""
 from __future__ import annotations
 
-import gradio as gr
+from gradio.themes import Base, sizes
 
 from .. import config
 
@@ -231,10 +231,9 @@ def bb_theme():
     """Bearbone dark scene at startup; bright is switched at runtime via CSS variables."""
     import inspect as _inspect
 
-    theme = gr.themes.Base(font=FONT_STACK, font_mono=FONT_STACK,
-                           radius_size=gr.themes.sizes.radius_sm)
+    theme = Base(font=FONT_STACK, font_mono=FONT_STACK, radius_size=sizes.radius_sm)
     values = _theme_values(DARK)
-    valid = set(_inspect.signature(gr.themes.Base.set).parameters)
+    valid = set(_inspect.signature(Base.set).parameters)
     both = {}
     for key, val in values.items():
         both[key] = val

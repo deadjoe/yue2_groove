@@ -93,7 +93,7 @@ def main():
         threading.Thread(target=preload, daemon=True).start()
     demo.launch(server_name=args.host, server_port=args.port, theme=theme.bb_theme(),
                 css=theme.BEARBONE_CSS,
-                head=getattr(demo, "bb_head", frontend.HEAD_HTML),
+                head=frontend.head_html(view_mode),
                 allowed_paths=[str(config.STATIC_DIR), str(runtime.RUNS)],
                 auth=auth,
                 share=args.share, inbrowser=not args.share)

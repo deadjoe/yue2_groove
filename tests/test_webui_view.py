@@ -97,7 +97,6 @@ def test_resolve_view_precedence() -> None:
 
 def test_default_view_is_song() -> None:
     demo = build()
-    assert demo.bb_view_mode == "auto"
     assert 'var mode = "auto";' in webui.frontend.head_html("auto")
     assert 'var mode = "studio";' in webui.frontend.head_html("studio")
     # regression: the JSON placeholder must not clobber the window property name
@@ -155,9 +154,8 @@ def test_forced_view_does_not_write_the_remembered_choice() -> None:
 
 
 def test_explicit_view_mode_is_baked_into_the_page() -> None:
-    demo = build(view_mode="studio")
-    assert demo.bb_view_mode == "studio"
-    assert 'var mode = "studio";' in demo.bb_head
+    build(view_mode="studio")   # the view mode only shapes the head the CLI passes to launch()
+    assert 'var mode = "studio";' in webui.frontend.head_html("studio")
 
 
 # ── SONG container safety ─────────────────────────────────────────────────

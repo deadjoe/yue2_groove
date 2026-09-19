@@ -353,6 +353,13 @@ def decode_run(source_dir, latent_file, dec_vae_choice, dec_vae_custom, dec_vae_
         runtime.end_job()
 
 
+def _row_sampling(base, overrides: dict | None, label: str):
+    """A batch row's sampling: the shared sliders with the row's overrides on top."""
+    v = {k: (overrides or {}).get(k, getattr(base, k)) for k in adapter.sampling_fields(base)}
+    return runtime.sampling(v["temperature"], v["top_p"], v["top_k"], v["repetition_penalty"],
+                            v["penalty_window"], v["min_tokens"], v["max_tokens"], label)
+
+
 def batch_generate(jsonl_text, jsonl_file, out_id,
                    abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
                    sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max,
@@ -406,10 +413,8 @@ def batch_generate(jsonl_text, jsonl_file, out_id,
                 results.append([row["id"], f"invalid: {exc}", "", "", ""])
                 failures += 1
                 continue
-            a_s = runtime.sampling(*((row.get("abc_sampling") or {}).get(k, getattr(abc_sampling, k))
-                              for k in adapter.sampling_fields(abc_sampling)), "ABC phase")
-            s_s = runtime.sampling(*((row.get("semantic_sampling") or {}).get(k, getattr(sem_sampling, k))
-                              for k in adapter.sampling_fields(sem_sampling)), "semantic phase")
+            a_s = _row_sampling(abc_sampling, row.get("abc_sampling"), "ABC phase")
+            s_s = _row_sampling(sem_sampling, row.get("semantic_sampling"), "semantic phase")
 
             def on_token(phase, token, index=index):
                 progress((index - 1 + 0.5) / len(rows), desc=f"Song {index}/{len(rows)}: {phase}")

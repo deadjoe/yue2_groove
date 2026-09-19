@@ -62,7 +62,7 @@ def _library_details(selected):
                 gr.update(value="", interactive=False), gr.update(interactive=False),
                 f"{len(selected)} selected — pick one to view details, or delete the selection.")
     item, det = library.load(runtime.RUNS, selected[0])
-    if item is None:
+    if item is None or det is None:
         return (library.render_empty_html("That work no longer exists — refresh the list."), "", "", "",
                 gr.update(value="", interactive=False), gr.update(interactive=False), "Not found.")
     request = det.get("request") or {}

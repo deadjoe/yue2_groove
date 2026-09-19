@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import gradio as gr
+from gradio.blocks import Block
 
 from .. import __version__, config, library
 from . import (
@@ -22,7 +23,7 @@ from . import (
 def _components(scope: dict) -> SimpleNamespace:
     """The Gradio objects a builder created, by their local names (its return value)."""
     return SimpleNamespace(**{name: obj for name, obj in scope.items()
-                              if isinstance(obj, gr.blocks.Block)})
+                              if isinstance(obj, Block)})
 
 
 def _song_view() -> SimpleNamespace:
@@ -662,7 +663,7 @@ def _batch_tab() -> SimpleNamespace:
     return _components(locals())
 
 
-def build_ui(defaults):
+def build_ui(defaults: dict) -> gr.Blocks:
     header = """
 <div id="bb-header">
   <h1>YUE2<span class="bb-slash">//</span>GROOVE</h1>
@@ -1020,6 +1021,4 @@ def build_ui(defaults):
 
         gr.HTML(footer)
 
-    demo.bb_head = frontend.head_html(view_mode)
-    demo.bb_view_mode = view_mode
     return demo

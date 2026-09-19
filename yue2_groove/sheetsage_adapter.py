@@ -300,7 +300,7 @@ class _Worker:
         if process is None:
             return
         try:
-            if process.poll() is None:
+            if process.poll() is None and process.stdin is not None:
                 try:
                     process.stdin.write(json.dumps({"op": "stop"}) + "\n")
                     process.stdin.flush()
@@ -527,12 +527,14 @@ def transcribe(audio_path, *, output_dir=None, task: str = "melody-full",
                                bufsize=1, stdin=subprocess.DEVNULL,
                                start_new_session=(os.name == "posix"),
                                env=config.child_env(), **config.SUBPROCESS_TEXT)
+    assert process.stdout is not None and process.stderr is not None   # both are PIPEs
+    stdout, stderr = process.stdout, process.stderr
     lines: queue.Queue[str | None] = queue.Queue()
     stderr_lines: list[str] = []
 
     def pump_stdout():
         try:
-            for line in process.stdout:
+            for line in stdout:
                 lines.put(line)
         except (OSError, ValueError):
             pass
@@ -541,7 +543,7 @@ def transcribe(audio_path, *, output_dir=None, task: str = "melody-full",
 
     def pump_stderr():
         with contextlib.suppress(OSError, ValueError):   # the pipe closes when the child exits
-            stderr_lines.extend(process.stderr)
+            stderr_lines.extend(stderr)
 
     stdout_thread = threading.Thread(target=pump_stdout, daemon=True)
     stderr_thread = threading.Thread(target=pump_stderr, daemon=True)

@@ -76,7 +76,7 @@ def build_cover_request(style: str, lyrics: str, abc_text: str, *,
     kwargs = {"style": style, "lyrics": lyrics, "cot": cot, "seed": int(seed), "abc": text}
     if cfg_scale:
         kwargs["cfg_scale"] = float(cfg_scale)
-    if (id or "").strip():
+    if id and id.strip():
         kwargs["id"] = id.strip()
     factory = request_factory or adapter.song_request
     return factory(**kwargs)
