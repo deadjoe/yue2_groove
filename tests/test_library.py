@@ -229,12 +229,30 @@ if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
 
 
-def test_library_js_binds_players_immediately_and_delegates_clicks() -> None:
-    """Regression: a fresh player must not wait for the 700 ms tick to be clickable."""
+def test_library_js_survives_gradio_morphing_the_details_pane() -> None:
+    """Regression: play → pause → pick another work → play did nothing every second time.
+
+    Gradio 6's HTML component morphs the pane in place: the same <audio> and
+    <button> stay, only src changes, and attributes the server HTML does not
+    carry (a JS "bound" marker) are stripped.  The old code then bound the same
+    button again — two click listeners, play() then pause().  Measured with
+    Playwright (Chromium + WebKit): listeners 1 → 2 → 3 per selection, calls
+    ['play', 'pause'] on the dead clicks.
+    """
     js = lib.LIBRARY_JS
+    # state is a property of the <audio> (dies with the element, not the markup)
+    assert "if (audio.__bbState) return audio.__bbState;" in js
+    assert "data-bb-bound" not in js and "bind(" not in js
+    # transport is delegated once from document, never attached per button
+    assert "closest('[data-bb-player] button')" in js
+    assert "button.hasAttribute('data-bb-play')" in js
+    assert "btn.addEventListener" not in js and "button.click()" not in js
+    # a swapped src pauses without a pause event
+    assert "audio.addEventListener('emptied'" in js
+    # reap decides by the element: the morph can recycle the wrapper around a dropped <audio>
+    assert "if (!document.contains(audio))" in js
+    # iOS 'interrupted' is resumed like 'suspended'
+    assert "ctx.state !== 'running'" in js
+    # a fresh player still gets its idle baseline at once, a rejected play() is not silent
     assert "new MutationObserver" in js and "scheduleTick" in js
-    # delegated fallback: bind the unbound player, then replay the click
-    assert "player.getAttribute('data-bb-bound') === '1'" in js
-    assert "bind(player);" in js and "button.click();" in js
-    # a rejected play() must not be silent
     assert "playback blocked" in js

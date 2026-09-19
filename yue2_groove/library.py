@@ -672,7 +672,7 @@ LIBRARY_JS = r"""(function () {
   // One shared AudioContext for every player: creating one per selection would
   // hit the browser's context limit. Each element gets its own source+analyser.
   var BB_AUDIO_CTX = null;
-  var BB_BOUND = [];
+  var BB_AUDIOS = [];      // every <audio> that has a state, for reap()
   function audioCtx() {
     if (BB_AUDIO_CTX) return BB_AUDIO_CTX;
     var AC = window.AudioContext || window.webkitAudioContext;
@@ -683,8 +683,12 @@ LIBRARY_JS = r"""(function () {
   function readInk() {
     return getComputedStyle(document.documentElement).getPropertyValue('--bb-ink').trim() || '#F1ECE2';
   }
+  function playerOf(node) {
+    return node && node.closest ? node.closest('[data-bb-player]') : null;
+  }
   function drawViz(state) {
-    var canvas = state.canvas;
+    var player = playerOf(state.audio);
+    var canvas = player ? player.querySelector('[data-bb-viz]') : null;
     if (!canvas || !canvas.clientWidth || !canvas.clientHeight) return;
     var dpr = window.devicePixelRatio || 1;
     var w = canvas.clientWidth, h = canvas.clientHeight;
@@ -728,9 +732,9 @@ LIBRARY_JS = r"""(function () {
   var BB_VIZ_RUNNING = false;
   function vizFrame() {
     var active = 0;
-    var players = document.querySelectorAll('[data-bb-player]');
-    for (var i = 0; i < players.length; i++) {
-      var state = players[i].__bbVizState;
+    var audios = document.querySelectorAll('[data-bb-player] audio');
+    for (var i = 0; i < audios.length; i++) {
+      var state = audios[i].__bbState;
       if (!state) continue;
       if (state.playing) active++;
       drawViz(state);
@@ -758,102 +762,130 @@ LIBRARY_JS = r"""(function () {
       state.data = new Uint8Array(analyser.frequencyBinCount);
     } catch (error) { state.analyser = null; }
   }
-  function bind(player) {
-    var audio = player.querySelector('audio');
-    if (!audio || player.getAttribute('data-bb-bound') === '1') return;
-    player.setAttribute('data-bb-bound', '1');
+  // ── the player ───────────────────────────────────────────────────────
+  // Gradio 6 does not replace the details pane when another work is picked:
+  // its HTML component morphs the DOM that is there into the new markup (same
+  // tag at the same position → the node is kept, its attributes synced to the
+  // new HTML, its children recursed).  So the very same <audio> and <button>
+  // elements live on with a new src — and every attribute the server HTML
+  // does not carry is stripped, which is how a "bound" marker on the wrapper
+  // vanished and the same button was bound again: two click listeners,
+  // play() then pause(), a dead play button on every second selection.
+  // Hence: the state hangs off the <audio> as a property (it dies with the
+  // element, never with the markup), and the transport buttons are handled
+  // by one delegated listener — there is nothing per button to duplicate.
+  function paint(audio) {
+    var player = playerOf(audio);
+    if (!player) return;
     var btn = player.querySelector('[data-bb-play]');
     var fill = player.querySelector('.bb-pfill');
     var time = player.querySelector('[data-bb-time]');
-    var state = { audio: audio, canvas: player.querySelector('[data-bb-viz]'),
-                  analyser: null, data: null, playing: false, ink: readInk(), inkTick: 0 };
-    player.__bbVizState = state;
-    BB_BOUND.push({ player: player, audio: audio });
-    function paint() {
-      if (btn) {
-        var playing = !audio.paused;
-        btn.classList.toggle('bb-playing', playing);
-        var label = playing ? 'Pause' : 'Play';
-        btn.setAttribute('aria-label', label);
-        btn.title = label;
-      }
-      if (fill && audio.duration) {
-        fill.style.width = Math.min(100, (audio.currentTime / audio.duration) * 100) + '%';
-      }
-      if (time) time.textContent = fmt(audio.currentTime) + ' / ' + fmt(audio.duration);
+    if (btn) {
+      var playing = !audio.paused;
+      btn.classList.toggle('bb-playing', playing);
+      var label = playing ? 'Pause' : 'Play';
+      btn.setAttribute('aria-label', label);
+      btn.title = label;
     }
-    audio.addEventListener('timeupdate', paint);
-    audio.addEventListener('loadedmetadata', paint);
-    audio.addEventListener('play', function () { state.playing = true; startViz(); paint(); });
-    audio.addEventListener('pause', function () { state.playing = false; paint(); });
-    audio.addEventListener('ended', function () { state.playing = false; paint(); });
+    if (fill && audio.duration) {
+      fill.style.width = Math.min(100, (audio.currentTime / audio.duration) * 100) + '%';
+    }
+    if (time) time.textContent = fmt(audio.currentTime) + ' / ' + fmt(audio.duration);
+  }
+  function timeOf(audio) {
+    var player = playerOf(audio);
+    return player ? player.querySelector('[data-bb-time]') : null;
+  }
+  function stateOf(audio) {
+    if (audio.__bbState) return audio.__bbState;
+    var state = { audio: audio, analyser: null, data: null, playing: false,
+                  ink: readInk(), inkTick: 0 };
+    audio.__bbState = state;
+    BB_AUDIOS.push(audio);
+    function repaint() { paint(audio); }
+    audio.addEventListener('timeupdate', repaint);
+    audio.addEventListener('loadedmetadata', repaint);
+    audio.addEventListener('play', function () { state.playing = true; startViz(); paint(audio); });
+    audio.addEventListener('pause', function () { state.playing = false; paint(audio); });
+    audio.addEventListener('ended', function () { state.playing = false; paint(audio); });
+    // a swapped src runs the load algorithm: the element is paused again
+    // without a pause event, and the viz would keep drawing the old track
+    audio.addEventListener('emptied', function () { state.playing = false; paint(audio); });
     audio.addEventListener('error', function () {
+      var time = timeOf(audio);
       if (time) time.textContent = 'audio unavailable';
     });
-    if (btn) btn.addEventListener('click', function () {
-      if (audio.paused) {
-        var ctx = audioCtx();
-        if (ctx && ctx.state === 'suspended') { try { ctx.resume(); } catch (error) {} }
-        ensureAnalyser(state);
-        var p = audio.play();
-        if (p && p.catch) p.catch(function () {
-          if (audio.error) return;        // the error listener owns a broken file
-          if (time) time.textContent = 'playback blocked — click play again';
-        });
-      } else { audio.pause(); }
+    paint(audio);
+    drawViz(state);   // idle baseline until playback starts
+    return state;
+  }
+  function togglePlay(audio) {
+    if (!audio.paused) { audio.pause(); return; }
+    var ctx = audioCtx();
+    // 'suspended' until the first gesture; iOS also reports 'interrupted'
+    // after a call or another app took the output
+    if (ctx && ctx.state !== 'running') { try { ctx.resume(); } catch (error) {} }
+    ensureAnalyser(stateOf(audio));
+    var p = audio.play();
+    if (p && p.catch) p.catch(function () {
+      if (audio.error) return;        // the error listener owns a broken file
+      var time = timeOf(audio);
+      if (time) time.textContent = 'playback blocked — click play again';
     });
-    var back = player.querySelector('[data-bb-back]');
-    if (back) back.addEventListener('click', function () {
+  }
+  function jumpTo(audio, target) {
+    try {
+      var dur = isFinite(audio.duration) ? audio.duration : 0;
+      var next = target;
+      if (next < 0) next = 0;
+      if (dur && next > dur - 0.05) next = Math.max(0, dur - 0.05);
+      audio.currentTime = next;
+    } catch (error) {}
+    paint(audio);
+  }
+  // transport: one listener for every player there will ever be
+  document.addEventListener('click', function (event) {
+    var button = event.target && event.target.closest ? event.target.closest('[data-bb-player] button') : null;
+    if (!button) return;
+    var player = playerOf(button);
+    var audio = player ? player.querySelector('audio') : null;
+    if (!audio) return;
+    stateOf(audio);
+    if (button.hasAttribute('data-bb-play')) {
+      togglePlay(audio);
+    } else if (button.hasAttribute('data-bb-back')) {
       // jump back to the top; the play/pause state is left alone, so a
       // running track simply continues from the beginning
       try { audio.currentTime = 0; } catch (error) {}
-      paint();
-    });
-    function jumpTo(target) {
-      try {
-        var dur = isFinite(audio.duration) ? audio.duration : 0;
-        var next = target;
-        if (next < 0) next = 0;
-        if (dur && next > dur - 0.05) next = Math.max(0, dur - 0.05);
-        audio.currentTime = next;
-      } catch (error) {}
-      paint();
-    }
-    var jumps = player.querySelectorAll('[data-bb-jump]');
-    for (var j = 0; j < jumps.length; j++) {
-      (function (node) {
-        node.addEventListener('click', function () {
-          var delta = parseFloat(node.getAttribute('data-bb-jump')) || 0;
-          jumpTo(audio.currentTime + delta);
-        });
-      })(jumps[j]);
-    }
-    var end = player.querySelector('[data-bb-end]');
-    if (end) end.addEventListener('click', function () {
+      paint(audio);
+    } else if (button.hasAttribute('data-bb-jump')) {
+      jumpTo(audio, audio.currentTime + (parseFloat(button.getAttribute('data-bb-jump')) || 0));
+    } else if (button.hasAttribute('data-bb-end')) {
       var dur = isFinite(audio.duration) ? audio.duration : 0;
-      jumpTo(dur ? dur - 0.05 : audio.currentTime);
-    });
-    var seek = player.querySelector('[data-bb-seek]');
-    if (seek) {
-      // (name kept distinct from jumpTo: function declarations hoist,
-      // and a shared name would silently replace the transport helpers)
-      function seekBar(event) {
-        var rect = seek.getBoundingClientRect();
-        var clientX = (event.touches && event.touches[0] ? event.touches[0].clientX : event.clientX);
-        if (!audio.duration || !rect.width) return;
-        var ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-        audio.currentTime = ratio * audio.duration;
-        paint();
-      }
-      var dragging = false;
-      seek.addEventListener('pointerdown', function (event) { dragging = true; seekBar(event); });
-      seek.addEventListener('click', seekBar);
-      window.addEventListener('pointerup', function () { dragging = false; });
-      window.addEventListener('pointermove', function (event) { if (dragging) seekBar(event); });
+      jumpTo(audio, dur ? dur - 0.05 : audio.currentTime);
     }
-    paint();
-    drawViz(state);   // idle baseline until playback starts
+  });
+  // seek bar: a pointerdown starts the drag, the window finishes it
+  var BB_SEEKING = null;
+  function seekBar(seek, event) {
+    var player = playerOf(seek);
+    var audio = player ? player.querySelector('audio') : null;
+    if (!audio) return;
+    var rect = seek.getBoundingClientRect();
+    var clientX = (event.touches && event.touches[0] ? event.touches[0].clientX : event.clientX);
+    if (!audio.duration || !rect.width) return;
+    var ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    audio.currentTime = ratio * audio.duration;
+    paint(audio);
   }
+  document.addEventListener('pointerdown', function (event) {
+    var seek = event.target && event.target.closest ? event.target.closest('[data-bb-seek]') : null;
+    if (!seek) return;
+    BB_SEEKING = seek;
+    seekBar(seek, event);
+  });
+  window.addEventListener('pointermove', function (event) { if (BB_SEEKING) seekBar(BB_SEEKING, event); });
+  window.addEventListener('pointerup', function () { BB_SEEKING = null; });
   function renderScore() {
     var box = document.getElementById('bb-lib-score-inner');
     if (!box) return;
@@ -957,31 +989,28 @@ LIBRARY_JS = r"""(function () {
     }
   });
   function reap() {
-    // a replaced details pane detaches the old <audio>; without this it can
-    // keep playing (and keep its analyser graph alive) in some browsers
-    for (var i = BB_BOUND.length - 1; i >= 0; i--) {
-      var entry = BB_BOUND[i];
-      if (!document.contains(entry.player)) {
-        try { entry.audio.pause(); } catch (error) {}
-        entry.audio.removeAttribute('src');
-        BB_BOUND.splice(i, 1);
+    // the morph can also recycle a wrapper into other markup and drop the
+    // <audio> in it; a detached element keeps playing (and its analyser
+    // graph alive) in some browsers, so the element decides, not the wrapper
+    for (var i = BB_AUDIOS.length - 1; i >= 0; i--) {
+      var audio = BB_AUDIOS[i];
+      if (!document.contains(audio)) {
+        try { audio.pause(); } catch (error) {}
+        audio.removeAttribute('src');
+        BB_AUDIOS.splice(i, 1);
       }
     }
   }
   function tick() {
-    var players = document.querySelectorAll('[data-bb-player]');
-    for (var i = 0; i < players.length; i++) bind(players[i]);
+    var audios = document.querySelectorAll('[data-bb-player] audio');
+    for (var i = 0; i < audios.length; i++) stateOf(audios[i]);
     markRows();
     markActive();
     reap();
     renderScore();
   }
-  // Gradio swaps the details pane asynchronously. Binding only from a 700 ms
-  // interval left a window in which a freshly rendered player had no listeners,
-  // so clicking play did nothing until a later tick (or a page refresh). Bind as
-  // soon as nodes appear (debounced), and keep a delegated fallback for a click
-  // that still beats the observer: bind that player and replay the click through
-  // the freshly attached listener.
+  // A freshly rendered player should draw its idle baseline at once rather
+  // than at the next 700 ms tick; clicks never wait for either (delegated).
   var bbTickTimer = null;
   function scheduleTick() {
     if (bbTickTimer) return;
@@ -1001,20 +1030,6 @@ LIBRARY_JS = r"""(function () {
   } else {
     observeLibrary();
   }
-  document.addEventListener('click', function (event) {
-    var target = event.target;
-    var button = target && target.closest ? target.closest('[data-bb-player] button') : null;
-    if (!button) return;
-    var player = button.closest('[data-bb-player]');
-    if (!player || player.getAttribute('data-bb-bound') === '1') return;   // normal path
-    bind(player);
-    button.click();                     // replay through the now-attached listener
-  }, true);
-  document.addEventListener('pointerdown', function (event) {
-    var target = event.target;
-    var player = target && target.closest ? target.closest('[data-bb-player]') : null;
-    if (player && player.getAttribute('data-bb-bound') !== '1') bind(player);
-  }, true);
   setInterval(tick, 700);
   var pending = null;
   window.addEventListener('resize', function () {
