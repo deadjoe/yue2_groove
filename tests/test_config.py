@@ -1,4 +1,5 @@
 """``yue2_groove.config``: the .env loader that ``main()`` runs, and the child-process env."""
+
 from __future__ import annotations
 
 import os
@@ -18,14 +19,15 @@ def test_load_env_parses_and_does_not_override(tmp_path: Path) -> None:
         "YUE2_GROOVE_TEST_EMPTY=\n"
         "YUE2_GROOVE_TEST_ALPHA=second-should-not-win\n"
         "this line has no equals\n",
-        encoding="utf-8")
+        encoding="utf-8",
+    )
     environ = {"YUE2_GROOVE_TEST_PRESET": "kept"}
     assert config.load_env(env_file, environ=environ) == 4
-    assert environ["YUE2_GROOVE_TEST_ALPHA"] == "alpha"      # first occurrence wins
+    assert environ["YUE2_GROOVE_TEST_ALPHA"] == "alpha"  # first occurrence wins
     assert environ["YUE2_GROOVE_TEST_BETA"] == "beta value"  # export + single quotes
-    assert environ["YUE2_GROOVE_TEST_GAMMA"] == "gamma"      # double quotes
+    assert environ["YUE2_GROOVE_TEST_GAMMA"] == "gamma"  # double quotes
     assert environ["YUE2_GROOVE_TEST_EMPTY"] == ""
-    assert environ["YUE2_GROOVE_TEST_PRESET"] == "kept"      # untouched
+    assert environ["YUE2_GROOVE_TEST_PRESET"] == "kept"  # untouched
 
 
 def test_load_env_keeps_an_exported_value(tmp_path: Path) -> None:

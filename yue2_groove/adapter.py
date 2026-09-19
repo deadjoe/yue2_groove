@@ -12,6 +12,7 @@ that report progress internally (``yue2.nar.synthesize`` and
 ``YuE2VAE.decode_tiled``).  If neither works, generation still runs — the UI just
 shows stage-level progress for those phases.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -28,7 +29,7 @@ INSTALL_HINT = (
 
 _PATCH_LOCK = threading.Lock()
 
-StageProgress = Callable[[str, int, int], None]   # (stage, completed, total)
+StageProgress = Callable[[str, int, int], None]  # (stage, completed, total)
 
 
 def _require():
@@ -41,6 +42,7 @@ def _require():
 def yue2_version() -> str:
     try:
         from importlib.metadata import version
+
         return version("yue2-infer")
     except Exception:  # noqa: BLE001
         return "unknown"
@@ -58,6 +60,7 @@ def cuda_flash_attention_usable(device=None) -> bool:
     Temporary until upstream asks torch itself (PR #166); ``tests/test_contract.py`` says when.
     """
     import torch
+
     if not torch.cuda.is_available():
         return False
     built = getattr(torch.backends.cuda, "is_flash_attention_available", None)
@@ -72,9 +75,11 @@ def cuda_flash_attention_usable(device=None) -> bool:
 
 # ── protocol objects ─────────────────────────────────────────────────────────
 
+
 def sampling(**fields):
     _require()
     from yue2.protocol import Sampling
+
     return Sampling(**fields)
 
 
@@ -85,26 +90,43 @@ def sampling_fields(value) -> tuple[str, ...]:
 def generation_config(*, ode_steps: int):
     _require()
     from yue2.protocol import GenerationConfig
+
     return GenerationConfig(ode_steps=int(ode_steps))
 
 
 def song_request(**fields):
     _require()
     from yue2.protocol import SongRequest
+
     return SongRequest(**fields)
 
 
 def resolve_model(model, *, revision=None, local_files_only=False):
     _require()
     from yue2.storage import resolve_model as _resolve
+
     return _resolve(model, revision=revision, local_files_only=local_files_only)
 
 
 # ── pipeline lifecycle ───────────────────────────────────────────────────────
 
-def load_pipeline(model, *, vae, device, dtype, backend, quantization, offload_ar,
-                  memory_budget_gib, ode_steps, vae_core_frames, revision, vae_revision,
-                  local_files_only):
+
+def load_pipeline(
+    model,
+    *,
+    vae,
+    device,
+    dtype,
+    backend,
+    quantization,
+    offload_ar,
+    memory_budget_gib,
+    ode_steps,
+    vae_core_frames,
+    revision,
+    vae_revision,
+    local_files_only,
+):
     """Load the pipeline and its weights; returns ``(pipe, dtype_actually_loaded)``.
 
     ``dtype`` is ``"bfloat16"`` (upstream's checkpoint dtype) or ``"float32"``.  Upstream
@@ -116,11 +138,19 @@ def load_pipeline(model, *, vae, device, dtype, backend, quantization, offload_a
     from yue2 import YuE2Pipeline
 
     pipe = YuE2Pipeline.from_pretrained(
-        model, vae=vae, revision=revision or None, vae_revision=vae_revision or None,
-        device=device, memory_budget_gib=float(memory_budget_gib), backend=backend,
-        quantization=quantization, offload_ar=bool(offload_ar), vae_core_frames=vae_core_frames,
+        model,
+        vae=vae,
+        revision=revision or None,
+        vae_revision=vae_revision or None,
+        device=device,
+        memory_budget_gib=float(memory_budget_gib),
+        backend=backend,
+        quantization=quantization,
+        offload_ar=bool(offload_ar),
+        vae_core_frames=vae_core_frames,
         generation_config=generation_config(ode_steps=ode_steps),
-        local_files_only=bool(local_files_only), progress=False,
+        local_files_only=bool(local_files_only),
+        progress=False,
     )
     pipe._load_model()
     if dtype == "float32" and next(pipe._model.parameters()).dtype != torch.float32:
@@ -141,6 +171,7 @@ def close_pipeline(pipe) -> None:
 
 # ── generation ───────────────────────────────────────────────────────────────
 
+
 def supports_on_progress(pipe) -> bool:
     """True when the installed pipeline accepts ``on_progress`` on ``__call__``."""
     try:
@@ -156,13 +187,14 @@ def _acoustic_progress(on_progress: StageProgress | None):
     if on_progress is None:
         yield
         return
-    report = on_progress          # the inner wrappers shadow the name `on_progress`
+    report = on_progress  # the inner wrappers shadow the name `on_progress`
     try:
         import yue2.nar as nar
         from yue2.modeling_vae import YuE2VAE
+
         original_synthesize, original_tiled = nar.synthesize, YuE2VAE.decode_tiled
     except (ImportError, AttributeError):
-        yield            # upstream moved things: degrade to stage-level progress
+        yield  # upstream moved things: degrade to stage-level progress
         return
 
     def synthesize(*args, on_progress=None, **kwargs):
@@ -170,6 +202,7 @@ def _acoustic_progress(on_progress: StageProgress | None):
             if on_progress is not None:
                 on_progress(done, total)
             report("nar", done, total)
+
         return original_synthesize(*args, on_progress=chained, **kwargs)
 
     def decode_tiled(self, *args, on_progress=None, **kwargs):
@@ -177,6 +210,7 @@ def _acoustic_progress(on_progress: StageProgress | None):
             if on_progress is not None:
                 on_progress(done, total)
             report("vae", done, total)
+
         return original_tiled(self, *args, on_progress=chained, **kwargs)
 
     with _PATCH_LOCK:
@@ -187,14 +221,30 @@ def _acoustic_progress(on_progress: StageProgress | None):
             nar.synthesize, YuE2VAE.decode_tiled = original_synthesize, original_tiled
 
 
-def generate(pipe, request, *, abc_sampling, semantic_sampling, cancelled=None,
-             on_token=None, on_progress: StageProgress | None = None):
+def generate(
+    pipe,
+    request,
+    *,
+    abc_sampling,
+    semantic_sampling,
+    cancelled=None,
+    on_token=None,
+    on_progress: StageProgress | None = None,
+):
     """Full song generation; ``on_progress(stage, done, total)`` with stage nar/vae."""
-    kwargs = {"style": request.style, "lyrics": request.lyrics, "cot": request.cot,
-              "seed": request.seed, "abc": request.abc, "cfg_scale": request.cfg_scale,
-              "id": request.id, "abc_sampling": abc_sampling,
-              "semantic_sampling": semantic_sampling,
-              "cancelled": cancelled, "on_token": on_token}
+    kwargs = {
+        "style": request.style,
+        "lyrics": request.lyrics,
+        "cot": request.cot,
+        "seed": request.seed,
+        "abc": request.abc,
+        "cfg_scale": request.cfg_scale,
+        "id": request.id,
+        "abc_sampling": abc_sampling,
+        "semantic_sampling": semantic_sampling,
+        "cancelled": cancelled,
+        "on_token": on_token,
+    }
     if on_progress is not None and supports_on_progress(pipe):
         return pipe(on_progress=on_progress, **kwargs)
     with _acoustic_progress(on_progress):
@@ -221,8 +271,9 @@ def decode(pipe, latents, *, full=False, vae=None, on_progress=None):
     return audio
 
 
-def doctor_command(model, vae, *, revision="", vae_revision="", offline=False,
-                   verify=False) -> list[str]:
+def doctor_command(
+    model, vae, *, revision="", vae_revision="", offline=False, verify=False
+) -> list[str]:
     """argv for upstream's environment check (``yue2 doctor``)."""
     cmd = [sys.executable, "-m", "yue2.cli", "doctor", "--model", str(model), "--vae", str(vae)]
     if revision:

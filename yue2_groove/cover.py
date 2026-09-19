@@ -8,6 +8,7 @@ The one rule this module enforces: a cover is *score-conditioned*.  The ABC must
 be present after preparation — generation with an empty score would make YuE2
 plan a new melody, silently discarding the transcription.
 """
+
 from __future__ import annotations
 
 import textwrap
@@ -23,7 +24,9 @@ COT_FOR_TASK = {"melody-vocal": "melody", "melody-full": "melody", "full": "full
 def cot_for_task(task: str) -> str:
     """YuE2 plan mode for a SheetSage2 task; covers never use ``off``."""
     if task not in COT_FOR_TASK:
-        raise ValueError(f"Unknown transcription task {task!r}; use one of {', '.join(COT_FOR_TASK)}")
+        raise ValueError(
+            f"Unknown transcription task {task!r}; use one of {', '.join(COT_FOR_TASK)}"
+        )
     return COT_FOR_TASK[task]
 
 
@@ -56,11 +59,18 @@ def prepare_cover_abc(text: str, *, keep_voice: str = "both") -> str:
     return source
 
 
-def build_cover_request(style: str, lyrics: str, abc_text: str, *,
-                        task: str = "melody-full", seed: int = 831001,
-                        cfg_scale: float | None = None, id: str | None = None,
-                        keep_voice: str = "both",
-                        request_factory: Callable | None = None):
+def build_cover_request(
+    style: str,
+    lyrics: str,
+    abc_text: str,
+    *,
+    task: str = "melody-full",
+    seed: int = 831001,
+    cfg_scale: float | None = None,
+    id: str | None = None,
+    keep_voice: str = "both",
+    request_factory: Callable | None = None,
+):
     """Build the YuE2 request for a cover, always carrying the ABC explicitly.
 
     Melody-conditioned covers get a chord-free score (``cot="melody"`` does not
@@ -68,8 +78,10 @@ def build_cover_request(style: str, lyrics: str, abc_text: str, *,
     """
     text = clean_abc(abc_text)
     if not text:
-        raise ValueError("A cover requires an ABC score; an empty score would let YuE2 plan a "
-                         "new melody and discard the transcription")
+        raise ValueError(
+            "A cover requires an ABC score; an empty score would let YuE2 plan a "
+            "new melody and discard the transcription"
+        )
     cot = cot_for_task(task)
     if cot == "melody":
         text = prepare_cover_abc(text, keep_voice=keep_voice)

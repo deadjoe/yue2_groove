@@ -5,6 +5,7 @@ driver in the separate SheetSage2 environment.  The tests here substitute a tiny
 real subprocess for the driver, so the Popen plumbing (progress parsing, cancel,
 failure records) is exercised for real.
 """
+
 from __future__ import annotations
 
 import ast
@@ -35,6 +36,7 @@ def patch_command(monkeypatch, stub: Path, captured: dict):
     def fake_build_command(audio_path, output_dir, **kwargs):
         captured.update({"audio": str(audio_path), "output": str(output_dir), **kwargs})
         return [sys.executable, str(stub), str(output_dir)]
+
     monkeypatch.setattr(adapter, "build_command", fake_build_command)
 
 
@@ -59,15 +61,32 @@ def test_build_command_shape(monkeypatch, tmp_path: Path) -> None:
     audio.write_bytes(b"RIFF")
 
     cmd = adapter.build_command(
-        audio, tmp_path / "out", task="melody-vocal", model="m-a-p/SheetSage2",
-        revision="abc123", base_model="/mert", offline=True, device="cpu", dtype="fp32",
-        preset="paper", max_seconds=30, threads=2)
+        audio,
+        tmp_path / "out",
+        task="melody-vocal",
+        model="m-a-p/SheetSage2",
+        revision="abc123",
+        base_model="/mert",
+        offline=True,
+        device="cpu",
+        dtype="fp32",
+        preset="paper",
+        max_seconds=30,
+        threads=2,
+    )
     assert cmd[0] == str(fake_python)
     assert cmd[1] == str(adapter.DRIVER) and adapter.DRIVER.is_file()
     assert "--task" in cmd and cmd[cmd.index("--task") + 1] == "melody-vocal"
-    for flag, value in (("--model", "m-a-p/SheetSage2"), ("--revision", "abc123"),
-                        ("--base-model", "/mert"), ("--device", "cpu"), ("--dtype", "fp32"),
-                        ("--preset", "paper"), ("--max-seconds", "30.0"), ("--threads", "2")):
+    for flag, value in (
+        ("--model", "m-a-p/SheetSage2"),
+        ("--revision", "abc123"),
+        ("--base-model", "/mert"),
+        ("--device", "cpu"),
+        ("--dtype", "fp32"),
+        ("--preset", "paper"),
+        ("--max-seconds", "30.0"),
+        ("--threads", "2"),
+    ):
         assert cmd[cmd.index(flag) + 1] == value
     assert "--offline" in cmd
     with pytest.raises(ValueError, match="task"):
@@ -96,9 +115,15 @@ def test_transcribe_streams_progress_and_reads_result(monkeypatch, tmp_path: Pat
     patch_command(monkeypatch, write_stub(tmp_path, SUCCESS_STUB), captured)
     seen: list[tuple] = []
 
-    record = adapter.transcribe(audio, output_dir=tmp_path / "out", task="melody-full",
-                                progress=lambda value, text: seen.append((value, text)),
-                                model="/local/SheetSage2", device="cpu", dtype="fp32")
+    record = adapter.transcribe(
+        audio,
+        output_dir=tmp_path / "out",
+        task="melody-full",
+        progress=lambda value, text: seen.append((value, text)),
+        model="/local/SheetSage2",
+        device="cpu",
+        dtype="fp32",
+    )
 
     assert record["abc"] == "X:1" and record["warnings"] == ["low confidence"]
     assert record["task"] == "melody-full" and record["melody_only"] is True
@@ -122,7 +147,9 @@ def test_melody_only_boolean_maps_onto_the_task(monkeypatch, tmp_path: Path) -> 
 def test_transcribe_failure_uses_failure_record(monkeypatch, tmp_path: Path) -> None:
     audio = tmp_path / "reference.wav"
     audio.write_bytes(b"RIFF")
-    stub = write_stub(tmp_path, """
+    stub = write_stub(
+        tmp_path,
+        """
         import json, pathlib, sys
         out = pathlib.Path(sys.argv[1]); out.mkdir(parents=True, exist_ok=True)
         (out / "failure.json").write_text(json.dumps({
@@ -131,7 +158,8 @@ def test_transcribe_failure_uses_failure_record(monkeypatch, tmp_path: Path) -> 
             "warnings": ["short input"]}))
         print("boom", file=sys.stderr)
         sys.exit(2)
-    """)
+    """,
+    )
     captured: dict = {}
     patch_command(monkeypatch, stub, captured)
 
@@ -150,8 +178,11 @@ def test_transcribe_without_result_json_fails_clearly(monkeypatch, tmp_path: Pat
 
 
 def test_transcribe_missing_audio_is_refused_before_spawning(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(adapter, "build_command",
-                        lambda *a, **k: pytest.fail("must not build a command for a missing file"))
+    monkeypatch.setattr(
+        adapter,
+        "build_command",
+        lambda *a, **k: pytest.fail("must not build a command for a missing file"),
+    )
     with pytest.raises(adapter.SheetsageFailed, match="Audio file not found"):
         adapter.transcribe(tmp_path / "nope.wav")
 
@@ -168,11 +199,14 @@ def test_unconfigured_environment_leaves_no_output_directory(monkeypatch, tmp_pa
 def test_cancel_terminates_the_driver(monkeypatch, tmp_path: Path) -> None:
     audio = tmp_path / "reference.wav"
     audio.write_bytes(b"RIFF")
-    stub = write_stub(tmp_path, """
+    stub = write_stub(
+        tmp_path,
+        """
         import time
         print("@@PROGRESS " + '{"done": 1, "total": 10}', flush=True)
         time.sleep(60)
-    """)
+    """,
+    )
     captured: dict = {}
     patch_command(monkeypatch, stub, captured)
     checks = {"count": 0}
@@ -203,9 +237,12 @@ def test_probe_and_format(monkeypatch, tmp_path: Path) -> None:
     fake_python = tmp_path / "python"
     fake_python.write_text("#!/bin/sh\n", encoding="utf-8")
     fake_python.chmod(fake_python.stat().st_mode | stat.S_IXUSR)
-    payload = {"python": "3.11.9", "executable": str(fake_python),
-               "packages": {"torch": True, "transformers": True, "huggingface-hub": True},
-               "versions": {"torch": "2.8.0", "transformers": "4.45.2", "huggingface-hub": "0.36.0"}}
+    payload = {
+        "python": "3.11.9",
+        "executable": str(fake_python),
+        "packages": {"torch": True, "transformers": True, "huggingface-hub": True},
+        "versions": {"torch": "2.8.0", "transformers": "4.45.2", "huggingface-hub": "0.36.0"},
+    }
 
     class Completed:
         returncode = 0
@@ -213,7 +250,9 @@ def test_probe_and_format(monkeypatch, tmp_path: Path) -> None:
         stderr = ""
 
     monkeypatch.setattr(adapter.subprocess, "run", lambda *a, **k: Completed())
-    monkeypatch.setattr(adapter.shutil, "which", lambda name: "/usr/bin/ffmpeg" if name == "ffmpeg" else None)
+    monkeypatch.setattr(
+        adapter.shutil, "which", lambda name: "/usr/bin/ffmpeg" if name == "ffmpeg" else None
+    )
     info = adapter.probe(str(fake_python))
     assert info["ok"] is True and info["ffmpeg"] == "/usr/bin/ffmpeg"
     text = adapter.format_probe(info)
@@ -242,16 +281,19 @@ def test_driver_task_settings_and_melody_only_interface() -> None:
 
     class Missing:
         def transcribe(self, audio, **kwargs): ...
+
     with pytest.raises(driver.DriverError, match="does not expose melody_only"):
         driver.check_melody_only_interface(Missing())
 
     class Positional:
         def transcribe(self, audio, melody_only, /): ...
+
     with pytest.raises(driver.DriverError, match="does not expose melody_only"):
         driver.check_melody_only_interface(Positional())
 
     class Ok:
         def transcribe(self, audio, *, melody_only=False): ...
+
     driver.check_melody_only_interface(Ok())  # must not raise
 
 
@@ -260,8 +302,10 @@ def test_driver_progress_callback_prints_events(capsys) -> None:
     callback(2, 5)
     callback(done=5, total=5)
     callback("metadata", 1, 3)
-    lines = [line for line in capsys.readouterr().out.splitlines() if line.startswith("@@PROGRESS ")]
-    events = [json.loads(line[len("@@PROGRESS "):]) for line in lines]
+    lines = [
+        line for line in capsys.readouterr().out.splitlines() if line.startswith("@@PROGRESS ")
+    ]
+    events = [json.loads(line[len("@@PROGRESS ") :]) for line in lines]
     assert {"done": 2, "total": 5} in events and {"done": 5, "total": 5} in events
     assert {"done": 1, "total": 3, "stage": "metadata"} in events
 
@@ -296,8 +340,9 @@ def test_yue2_is_imported_only_by_adapter_py() -> None:
     """The UI/skill modules must go through ``adapter.py`` for every yue2 call."""
     offenders = {}
     for path in sorted(PACKAGE.rglob("*.py")):
-        names = {name for name in _imported_modules(path)
-                 if name == "yue2" or name.startswith("yue2.")}
+        names = {
+            name for name in _imported_modules(path) if name == "yue2" or name.startswith("yue2.")
+        }
         if names:
             offenders[path.name] = names
     assert set(offenders) == {"adapter.py"}, offenders
@@ -305,8 +350,10 @@ def test_yue2_is_imported_only_by_adapter_py() -> None:
 
 def test_webui_never_imports_transformers() -> None:
     for path in sorted((PACKAGE / "webui").glob("*.py")):
-        assert not any(name == "transformers" or name.startswith("transformers.")
-                       for name in _imported_modules(path)), path.name
+        assert not any(
+            name == "transformers" or name.startswith("transformers.")
+            for name in _imported_modules(path)
+        ), path.name
 
 
 def test_sheetsage_env_does_not_leak_into_yue2_config(monkeypatch) -> None:
@@ -365,7 +412,7 @@ SERVE_STUB = """
 def _no_resident_worker():
     yield
     adapter.stop_worker()
-    adapter._REAPER = None   # next warm start gets a fresh reaper with the current tick
+    adapter._REAPER = None  # next warm start gets a fresh reaper with the current tick
 
 
 def enable_warm(monkeypatch, tmp_path: Path, stub_body: str = SERVE_STUB) -> Path:
@@ -373,6 +420,7 @@ def enable_warm(monkeypatch, tmp_path: Path, stub_body: str = SERVE_STUB) -> Pat
 
     def fake_serve_command(*, python=None, **kwargs):
         return [sys.executable, str(stub)]
+
     monkeypatch.setattr(adapter, "build_serve_command", fake_serve_command)
     monkeypatch.setenv("YUE2_GROOVE_SHEETSAGE_KEEP_WARM", "1")
     return stub
@@ -383,10 +431,11 @@ def test_build_serve_command_shape(monkeypatch, tmp_path: Path) -> None:
     fake_python.write_text("#!/bin/sh\n", encoding="utf-8")
     fake_python.chmod(fake_python.stat().st_mode | stat.S_IXUSR)
     monkeypatch.setenv("YUE2_GROOVE_SHEETSAGE_PYTHON", str(fake_python))
-    cmd = adapter.build_serve_command(model="m-a-p/SheetSage2", device="cpu", dtype="fp32",
-                                      offline=True)
+    cmd = adapter.build_serve_command(
+        model="m-a-p/SheetSage2", device="cpu", dtype="fp32", offline=True
+    )
     assert cmd[:3] == [str(fake_python), str(adapter.DRIVER), "--serve"]
-    assert "--task" not in cmd                       # tasks travel in each request
+    assert "--task" not in cmd  # tasks travel in each request
     assert cmd[cmd.index("--model") + 1] == "m-a-p/SheetSage2" and "--offline" in cmd
 
 
@@ -398,15 +447,19 @@ def test_warm_worker_is_reused_and_stoppable(monkeypatch, tmp_path: Path) -> Non
     monkeypatch.setenv("STUB_PID_FILE", str(pid_file))
     progress = []
 
-    first = adapter.transcribe(audio, output_dir=tmp_path / "one", task="melody-full",
-                               progress=lambda value, text: progress.append(value))
+    first = adapter.transcribe(
+        audio,
+        output_dir=tmp_path / "one",
+        task="melody-full",
+        progress=lambda value, text: progress.append(value),
+    )
     status = adapter.worker_status()
     assert first["abc"] == "X:1" and first["worker"]["resident"] is True
     assert status is not None and status["pid"] == int(pid_file.read_text())
     assert [value for value in progress if value is not None] == [0.5]
 
     second = adapter.transcribe(audio, output_dir=tmp_path / "two", task="melody-full")
-    assert adapter.worker_status()["pid"] == status["pid"]        # same resident process
+    assert adapter.worker_status()["pid"] == status["pid"]  # same resident process
     assert second["task"] == "melody-full" and second["output_dir"].endswith("two")
 
     assert adapter.stop_worker() is True
@@ -459,8 +512,9 @@ def test_warm_off_uses_the_one_shot_path(monkeypatch, tmp_path: Path) -> None:
     audio = tmp_path / "ref.wav"
     audio.write_bytes(b"RIFF")
     monkeypatch.delenv("YUE2_GROOVE_SHEETSAGE_KEEP_WARM", raising=False)
-    monkeypatch.setattr(adapter, "build_serve_command",
-                        lambda **kwargs: pytest.fail("warm worker must not start"))
+    monkeypatch.setattr(
+        adapter, "build_serve_command", lambda **kwargs: pytest.fail("warm worker must not start")
+    )
     captured: dict = {}
     patch_command(monkeypatch, write_stub(tmp_path, SUCCESS_STUB), captured)
     record = adapter.transcribe(audio, output_dir=tmp_path / "out")
@@ -480,34 +534,76 @@ def test_driver_serve_loop(monkeypatch, tmp_path: Path, capsys) -> None:
         calls.append(request)
         out = Path(request["output_dir"])
         out.mkdir(parents=True)
-        (out / "result.json").write_text(jsonlib.dumps({
-            "abc": "X:1", "status": "complete", "task": request.get("task"),
-            "melody_only": True, "output_dir": str(out)}), encoding="utf-8")
-        return {"abc": "X:1", "status": "complete", "output_dir": str(out),
-                "task": request.get("task"), "melody_only": True, "warnings": []}
+        (out / "result.json").write_text(
+            jsonlib.dumps(
+                {
+                    "abc": "X:1",
+                    "status": "complete",
+                    "task": request.get("task"),
+                    "melody_only": True,
+                    "output_dir": str(out),
+                }
+            ),
+            encoding="utf-8",
+        )
+        return {
+            "abc": "X:1",
+            "status": "complete",
+            "output_dir": str(out),
+            "task": request.get("task"),
+            "melody_only": True,
+            "warnings": [],
+        }
 
     monkeypatch.setattr(driver, "run_transcription", fake_transcribe)
     audio = tmp_path / "a.wav"
     audio.write_bytes(b"RIFF")
-    payload = "\n".join([
-        jsonlib.dumps({"op": "ping"}),
-        jsonlib.dumps({"op": "transcribe", "audio": str(audio),
-                       "output_dir": str(tmp_path / "out"), "task": "melody-vocal"}),
-        jsonlib.dumps({"op": "stop"}),
-    ]) + "\n"
+    payload = (
+        "\n".join(
+            [
+                jsonlib.dumps({"op": "ping"}),
+                jsonlib.dumps(
+                    {
+                        "op": "transcribe",
+                        "audio": str(audio),
+                        "output_dir": str(tmp_path / "out"),
+                        "task": "melody-vocal",
+                    }
+                ),
+                jsonlib.dumps({"op": "stop"}),
+            ]
+        )
+        + "\n"
+    )
     monkeypatch.setattr(driver.sys, "stdin", io.StringIO(payload))
-    args = SimpleNamespace(model="m", revision=None, base_model=None, offline=False,
-                           device="cpu", dtype="fp32", preset="default", threads=4,
-                           task="melody-full", max_seconds=None)
+    args = SimpleNamespace(
+        model="m",
+        revision=None,
+        base_model=None,
+        offline=False,
+        device="cpu",
+        dtype="fp32",
+        preset="default",
+        threads=4,
+        task="melody-full",
+        max_seconds=None,
+    )
 
     assert driver.serve(args) == 0
     lines = capsys.readouterr().out.splitlines()
     assert any(line.startswith("@@READY ") for line in lines)
-    replies = [jsonlib.loads(line[len("@@RESULT "):]) for line in lines
-               if line.startswith("@@RESULT ")]
+    replies = [
+        jsonlib.loads(line[len("@@RESULT ") :]) for line in lines if line.startswith("@@RESULT ")
+    ]
     assert replies[0]["pong"] is True and replies[1]["ok"] is True
-    assert calls == [{"op": "transcribe", "audio": str(audio),
-                      "output_dir": str(tmp_path / "out"), "task": "melody-vocal"}]
+    assert calls == [
+        {
+            "op": "transcribe",
+            "audio": str(audio),
+            "output_dir": str(tmp_path / "out"),
+            "task": "melody-vocal",
+        }
+    ]
 
 
 def test_warm_config_flags(monkeypatch) -> None:
@@ -537,7 +633,7 @@ def test_idle_worker_is_reaped_in_the_background(monkeypatch, tmp_path: Path) ->
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline and adapter.worker_status() is not None:
         time.sleep(0.02)
-    assert adapter.worker_status() is None            # freed without another transcription
+    assert adapter.worker_status() is None  # freed without another transcription
 
 
 def test_reaper_never_stops_a_busy_worker(monkeypatch, tmp_path: Path) -> None:
@@ -573,14 +669,15 @@ UNICODE_STUB = """
 def test_child_stdout_is_utf8_even_under_an_ascii_locale(monkeypatch, tmp_path: Path) -> None:
     """A parent whose locale cannot encode non-ASCII (Windows cp1252 in miniature)
     must still read the driver: the child is pinned to UTF-8, and so is our decoder."""
-    monkeypatch.setenv("PYTHONIOENCODING", "ascii")   # inherited by the child unless overridden
+    monkeypatch.setenv("PYTHONIOENCODING", "ascii")  # inherited by the child unless overridden
     audio = tmp_path / "参考.wav"
     audio.write_bytes(b"RIFF")
     patch_command(monkeypatch, write_stub(tmp_path, UNICODE_STUB), {})
     seen: list[tuple] = []
 
-    record = adapter.transcribe(audio, output_dir=tmp_path / "输出",
-                                progress=lambda value, text: seen.append((value, text)))
+    record = adapter.transcribe(
+        audio, output_dir=tmp_path / "输出", progress=lambda value, text: seen.append((value, text))
+    )
 
     assert record["abc"] == "X:1"
     assert record["warnings"] == ["stdout=utf-8"]
@@ -593,7 +690,8 @@ def test_resident_worker_pipe_is_utf8_under_an_ascii_locale(monkeypatch, tmp_pat
     # real driver); a child left on an ASCII locale dies right there.
     ready = SERVE_STUB.replace(
         'json.dumps({"model": "stub", "device": "cpu", "dtype": "fp32"})',
-        'json.dumps({"model": "模型/stub", "device": "cpu", "dtype": "fp32"}, ensure_ascii=False)')
+        'json.dumps({"model": "模型/stub", "device": "cpu", "dtype": "fp32"}, ensure_ascii=False)',
+    )
     assert ready != SERVE_STUB
     enable_warm(monkeypatch, tmp_path, ready)
     audio = tmp_path / "ref.wav"
@@ -606,9 +704,12 @@ def test_probe_pins_the_child_pipe_to_utf8(monkeypatch, tmp_path: Path) -> None:
     fake_python = tmp_path / "python"
     fake_python.write_text("#!/bin/sh\n", encoding="utf-8")
     fake_python.chmod(fake_python.stat().st_mode | stat.S_IXUSR)
-    payload = {"python": "3.11.9", "executable": str(fake_python),
-               "packages": {"torch": True, "transformers": True, "huggingface-hub": True},
-               "versions": {"torch": "2.8.0", "transformers": "4.45.2", "huggingface-hub": "0.36.0"}}
+    payload = {
+        "python": "3.11.9",
+        "executable": str(fake_python),
+        "packages": {"torch": True, "transformers": True, "huggingface-hub": True},
+        "versions": {"torch": "2.8.0", "transformers": "4.45.2", "huggingface-hub": "0.36.0"},
+    }
 
     class Completed:
         returncode = 0
@@ -620,6 +721,7 @@ def test_probe_pins_the_child_pipe_to_utf8(monkeypatch, tmp_path: Path) -> None:
     def fake_run(*args, **kwargs):
         calls.update(kwargs)
         return Completed()
+
     monkeypatch.setattr(adapter.subprocess, "run", fake_run)
     monkeypatch.setenv("PYTHONIOENCODING", "ascii")
     assert adapter.probe(str(fake_python))["ok"] is True

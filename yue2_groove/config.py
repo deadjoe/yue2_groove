@@ -38,6 +38,7 @@ The repository-root ``.env`` (see README) is also read by the app itself via
 the ``PYTORCH_MPS_HIGH/LOW_WATERMARK_RATIO`` memory guard.  An already-exported
 value always wins over the file.
 """
+
 from __future__ import annotations
 
 import os
@@ -84,7 +85,7 @@ def load_env(path=None, environ=None) -> int:
         if not line or line.startswith("#"):
             continue
         if line.startswith("export "):
-            line = line[len("export "):].strip()
+            line = line[len("export ") :].strip()
         if "=" not in line:
             continue
         key, value = line.split("=", 1)

@@ -1,4 +1,5 @@
 """``yue2_groove.workflow``: current-work identity, stage and family, no browser."""
+
 from __future__ import annotations
 
 import json
@@ -6,18 +7,39 @@ from pathlib import Path
 
 from yue2_groove import workflow
 
-ABC = ("X:1\nT:\nM:4/4\nL:1/32\nQ:1/4=88\n"
-       'V: Vocal clef=treble name="Vocal Melody" snm="Vocal"\n'
-       'V: Ins clef=treble name="Ins Melody" snm="Inst."\nK:C\n'
-       "V: Vocal\nE4E4G4G4E8z8|D4D4F4F4D8z8|\nV: Ins\nZ2|\n")
+ABC = (
+    "X:1\nT:\nM:4/4\nL:1/32\nQ:1/4=88\n"
+    'V: Vocal clef=treble name="Vocal Melody" snm="Vocal"\n'
+    'V: Ins clef=treble name="Ins Melody" snm="Inst."\nK:C\n'
+    "V: Vocal\nE4E4G4G4E8z8|D4D4F4F4D8z8|\nV: Ins\nZ2|\n"
+)
 
 
-def make_run(root: Path, name: str, kind: str, *, request=None, abc=None, edit_source=None,
-             with_baseline=False, finished=False, group_of=None) -> Path:
+def make_run(
+    root: Path,
+    name: str,
+    kind: str,
+    *,
+    request=None,
+    abc=None,
+    edit_source=None,
+    with_baseline=False,
+    finished=False,
+    group_of=None,
+) -> Path:
     d = root / name
     d.mkdir(parents=True)
-    request = request if request is not None else {"id": name.rsplit("-", maxsplit=1)[-1], "style": "pop",
-                                                   "lyrics": "la", "cot": "full", "seed": 7}
+    request = (
+        request
+        if request is not None
+        else {
+            "id": name.rsplit("-", maxsplit=1)[-1],
+            "style": "pop",
+            "lyrics": "la",
+            "cot": "full",
+            "seed": 7,
+        }
+    )
     if kind == "group":
         (d / "run.json").write_text("{}", encoding="utf-8")
         for mode in group_of or ("full", "melody"):
@@ -44,14 +66,19 @@ def make_run(root: Path, name: str, kind: str, *, request=None, abc=None, edit_s
             (d / "score.abc").write_text(abc or "", encoding="utf-8")
         (d / "result.json").write_text(json.dumps(result), encoding="utf-8")
     if edit_source:
-        (d / "edit_manifest.json").write_text(json.dumps(
-            {"schema": "yue2-groove-edit-v1", "source": {"rel": edit_source}}), encoding="utf-8")
+        (d / "edit_manifest.json").write_text(
+            json.dumps({"schema": "yue2-groove-edit-v1", "source": {"rel": edit_source}}),
+            encoding="utf-8",
+        )
     if with_baseline:
         baseline = root / "baselines" / f"{name}-baseline"
         baseline.mkdir(parents=True)
-        (baseline / "baseline.json").write_text(json.dumps(
-            {"schema": "yue2-groove-baseline-v1", "source": {"rel": name, "path": str(d)}}),
-            encoding="utf-8")
+        (baseline / "baseline.json").write_text(
+            json.dumps(
+                {"schema": "yue2-groove-baseline-v1", "source": {"rel": name, "path": str(d)}}
+            ),
+            encoding="utf-8",
+        )
     if finished:
         (d / "finished.json").write_text("{}", encoding="utf-8")
     return d
@@ -63,7 +90,9 @@ def test_identify_kinds_and_stages(tmp_path: Path) -> None:
     make_run(tmp_path, "20260901-120000-tx", "transcription", abc=ABC)
     make_run(tmp_path, "20260901-130000-dec", "decode")
     make_run(tmp_path, "20260901-140000-baselined", "song", abc=ABC, with_baseline=True)
-    make_run(tmp_path, "20260901-150000-edited", "song", abc=ABC, edit_source="20260901-100000-song")
+    make_run(
+        tmp_path, "20260901-150000-edited", "song", abc=ABC, edit_source="20260901-100000-song"
+    )
     make_run(tmp_path, "20260901-160000-done", "song", abc=ABC, finished=True)
 
     def stage(name):
@@ -75,9 +104,9 @@ def test_identify_kinds_and_stages(tmp_path: Path) -> None:
     assert stage("20260901-110000-plan") == ("plan", "score")
     assert stage("20260901-120000-tx") == ("transcription", "score")
     assert stage("20260901-130000-dec") == ("decode", "audio")
-    assert stage("20260901-140000-baselined") == ("song", "revise")   # frozen for editing
+    assert stage("20260901-140000-baselined") == ("song", "revise")  # frozen for editing
     assert stage("20260901-150000-edited") == ("song", "revise")
-    assert stage("20260901-160000-done") == ("song", "done")          # explicit marker only
+    assert stage("20260901-160000-done") == ("song", "done")  # explicit marker only
 
 
 def test_identify_rejects_non_works(tmp_path: Path) -> None:
@@ -106,16 +135,17 @@ def test_band_is_one_factual_line(tmp_path: Path) -> None:
 
 
 def test_family_links_by_id_edit_and_cover(tmp_path: Path) -> None:
-    source = make_run(tmp_path, "20260901-100000-Blue",
-                      "song", abc=ABC, request={"id": "blue", "seed": 1})
+    source = make_run(
+        tmp_path, "20260901-100000-Blue", "song", abc=ABC, request={"id": "blue", "seed": 1}
+    )
     make_run(tmp_path, "20260901-110000-Blue", "song", abc=ABC, request={"id": "blue", "seed": 2})
     make_run(tmp_path, "20260901-120000-other", "song", abc=ABC, request={"id": "other"})
-    edit = make_run(tmp_path, "20260901-130000-Blue-edit", "song", abc=ABC,
-                    edit_source="20260901-100000-Blue")
+    edit = make_run(
+        tmp_path, "20260901-130000-Blue-edit", "song", abc=ABC, edit_source="20260901-100000-Blue"
+    )
     tx = make_run(tmp_path, "transcriptions/20260901-140000-ref", "transcription", abc=ABC)
     tx_rel = workflow.identify(tmp_path, tx)["rel"]
-    cover = make_run(tmp_path, "20260901-150000-cover", "song",
-                     request={"id": "cover", "abc": ABC})
+    cover = make_run(tmp_path, "20260901-150000-cover", "song", request={"id": "cover", "abc": ABC})
 
     run = workflow.identify(tmp_path, source)
     entries = {entry["rel"]: entry for entry in workflow.family(tmp_path, run)}
@@ -136,8 +166,7 @@ def test_next_actions_map_to_existing_handlers(tmp_path: Path) -> None:
     plan = workflow.identify(tmp_path, tmp_path / "20260901-100000-plan")
     assert [a["id"] for a in workflow.next_actions(plan)] == ["render", "library"]
 
-    make_run(tmp_path, "20260901-110000-song", "song", abc=ABC,
-             request={"id": "s", "seed": 10})
+    make_run(tmp_path, "20260901-110000-song", "song", abc=ABC, request={"id": "s", "seed": 10})
     song = workflow.identify(tmp_path, tmp_path / "20260901-110000-song")
     actions = workflow.next_actions(song)
     assert [a["id"] for a in actions] == ["listen", "edit", "retry", "library"]

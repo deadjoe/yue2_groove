@@ -1,4 +1,5 @@
 """Bearbone DS v0.2, two scenes: palettes, the Gradio theme and the stylesheet assembly."""
+
 from __future__ import annotations
 
 from gradio.themes import Base, sizes
@@ -11,22 +12,48 @@ from .. import config
 # (primary buttons, selected chips/checkboxes, sliders) share the #11141C family.
 # Shared grammar: 1px strokes, 10px panels, no shadows / gradients / glow, monospace, ops footer.
 
-FONT_STACK = ["Berkeley Mono", "Sarasa Mono SC", "JetBrains Mono", "SF Mono",
-              "Noto Sans Mono CJK SC", "ui-monospace", "Menlo", "monospace"]
+FONT_STACK = [
+    "Berkeley Mono",
+    "Sarasa Mono SC",
+    "JetBrains Mono",
+    "SF Mono",
+    "Noto Sans Mono CJK SC",
+    "ui-monospace",
+    "Menlo",
+    "monospace",
+]
 
 DARK = {
-    "bg": "#0B0A09", "bg_panel": "#12110F", "bg_input": "#171512", "bg_lift": "#1C1916",
-    "fg": "#F1ECE2", "fg2": "#B5AEA2", "fg3": "#7A746A", "fg4": "#57524A",
-    "stroke": "#2E2B27", "stroke2": "#8C8477",
-    "primary_fill": "#F1ECE2", "primary_hover": "#FBF8F2", "primary_text": "#16140F",
+    "bg": "#0B0A09",
+    "bg_panel": "#12110F",
+    "bg_input": "#171512",
+    "bg_lift": "#1C1916",
+    "fg": "#F1ECE2",
+    "fg2": "#B5AEA2",
+    "fg3": "#7A746A",
+    "fg4": "#57524A",
+    "stroke": "#2E2B27",
+    "stroke2": "#8C8477",
+    "primary_fill": "#F1ECE2",
+    "primary_hover": "#FBF8F2",
+    "primary_text": "#16140F",
     "danger": "#D08A8A",
 }
 
 BRIGHT = {
-    "bg": "#F1ECE2", "bg_panel": "#F7F3EB", "bg_input": "#F7F3EB", "bg_lift": "#EAE4D8",
-    "fg": "#16140F", "fg2": "#4A463F", "fg3": "#7A746A", "fg4": "#A69D8D",
-    "stroke": "#C4BBA8", "stroke2": "#7E7462",
-    "primary_fill": "#11141C", "primary_hover": "#2B3244", "primary_text": "#F1ECE2",
+    "bg": "#F1ECE2",
+    "bg_panel": "#F7F3EB",
+    "bg_input": "#F7F3EB",
+    "bg_lift": "#EAE4D8",
+    "fg": "#16140F",
+    "fg2": "#4A463F",
+    "fg3": "#7A746A",
+    "fg4": "#A69D8D",
+    "stroke": "#C4BBA8",
+    "stroke2": "#7E7462",
+    "primary_fill": "#11141C",
+    "primary_hover": "#2B3244",
+    "primary_text": "#F1ECE2",
     "danger": "#B23B3B",
 }
 
@@ -131,7 +158,9 @@ def _theme_values(p):
         "checkbox_shadow": "none",
         "checkbox_label_background_fill": p["bg_input"],
         "checkbox_label_background_fill_hover": p["bg_lift"],
-        "checkbox_label_background_fill_selected": p["primary_fill"] if p is BRIGHT else p["stroke"],
+        "checkbox_label_background_fill_selected": p["primary_fill"]
+        if p is BRIGHT
+        else p["stroke"],
         "checkbox_label_border_color": p["stroke"],
         "checkbox_label_border_color_selected": p["primary_fill"] if p is BRIGHT else p["stroke2"],
         "checkbox_label_text_color": p["fg2"],
@@ -163,11 +192,16 @@ def _theme_values(p):
 def _bb_vars(p):
     """Scene palette → --bb-* variables for the custom CSS."""
     return {
-        "--bb-field": p["bg"], "--bb-panel": p["bg_panel"],
-        "--bb-well": p["bg_input"], "--bb-lift": p["bg_lift"],
-        "--bb-ink": p["fg"], "--bb-ink2": p["fg2"],
-        "--bb-ink3": p["fg3"], "--bb-ink4": p["fg4"],
-        "--bb-line": p["stroke"], "--bb-line2": p["stroke2"],
+        "--bb-field": p["bg"],
+        "--bb-panel": p["bg_panel"],
+        "--bb-well": p["bg_input"],
+        "--bb-lift": p["bg_lift"],
+        "--bb-ink": p["fg"],
+        "--bb-ink2": p["fg2"],
+        "--bb-ink3": p["fg3"],
+        "--bb-ink4": p["fg4"],
+        "--bb-line": p["stroke"],
+        "--bb-line2": p["stroke2"],
         "--bb-primary-bg": p["primary_fill"],
         "--bb-primary-bg-hover": p["primary_hover"],
         "--bb-primary-fg": p["primary_text"],
@@ -205,7 +239,6 @@ def _scene_css(selector, values, palette=None):
     return "\n".join(lines)
 
 
-
 # Gradio adds `.dark` to <body> when the OS is in dark appearance and re-declares its
 # theme variables there; an html-level override would lose to that local declaration.
 # So the bright scene must be applied on every element that can carry the theme scope.
@@ -219,12 +252,14 @@ BRIGHT_SELECTOR = (
     "html.bb-bright .dark, html.bb-bright gradio-app, html.bb-bright .gradio-container"
 )
 
-BEARBONE_CSS = "\n".join([
-    _palette_css(":root", DARK),
-    BASE_CSS,
-    _scene_css(BRIGHT_SELECTOR, _theme_values(BRIGHT), palette=BRIGHT),
-    config.static_text("library.css"),
-])
+BEARBONE_CSS = "\n".join(
+    [
+        _palette_css(":root", DARK),
+        BASE_CSS,
+        _scene_css(BRIGHT_SELECTOR, _theme_values(BRIGHT), palette=BRIGHT),
+        config.static_text("library.css"),
+    ]
+)
 
 
 def bb_theme():

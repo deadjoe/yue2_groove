@@ -374,14 +374,15 @@ belongs in `yue2_groove/adapter.py`, the only module that imports `yue2`.
 
 ```bash
 uv pip install --python .venv/bin/python -e ".[test]" --overrides overrides/macos.txt
-.venv/bin/ruff check .                                    # the one lint gate (config in pyproject.toml)
+.venv/bin/ruff check . && .venv/bin/ruff format --check .   # lint + formatting (config in pyproject.toml)
+.venv/bin/pyright                                          # types, basic mode, the package only (pyrightconfig.json)
 .venv/bin/python -m compileall -q yue2_groove tests scripts
-.venv/bin/python -m pytest -q
+.venv/bin/python -m pytest -q                              # node on PATH also syntax-checks the bundled JS
 ```
 
-The lint rule set lives in `[tool.ruff]` (pyproject.toml) so CI and local runs use the
-same gate; `yue2_groove/vendor/` is excluded because it is an upstream byte-identical
-copy (see NOTICE).
+These are the CI gates (`.github/workflows/tests.yml`); `ruff format .` fixes formatting.
+`yue2_groove/vendor/` is excluded from all of them because it is an upstream
+byte-identical copy (see NOTICE).  Conventions and module boundaries: `CONTRIBUTING.md`.
 
 - `yue2_groove/webui/` — the Gradio app: `runtime.py` (the one pipeline, the one job, the
   run directory), one `*_tab.py` per Studio tab, `song_view.py` (the SONG director),

@@ -11,6 +11,7 @@ wildly), so the repeat call is part of the verdict, not just diagnostics.
 
 Usage: python tools/mps_sdpa_check.py           # exit 1 if the defect is present
 """
+
 from __future__ import annotations
 
 import sys
@@ -19,8 +20,8 @@ import torch
 import torch.nn.functional as F
 
 DEV = torch.device("mps")
-H, KVH, D = 16, 8, 128          # yue2-like: 16 query heads, 8 kv heads, head_dim 128
-BIG = 9500                       # static-cache capacity, like the model
+H, KVH, D = 16, 8, 128  # yue2-like: 16 query heads, 8 kv heads, head_dim 128
+BIG = 9500  # static-cache capacity, like the model
 TOL = 0.05
 
 
@@ -33,7 +34,7 @@ def tensors(kv: int, dtype, layout: str, seed: int = 1234):
     if layout == "exact":
         k = k_cpu.to(device=DEV, dtype=dtype)
         v = v_cpu.to(device=DEV, dtype=dtype)
-    else:                                    # large zero buffer + sliced view (the model's cache)
+    else:  # large zero buffer + sliced view (the model's cache)
         k = torch.zeros(1, KVH, BIG, D, dtype=dtype, device=DEV)
         v = torch.zeros(1, KVH, BIG, D, dtype=dtype, device=DEV)
         k[:, :, :kv] = k_cpu.to(device=DEV, dtype=dtype)
@@ -55,7 +56,7 @@ def attention(q, k, v, variant: str):
     if variant == "fp32_attn":
         return F.scaled_dot_product_attention(q.float(), k.float(), v.float()).to(q.dtype)
     if variant == "math":
-        return ((q.float() @ k.float().transpose(-1, -2)) * D ** -0.5).softmax(-1).to(q.dtype) @ v
+        return ((q.float() @ k.float().transpose(-1, -2)) * D**-0.5).softmax(-1).to(q.dtype) @ v
     raise ValueError(variant)
 
 
@@ -63,10 +64,11 @@ def measure(kv: int, dtype, layout: str = "view", variant: str = "plain"):
     q, k, v = tensors(kv, dtype, layout)
     out = attention(q, k, v, variant)
     torch.mps.synchronize()
-    out2 = attention(q, k, v, variant)          # same inputs again: deterministic?
+    out2 = attention(q, k, v, variant)  # same inputs again: deterministic?
     torch.mps.synchronize()
-    ref = F.scaled_dot_product_attention(q.float().cpu().double(), k.float().cpu().double(),
-                                         v.float().cpu().double())
+    ref = F.scaled_dot_product_attention(
+        q.float().cpu().double(), k.float().cpu().double(), v.float().cpu().double()
+    )
     got = out.float().cpu()
     err = float((got - ref).abs().max())
     nonfinite = int((~torch.isfinite(got)).sum())
@@ -92,7 +94,9 @@ def main() -> int:
         flag = verdict(err, nf, rep)
         if flag == "BAD":
             defect = True
-        print(f"   kv={kv:5d}  {flag}  max|err|={err:9.4f}  non-finite={nf:3d}  rerun-diff={rep:8.4f}")
+        print(
+            f"   kv={kv:5d}  {flag}  max|err|={err:9.4f}  non-finite={nf:3d}  rerun-diff={rep:8.4f}"
+        )
 
     print("\n-- dtype comparison at kv=1024 (sliced view) --")
     for dtype in (torch.bfloat16, torch.float16, torch.float32):
@@ -100,19 +104,25 @@ def main() -> int:
         flag = verdict(err, nf, rep)
         if flag == "BAD" and dtype != torch.float32:
             defect = True
-        print(f"   {str(dtype)[6:]:8s} {flag}  max|err|={err:9.4f}  non-finite={nf:3d}  rerun-diff={rep:8.4f}")
+        print(
+            f"   {str(dtype)[6:]:8s} {flag}  max|err|={err:9.4f}  non-finite={nf:3d}  rerun-diff={rep:8.4f}"
+        )
 
     print("\n-- layout comparison, bf16, kv=1024 --")
     for layout in ("view", "exact"):
         err, nf, rep = measure(1024, torch.bfloat16, layout)
         flag = verdict(err, nf, rep)
-        print(f"   {layout:6s} {flag}  max|err|={err:9.4f}  non-finite={nf:3d}  rerun-diff={rep:8.4f}")
+        print(
+            f"   {layout:6s} {flag}  max|err|={err:9.4f}  non-finite={nf:3d}  rerun-diff={rep:8.4f}"
+        )
 
     print("\n-- workarounds at kv=2048, bf16, sliced view --")
     for variant in ("plain", "zero_mask", "fp32_attn", "math"):
         err, nf, rep = measure(2048, torch.bfloat16, "view", variant)
         flag = verdict(err, nf, rep)
-        print(f"   {variant:10s} {flag}  max|err|={err:9.4f}  non-finite={nf:3d}  rerun-diff={rep:8.4f}")
+        print(
+            f"   {variant:10s} {flag}  max|err|={err:9.4f}  non-finite={nf:3d}  rerun-diff={rep:8.4f}"
+        )
 
     print("\n-- enable_gqa=True (no repeat_interleave), bf16, kv=2048 --")
     try:
@@ -122,11 +132,12 @@ def main() -> int:
         v = torch.randn(1, KVH, 2048, D, generator=gen).to(DEV, torch.bfloat16)
         out = F.scaled_dot_product_attention(q, k, v, enable_gqa=True)
         torch.mps.synchronize()
-        ref = F.scaled_dot_product_attention(q.float().cpu().double(), k.float().cpu().double(),
-                                         v.float().cpu().double())
+        ref = F.scaled_dot_product_attention(
+            q.float().cpu().double(), k.float().cpu().double(), v.float().cpu().double()
+        )
         err = float((out.float().cpu() - ref).abs().max())
         print(f"   enable_gqa {'OK ' if err <= TOL else 'BAD'}  max|err|={err:9.4f}")
-    except Exception as exc:                     # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         print(f"   enable_gqa not available on this build: {exc}")
 
     print("\nDEFECT PRESENT" if defect else "\ndefect not reproduced")

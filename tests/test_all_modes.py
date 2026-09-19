@@ -4,6 +4,7 @@ The model and the generation core are mocked; the handler's state machine is rea
 mode order and ids, per-mode directories with input.json, run.json summary, retained
 failures, cancel behavior and the automatic listening comparison.
 """
+
 from __future__ import annotations
 
 import json
@@ -29,27 +30,95 @@ class FakeSong:
 
 def all_modes_args(**overrides):
     args = dict(  # noqa: C408 — test fixture builder
-        style="English piano pop", lyrics="[Verse]\nla", seed=831001, cfg_scale=0,
-                abc_text="", out_id="modes",
-                abc_temp=.7, abc_p=.9, abc_k=30, abc_rep=1.005, abc_win=100, abc_min=32,
-                abc_max=4096, sem_temp=1.0, sem_p=.95, sem_k=100, sem_rep=1.2, sem_win=50,
-                sem_min=200, sem_max=9000, device="cpu", dtype="float32", backend="torch",
-                quantization="none", offload_ar=False, budget=24, ode_steps=32,
-                vae_core_frames="auto", model="m-a-p/YuE2-3B", vae_choice="standard",
-                vae_custom="", revision="", vae_revision="", offline=False)
+        style="English piano pop",
+        lyrics="[Verse]\nla",
+        seed=831001,
+        cfg_scale=0,
+        abc_text="",
+        out_id="modes",
+        abc_temp=0.7,
+        abc_p=0.9,
+        abc_k=30,
+        abc_rep=1.005,
+        abc_win=100,
+        abc_min=32,
+        abc_max=4096,
+        sem_temp=1.0,
+        sem_p=0.95,
+        sem_k=100,
+        sem_rep=1.2,
+        sem_win=50,
+        sem_min=200,
+        sem_max=9000,
+        device="cpu",
+        dtype="float32",
+        backend="torch",
+        quantization="none",
+        offload_ar=False,
+        budget=24,
+        ode_steps=32,
+        vae_core_frames="auto",
+        model="m-a-p/YuE2-3B",
+        vae_choice="standard",
+        vae_custom="",
+        revision="",
+        vae_revision="",
+        offline=False,
+    )
     args.update(overrides)
-    return [args[name] for name in (
-        "style", "lyrics", "seed", "cfg_scale", "abc_text", "out_id",
-        "abc_temp", "abc_p", "abc_k", "abc_rep", "abc_win", "abc_min", "abc_max",
-        "sem_temp", "sem_p", "sem_k", "sem_rep", "sem_win", "sem_min", "sem_max",
-        "device", "dtype", "backend", "quantization", "offload_ar", "budget", "ode_steps",
-        "vae_core_frames", "model", "vae_choice", "vae_custom", "revision", "vae_revision",
-        "offline")]
+    return [
+        args[name]
+        for name in (
+            "style",
+            "lyrics",
+            "seed",
+            "cfg_scale",
+            "abc_text",
+            "out_id",
+            "abc_temp",
+            "abc_p",
+            "abc_k",
+            "abc_rep",
+            "abc_win",
+            "abc_min",
+            "abc_max",
+            "sem_temp",
+            "sem_p",
+            "sem_k",
+            "sem_rep",
+            "sem_win",
+            "sem_min",
+            "sem_max",
+            "device",
+            "dtype",
+            "backend",
+            "quantization",
+            "offload_ar",
+            "budget",
+            "ode_steps",
+            "vae_core_frames",
+            "model",
+            "vae_choice",
+            "vae_custom",
+            "revision",
+            "vae_revision",
+            "offline",
+        )
+    ]
 
 
 def install_fakes(monkeypatch, state):
-    def fake_run_generation(pipe, request, outdir, *, abc_sampling, semantic_sampling,
-                            progress, note, extra_manifest=None):
+    def fake_run_generation(
+        pipe,
+        request,
+        outdir,
+        *,
+        abc_sampling,
+        semantic_sampling,
+        progress,
+        note,
+        extra_manifest=None,
+    ):
         outdir = Path(outdir)
         outdir.mkdir(parents=True, exist_ok=True)
         state["calls"].append({"cot": request.cot, "id": request.id, "dir": str(outdir)})
@@ -65,8 +134,11 @@ def install_fakes(monkeypatch, state):
 
     def fake_comparison(paths_text, progress=None):
         state["comparison_sources"] = [p for p in paths_text.splitlines() if p.strip()]
-        return "/tmp/index.html", '<a href="/x">OPEN COMPARISON PAGE ↗</a>', \
-            "page: /tmp/index.html\nneeds_review: 0"
+        return (
+            "/tmp/index.html",
+            '<a href="/x">OPEN COMPARISON PAGE ↗</a>',
+            "page: /tmp/index.html\nneeds_review: 0",
+        )
 
     monkeypatch.setattr(webui.runtime, "get_pipe", lambda *a, **k: (object(), "note"))
     monkeypatch.setattr(webui.runtime, "run_generation", fake_run_generation)
@@ -78,7 +150,7 @@ def test_all_modes_runs_full_melody_off_and_builds_the_comparison(monkeypatch) -
     install_fakes(monkeypatch, state)
 
     yields = list(webui.generate_tab.generate_all_modes(*all_modes_args()))
-    assert all(len(chunk) == 7 for chunk in yields)          # matches the 6 wired outputs
+    assert all(len(chunk) == 7 for chunk in yields)  # matches the 6 wired outputs
     status, files, link, *_idle = yields[-1]
 
     assert [call["cot"] for call in state["calls"]] == ["full", "melody", "off"]

@@ -5,6 +5,7 @@ The page's JavaScript lives in ``yue2_groove/static`` as real files (served thro
 that must run before the body paints and the server data it reads.  ``node --check``
 is the syntax gate for both.
 """
+
 from __future__ import annotations
 
 import re
@@ -25,7 +26,9 @@ VENDORED = {"abcjs-basic-min.js"}
 
 
 def _referenced_files() -> list[str]:
-    return re.findall(r'<script src="/gradio_api/file=[^"]*/static/([^"]+)"', webui.frontend.head_html("auto"))
+    return re.findall(
+        r'<script src="/gradio_api/file=[^"]*/static/([^"]+)"', webui.frontend.head_html("auto")
+    )
 
 
 def _inline_scripts() -> list[str]:
@@ -34,8 +37,9 @@ def _inline_scripts() -> list[str]:
 
 def _node_check(source: str, label: str) -> None:
     assert NODE is not None
-    proc = subprocess.run([NODE, "--check", "-"], input=source, capture_output=True, text=True,
-                          check=False)
+    proc = subprocess.run(
+        [NODE, "--check", "-"], input=source, capture_output=True, text=True, check=False
+    )
     assert proc.returncode == 0, f"{label}: {proc.stderr.strip()[:400]}"
 
 
@@ -46,21 +50,27 @@ def test_every_bundled_script_is_referenced_once_and_exists() -> None:
         assert (STATIC / name).is_file(), name
     bundled = {p.name for p in SCRIPTS}
     assert bundled == set(referenced), (
-        f"orphaned: {bundled - set(referenced)}; missing on disk: {set(referenced) - bundled}")
+        f"orphaned: {bundled - set(referenced)}; missing on disk: {set(referenced) - bundled}"
+    )
 
 
 def test_server_data_precedes_the_script_that_reads_it() -> None:
     head = webui.frontend.head_html("auto")
-    for data, script in (("__BB_TIPS__", "tips.js"), ("__BB_EXAMPLES__", "example.js"),
-                         ("__BB_SAMPLING_DEFAULTS__", "sampling-knobs.js"),
-                         ("__BB_VIEW_MODE__", "view.js")):
+    for data, script in (
+        ("__BB_TIPS__", "tips.js"),
+        ("__BB_EXAMPLES__", "example.js"),
+        ("__BB_SAMPLING_DEFAULTS__", "sampling-knobs.js"),
+        ("__BB_VIEW_MODE__", "view.js"),
+    ):
         assert head.index(data) < head.index(script), f"{data} must be set before {script} runs"
     # abcjs before the score renderer that calls it
     assert head.index("abcjs-basic-min.js") < head.index("score.js")
 
 
 @needs_node
-@pytest.mark.parametrize("path", [p for p in SCRIPTS if p.name not in VENDORED], ids=lambda p: p.name)
+@pytest.mark.parametrize(
+    "path", [p for p in SCRIPTS if p.name not in VENDORED], ids=lambda p: p.name
+)
 def test_bundled_script_parses(path) -> None:
     _node_check(path.read_text(encoding="utf-8"), path.name)
 
@@ -68,7 +78,7 @@ def test_bundled_script_parses(path) -> None:
 @needs_node
 def test_inline_head_scripts_parse() -> None:
     inline = _inline_scripts()
-    assert len(inline) >= 4   # view boot, theme / rail boot, tips data, examples data, sampling data
+    assert len(inline) >= 4  # view boot, theme / rail boot, tips data, examples data, sampling data
     for i, source in enumerate(inline):
         _node_check(source, f"inline head script #{i}")
 
@@ -86,4 +96,6 @@ def test_stylesheets_are_files_and_joined_in_order() -> None:
     base = config.static_text("bearbone.css")
     lib = config.static_text("library.css")
     assert base in css and lib in css
-    assert css.index(":root {") < css.index(base) < css.index(lib)   # palette, base, (bright scene), library
+    assert (
+        css.index(":root {") < css.index(base) < css.index(lib)
+    )  # palette, base, (bright scene), library

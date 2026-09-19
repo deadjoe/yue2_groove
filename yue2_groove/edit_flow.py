@@ -13,6 +13,7 @@ The workflow these functions support is symbolic-first:
 
 Everything here is pure Python; the Gradio wiring lives in ``webui.py``.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -68,8 +69,9 @@ def validate_edited_abc(text: str) -> str:
     """Return the cleaned ABC or raise ``ValueError``; an empty edit is refused."""
     source = clean_abc(text)
     if not source:
-        raise ValueError("The edited ABC is empty; generation would discard the edit and plan a "
-                         "new score")
+        raise ValueError(
+            "The edited ABC is empty; generation would discard the edit and plan a new score"
+        )
     abc_tools.parse_abc(source)
     return source
 
@@ -93,9 +95,13 @@ def _compare_pitch(before, after, names) -> dict:
         rhythm_b = [(onset, duration) for onset, _pitch, duration in b.notes]
         if rhythm_a != rhythm_b:
             notes.append(f"{name}: same pitches, rhythm changed (permitted by the pitch contract)")
-    return {"match": not differences, "compared_voices": list(names), "differences": differences,
-            "notes": notes,
-            "scope": "ordered pitch sequence per voice; rhythm, meter and tempo are not gated"}
+    return {
+        "match": not differences,
+        "compared_voices": list(names),
+        "differences": differences,
+        "notes": notes,
+        "scope": "ordered pitch sequence per voice; rhythm, meter and tempo are not gated",
+    }
 
 
 def _compare_exact_without_meter(before, after, names, allow_tempo_change: bool) -> dict:
@@ -112,18 +118,30 @@ def _compare_exact_without_meter(before, after, names, allow_tempo_change: bool)
         if a.notes != b.notes:
             common = min(len(a.notes), len(b.notes))
             first = next((i for i in range(common) if a.notes[i] != b.notes[i]), common)
-            differences.append(f"{name}: sounding notes differ starting at note {first + 1} "
-                               f"(pitch, onset or duration)")
+            differences.append(
+                f"{name}: sounding notes differ starting at note {first + 1} "
+                f"(pitch, onset or duration)"
+            )
         if a.bars != b.bars:
             allowed.append(f"{name}: meter/time grid differs (permitted by ALLOW METER CHANGE)")
-    return {"match": not differences, "compared_voices": list(names),
-            "differences": differences, "allowed_differences": allowed,
-            "scope": "sounding notes and meter-reported; bar-grid differences permitted"}
+    return {
+        "match": not differences,
+        "compared_voices": list(names),
+        "differences": differences,
+        "allowed_differences": allowed,
+        "scope": "sounding notes and meter-reported; bar-grid differences permitted",
+    }
 
 
-def check_invariants(before_abc: str, after_abc: str, *, voices: str = "both",
-                     allow_tempo_change: bool = False, allow_meter_change: bool = False,
-                     contract: str = "exact") -> dict:
+def check_invariants(
+    before_abc: str,
+    after_abc: str,
+    *,
+    voices: str = "both",
+    allow_tempo_change: bool = False,
+    allow_meter_change: bool = False,
+    contract: str = "exact",
+) -> dict:
     """Invariant check between the baseline and the edit under an explicit contract.
 
     ``exact`` (notes + meter grid, tempo optional), ``pitch`` (ordered pitch
@@ -140,16 +158,20 @@ def check_invariants(before_abc: str, after_abc: str, *, voices: str = "both",
     if contract == "free":
         # report, do not gate: the same comparison as exact, with the verdict forced true
         reported = abc_tools.compare(before, after, names=names, allow_tempo_change=True)
-        result = {"match": True, "compared_voices": list(names),
-                  "differences": reported["differences"],
-                  "scope": "free adaptation: differences are listed for the record, nothing is gated"}
+        result = {
+            "match": True,
+            "compared_voices": list(names),
+            "differences": reported["differences"],
+            "scope": "free adaptation: differences are listed for the record, nothing is gated",
+        }
     elif contract == "pitch":
         result = _compare_pitch(before, after, names)
     elif allow_meter_change:
         result = _compare_exact_without_meter(before, after, names, bool(allow_tempo_change))
     else:
-        result = abc_tools.compare(before, after, names=names,
-                                   allow_tempo_change=bool(allow_tempo_change))
+        result = abc_tools.compare(
+            before, after, names=names, allow_tempo_change=bool(allow_tempo_change)
+        )
     result.setdefault("tempo_change_allowed", bool(allow_tempo_change))
     result["meter_change_allowed"] = bool(allow_meter_change)
     result["contract"] = contract
@@ -159,9 +181,17 @@ def check_invariants(before_abc: str, after_abc: str, *, voices: str = "both",
     return result
 
 
-def build_edit_request(style: str, lyrics: str, abc_text: str, *, cot: str = "full",
-                       seed: int = 831001, cfg_scale: float | None = None, id: str | None = None,
-                       request_factory: Callable | None = None):
+def build_edit_request(
+    style: str,
+    lyrics: str,
+    abc_text: str,
+    *,
+    cot: str = "full",
+    seed: int = 831001,
+    cfg_scale: float | None = None,
+    id: str | None = None,
+    request_factory: Callable | None = None,
+):
     """YuE2 request for an edited score; ``abc`` is always present."""
     if cot not in ("full", "melody"):
         raise ValueError("An edited score requires cot=full (melody+harmony) or cot=melody")
@@ -205,40 +235,70 @@ def freeze_baseline(root, rel: str, *, baseline_root=None, now=None) -> dict:
 
     record = {
         "schema": "yue2-groove-baseline-v1",
-        "created": datetime.fromtimestamp(now if now is not None else time.time()).astimezone().isoformat(timespec="seconds"),
+        "created": datetime.fromtimestamp(now if now is not None else time.time())
+        .astimezone()
+        .isoformat(timespec="seconds"),
         "source": {"rel": rel, "path": str(source)},
-        "baseline": {"rel": destination.relative_to(root).as_posix() if destination.is_relative_to(root)
-                     else str(destination), "path": str(destination)},
+        "baseline": {
+            "rel": destination.relative_to(root).as_posix()
+            if destination.is_relative_to(root)
+            else str(destination),
+            "path": str(destination),
+        },
         "hashes": snapshot_hashes(source),
     }
     (destination / "baseline.json").write_text(
-        json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
     for copied in ("score.abc", "request.json"):
         if (source / copied).is_file():
             (destination / copied).write_text(
-                (source / copied).read_text(encoding="utf-8", errors="replace"), encoding="utf-8")
-    record["abc"] = (source / "score.abc").read_text(encoding="utf-8") if (source / "score.abc").is_file() else ""
+                (source / copied).read_text(encoding="utf-8", errors="replace"), encoding="utf-8"
+            )
+    record["abc"] = (
+        (source / "score.abc").read_text(encoding="utf-8")
+        if (source / "score.abc").is_file()
+        else ""
+    )
     return record
 
 
-def build_edit_manifest(*, source_rel: str, before_abc: str, after_abc: str, cot: str,
-                        seed: int, cfg_scale, invariants: dict | None, voices: str,
-                        allow_tempo_change: bool, allow_changes: bool,
-                        allow_meter_change: bool = False, contract: str = "exact",
-                        baseline: dict | None = None, now=None) -> dict:
+def build_edit_manifest(
+    *,
+    source_rel: str,
+    before_abc: str,
+    after_abc: str,
+    cot: str,
+    seed: int,
+    cfg_scale,
+    invariants: dict | None,
+    voices: str,
+    allow_tempo_change: bool,
+    allow_changes: bool,
+    allow_meter_change: bool = False,
+    contract: str = "exact",
+    baseline: dict | None = None,
+    now=None,
+) -> dict:
     """The ``edit_manifest.json`` written next to a regenerated song."""
     before_text, after_text = clean_abc(before_abc), clean_abc(after_abc)
     return {
         "schema": "yue2-groove-edit-v1",
-        "created": datetime.fromtimestamp(now if now is not None else time.time()).astimezone().isoformat(timespec="seconds"),
+        "created": datetime.fromtimestamp(now if now is not None else time.time())
+        .astimezone()
+        .isoformat(timespec="seconds"),
         "source": {"rel": source_rel, "frozen": baseline is not None, "baseline": baseline or None},
-        "abc": {"before_sha256": sha256_text(before_text) if before_text else None,
-                "after_sha256": sha256_text(after_text)},
+        "abc": {
+            "before_sha256": sha256_text(before_text) if before_text else None,
+            "after_sha256": sha256_text(after_text),
+        },
         "request": {"cot": cot, "seed": int(seed), "cfg_scale": cfg_scale},
         "invariants": invariants or None,
-        "permitted": {"compared_voices": ["Vocal", "Ins"] if voices == "both" else [voices],
-                      "contract": contract,
-                      "tempo_change": bool(allow_tempo_change),
-                      "meter_change": bool(allow_meter_change),
-                      "changes_override": bool(allow_changes)},
+        "permitted": {
+            "compared_voices": ["Vocal", "Ins"] if voices == "both" else [voices],
+            "contract": contract,
+            "tempo_change": bool(allow_tempo_change),
+            "meter_change": bool(allow_meter_change),
+            "changes_override": bool(allow_changes),
+        },
     }

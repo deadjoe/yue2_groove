@@ -9,6 +9,7 @@ side and three tabs): the outer frame can only be styled by top-level rules,
 and the tab strip's container query has to ride in the ``<head>``.  These
 tests pin that shape so the next breakpoint does not silently do nothing.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -35,7 +36,7 @@ def _media_blocks(css: str) -> list[str]:
         while depth:
             depth += {"{": 1, "}": -1}.get(css[j], 0)
             j += 1
-        blocks.append(css[start:j - 1])
+        blocks.append(css[start : j - 1])
         i = j
 
 
@@ -48,8 +49,16 @@ def _selectors(block: str) -> list[str]:
 
 
 def _build():
-    return webui.build_ui({"device": "cpu", "dtype": "float32", "model": "m-a-p/YuE2-3B",
-                           "vae": "standard", "tab": 0, "status": ""})
+    return webui.build_ui(
+        {
+            "device": "cpu",
+            "dtype": "float32",
+            "model": "m-a-p/YuE2-3B",
+            "vae": "standard",
+            "tab": 0,
+            "status": "",
+        }
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -65,10 +74,12 @@ def test_media_queries_never_target_the_outer_frame() -> None:
     for block in blocks:
         for selector in _selectors(block):
             first = selector.split()[0]
-            assert not any(first == tok or first.startswith((tok + ".", tok + ":"))
-                           for tok in OUTER_FRAME), (
+            assert not any(
+                first == tok or first.startswith((tok + ".", tok + ":")) for tok in OUTER_FRAME
+            ), (
                 f"{selector!r} inside @media only exists prefixed with "
-                "`.gradio-container… .contain` after prefix_css, so it never matches")
+                "`.gradio-container… .contain` after prefix_css, so it never matches"
+            )
 
 
 def test_frame_scales_with_clamp_instead_of_a_breakpoint() -> None:
@@ -110,5 +121,7 @@ def test_empty_chrome_placeholders_collapse() -> None:
     # gr.HTML pads an empty .html-container 12px top and bottom; two of them
     # plus the column gaps stacked to a blank 88px band under the header
     css = webui.theme.BASE_CSS
-    assert ("#bb-current-band-wrap .html-container, #bb-busy-wrap .html-container "
-            "{ padding: 0 !important; }") in css
+    assert (
+        "#bb-current-band-wrap .html-container, #bb-busy-wrap .html-container "
+        "{ padding: 0 !important; }"
+    ) in css

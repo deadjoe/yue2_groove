@@ -1,4 +1,5 @@
 """``yue2_groove.cover``: transcription ABC → cover request, model-free."""
+
 from __future__ import annotations
 
 import textwrap
@@ -67,8 +68,9 @@ def test_prepare_cover_abc_strips_chords_and_keeps_melody() -> None:
 
 def test_prepare_cover_abc_can_keep_one_voice() -> None:
     prepared = cover.prepare_cover_abc(CHORDED_ABC, keep_voice="Vocal")
-    check = abc_tools.compare(abc_tools.parse_abc(CHORDED_ABC), abc_tools.parse_abc(prepared),
-                              names=("Vocal",))
+    check = abc_tools.compare(
+        abc_tools.parse_abc(CHORDED_ABC), abc_tools.parse_abc(prepared), names=("Vocal",)
+    )
     assert check["match"] is True
     assert abc_tools.parse_abc(prepared).voices["Ins"].notes == []
 
@@ -89,16 +91,24 @@ def test_inspect_abc_reports_native_structure() -> None:
 
 
 def test_build_cover_request_carries_abc_and_melody_mode() -> None:
-    request = cover.build_cover_request("English jazz", "[Verse]\nla", CHORDED_ABC,
-                                        task="melody-full", seed=7, cfg_scale=1.2, id=" my-cover ",
-                                        request_factory=FakeRequest)
+    request = cover.build_cover_request(
+        "English jazz",
+        "[Verse]\nla",
+        CHORDED_ABC,
+        task="melody-full",
+        seed=7,
+        cfg_scale=1.2,
+        id=" my-cover ",
+        request_factory=FakeRequest,
+    )
     assert request.cot == "melody"
     assert request.abc.strip().startswith("X:1") and '"C"' not in request.abc
     assert request.style == "English jazz" and request.seed == 7
     assert request.cfg_scale == 1.2 and request.id == "my-cover"
 
-    full = cover.build_cover_request("pop", "la", CHORDED_ABC, task="full",
-                                     request_factory=FakeRequest)
+    full = cover.build_cover_request(
+        "pop", "la", CHORDED_ABC, task="full", request_factory=FakeRequest
+    )
     assert full.cot == "full" and '"C"' in full.abc
     assert not hasattr(full, "cfg_scale") and not hasattr(full, "id")
 

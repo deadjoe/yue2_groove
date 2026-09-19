@@ -5,6 +5,7 @@ The 2026-09-13 panics could lose a run that had already been listened to because
 These tests pin the replacements: a run is marked pending until its artifacts are
 flushed, a failed/cancelled run keeps the marker, and the Library shows it.
 """
+
 from __future__ import annotations
 
 import json
@@ -37,7 +38,8 @@ class _Song:
         if self._fail:
             raise self._fail
         (directory / "result.json").write_text(
-            json.dumps({"status": "complete", "audio_seconds": 1.0}), encoding="utf-8")
+            json.dumps({"status": "complete", "audio_seconds": 1.0}), encoding="utf-8"
+        )
         return {"audio_seconds": 1.0, "truncated": False}
 
 
@@ -45,8 +47,14 @@ def _run(monkeypatch, tmp_path, *, fail=None):
     outdir = tmp_path / "runs" / "20260913-120000-Test"
     monkeypatch.setattr(webui.runtime.adapter, "generate", lambda *a, **k: _Song(fail))
     return webui.runtime.run_generation(
-        object(), _Request(), outdir, abc_sampling=_Sampling(), semantic_sampling=_Sampling(),
-        progress=lambda *a, **k: None, note=""), outdir
+        object(),
+        _Request(),
+        outdir,
+        abc_sampling=_Sampling(),
+        semantic_sampling=_Sampling(),
+        progress=lambda *a, **k: None,
+        note="",
+    ), outdir
 
 
 def _pending(outdir: Path) -> dict:
@@ -56,7 +64,7 @@ def _pending(outdir: Path) -> dict:
 def test_a_finished_run_clears_its_pending_marker(tmp_path, monkeypatch) -> None:
     _result, outdir = _run(monkeypatch, tmp_path)
     assert (outdir / "audio.flac").is_file() and (outdir / "result.json").is_file()
-    assert not (outdir / webui.runtime.PENDING_FILE).exists()   # cleared only after the flush
+    assert not (outdir / webui.runtime.PENDING_FILE).exists()  # cleared only after the flush
 
 
 def test_a_failed_run_keeps_an_incomplete_marker(tmp_path, monkeypatch) -> None:
@@ -79,8 +87,8 @@ def test_library_lists_and_labels_an_incomplete_run(tmp_path) -> None:
     run.mkdir(parents=True)
     (run / "audio.flac").write_bytes(b"fLaC")
     (run / webui.runtime.PENDING_FILE).write_text(
-        json.dumps({"status": "failed", "error": "MPS backend out of memory"}),
-        encoding="utf-8")
+        json.dumps({"status": "failed", "error": "MPS backend out of memory"}), encoding="utf-8"
+    )
 
     items = library.scan(runs)
     assert [item["rel"] for item in items] == ["20260913-120000-Grand-piano"]
@@ -133,13 +141,17 @@ def test_edit_and_cover_choices_skip_incomplete_runs(tmp_path, monkeypatch) -> N
     bad.mkdir(parents=True)
     (bad / webui.runtime.PENDING_FILE).write_text('{"status": "failed"}', encoding="utf-8")
 
-    assert [value for _label, value in webui.edit_tab.edit_choices()["choices"]] == \
-        ["20260913-120000-Good"]
-    assert [value for _label, value in webui.cover_tab.cover_choices()["choices"]] == \
-        ["20260913-120000-Good"]
+    assert [value for _label, value in webui.edit_tab.edit_choices()["choices"]] == [
+        "20260913-120000-Good"
+    ]
+    assert [value for _label, value in webui.cover_tab.cover_choices()["choices"]] == [
+        "20260913-120000-Good"
+    ]
     # the Library itself still shows the incomplete run
-    assert {item["rel"] for item in library.scan(runs)} == \
-        {"20260913-120000-Good", "20260913-130000-Bad"}
+    assert {item["rel"] for item in library.scan(runs)} == {
+        "20260913-120000-Good",
+        "20260913-130000-Bad",
+    }
 
 
 def test_fsync_fd_without_fcntl(tmp_path, monkeypatch):

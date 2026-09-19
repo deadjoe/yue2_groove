@@ -6,6 +6,7 @@ tab-strip container query; the ``js=`` snippets Gradio wraps for the chrome
 buttons; and the small server-rendered chrome shared by the tabs (score panel,
 busy banner).
 """
+
 from __future__ import annotations
 
 import html
@@ -16,6 +17,7 @@ from . import runtime
 
 # ───────────────── cover tab (see sheetsage_adapter.py / cover.py) ─────────────────
 
+
 def score_panel(prefix: str, empty: str, elem_id: str = "", abc: str | None = None) -> str:
     """HTML for one abcjs score panel; static/score.js fills the .bb-score-inner div.
 
@@ -25,24 +27,28 @@ def score_panel(prefix: str, empty: str, elem_id: str = "", abc: str | None = No
     """
     panel_id = f' id="{html.escape(elem_id, quote=True)}"' if elem_id else ""
     message = html.escape(empty)
-    inline = (f' data-bb-abc-text="{html.escape(abc, quote=True)}"'
-              if abc is not None else "")
-    return (f'<div class="bb-score-panel" data-bb-abc="{html.escape(prefix, quote=True)}" '
-            f'data-bb-empty="{message}"{inline}{panel_id}>'
-            f'<div class="bb-score-inner"><div class="bb-score-empty">{message}</div></div></div>')
+    inline = f' data-bb-abc-text="{html.escape(abc, quote=True)}"' if abc is not None else ""
+    return (
+        f'<div class="bb-score-panel" data-bb-abc="{html.escape(prefix, quote=True)}" '
+        f'data-bb-empty="{message}"{inline}{panel_id}>'
+        f'<div class="bb-score-inner"><div class="bb-score-empty">{message}</div></div></div>'
+    )
 
 
 # ───────────────── edit tab (see edit_flow.py) ─────────────────
 
-BUSY_HTML = ('<div id="bb-busy" role="status" aria-live="polite">'
-             '● JOB RUNNING — a second job is refused until it finishes; use CANCEL on the '
-             'running tab to stop it'
-             '</div>')
+BUSY_HTML = (
+    '<div id="bb-busy" role="status" aria-live="polite">'
+    "● JOB RUNNING — a second job is refused until it finishes; use CANCEL on the "
+    "running tab to stop it"
+    "</div>"
+)
 
 
 def busy_banner():
     """Global busy indicator polled by a gr.Timer (no handler signature changes)."""
     return BUSY_HTML if runtime.RUNNING.locked() else ""
+
 
 SAMPLING_VIEW_TOGGLE_JS = """() => {
   if (window.__bbToggleSamplingView) window.__bbToggleSamplingView();
@@ -195,7 +201,9 @@ LAYOUT_HEAD_CSS = """<style id="bb-layout">
 }
 </style>"""
 
-HEAD_HTML = LAYOUT_HEAD_CSS + """<meta name="color-scheme" content="dark light">
+HEAD_HTML = (
+    LAYOUT_HEAD_CSS
+    + """<meta name="color-scheme" content="dark light">
 <script>
 (function () {
   try {
@@ -239,9 +247,14 @@ HEAD_HTML = LAYOUT_HEAD_CSS + """<meta name="color-scheme" content="dark light">
   [300, 1000, 2500, 5000].forEach(function (t) { setTimeout(sync, t); });
 })();
 </script>"""
+)
 
-HEAD_HTML += ("<script>window.__BB_TIPS__ = " + json.dumps(TIPS, ensure_ascii=False)
-              + ";</script>" + _static_script("tips.js"))
+HEAD_HTML += (
+    "<script>window.__BB_TIPS__ = "
+    + json.dumps(TIPS, ensure_ascii=False)
+    + ";</script>"
+    + _static_script("tips.js")
+)
 
 HEAD_HTML += _static_script("abcjs-basic-min.js") + _static_script("score.js")
 
@@ -251,9 +264,13 @@ HEAD_HTML += _static_script("abc-fold.js")
 
 HEAD_HTML += _static_script("persist.js")
 
-HEAD_HTML += ("<script>window.__BB_EXAMPLES__ = "
-              + json.dumps({"style": runtime.EXAMPLE_STYLE, "lyrics": runtime.EXAMPLE_LYRICS}, ensure_ascii=False)
-              + ";</script>")
+HEAD_HTML += (
+    "<script>window.__BB_EXAMPLES__ = "
+    + json.dumps(
+        {"style": runtime.EXAMPLE_STYLE, "lyrics": runtime.EXAMPLE_LYRICS}, ensure_ascii=False
+    )
+    + ";</script>"
+)
 HEAD_HTML += _static_script("example.js")
 HEAD_HTML += _static_script("library.js")
 

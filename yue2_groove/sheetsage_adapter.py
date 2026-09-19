@@ -24,6 +24,7 @@ whose model is reused until ``stop_worker()`` / the UI's UNLOAD button or the id
 timeout (``YUE2_GROOVE_SHEETSAGE_IDLE_SECONDS``); a cancel or crash terminates it and
 the next call starts a fresh one.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -66,7 +67,8 @@ def resolve_python(explicit: str | None = None) -> str:
         raise SheetsageNotConfigured(
             "SheetSage2 is not configured: create its separate virtual environment "
             "(see README, 'Cover from audio') and set "
-            "YUE2_GROOVE_SHEETSAGE_PYTHON=/path/to/.venv-sheetsage2/bin/python")
+            "YUE2_GROOVE_SHEETSAGE_PYTHON=/path/to/.venv-sheetsage2/bin/python"
+        )
     path = Path(value).expanduser()
     if not path.is_file():
         raise SheetsageNotConfigured(f"SheetSage2 python not found: {path}")
@@ -97,17 +99,28 @@ def probe(python: str | None = None, *, timeout: float = 180) -> dict:
     """
     interpreter = resolve_python(python)
     try:
-        result = subprocess.run([interpreter, "-c", _python_fragment()],
-                                capture_output=True, timeout=timeout, check=False,
-                                env=config.child_env(), **config.SUBPROCESS_TEXT)
+        result = subprocess.run(
+            [interpreter, "-c", _python_fragment()],
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+            env=config.child_env(),
+            **config.SUBPROCESS_TEXT,
+        )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise SheetsageFailed(f"Could not run the SheetSage2 python ({interpreter}): {exc}") from exc
+        raise SheetsageFailed(
+            f"Could not run the SheetSage2 python ({interpreter}): {exc}"
+        ) from exc
     if result.returncode != 0:
-        raise SheetsageFailed(f"SheetSage2 environment check failed: {result.stderr.strip()[-800:]}")
+        raise SheetsageFailed(
+            f"SheetSage2 environment check failed: {result.stderr.strip()[-800:]}"
+        )
     try:
         info = json.loads(result.stdout.strip().splitlines()[-1])
     except (ValueError, IndexError) as exc:
-        raise SheetsageFailed(f"Unexpected check output from {interpreter}: {result.stdout[-300:]!r}") from exc
+        raise SheetsageFailed(
+            f"Unexpected check output from {interpreter}: {result.stdout[-300:]!r}"
+        ) from exc
     packages = info.get("packages") or {}
     info["ffmpeg"] = shutil.which("ffmpeg")
     info["ok"] = bool(packages.get("torch") and packages.get("transformers"))
@@ -124,22 +137,48 @@ def format_probe(info: dict) -> str:
         version = versions.get(key) or ""
         lines.append(f"  {name}: {mark}{(' ' + version) if version else ''}")
     lines.append(f"ffmpeg: {info.get('ffmpeg') or 'not on PATH (SheetSage2 may need it)'}")
-    lines.append("ready" if info.get("ok") else "not ready — install the SheetSage2 requirements first")
+    lines.append(
+        "ready" if info.get("ok") else "not ready — install the SheetSage2 requirements first"
+    )
     return "\n".join(lines)
 
 
-def build_command(audio_path, output_dir, *, python=None, task: str = "melody-full",
-                  model: str | None = None, revision: str | None = None,
-                  base_model: str | None = None, offline: bool = False,
-                  device: str = "auto", dtype: str = "auto", preset: str = "default",
-                  max_seconds: float | None = None, threads: int = 4) -> list[str]:
+def build_command(
+    audio_path,
+    output_dir,
+    *,
+    python=None,
+    task: str = "melody-full",
+    model: str | None = None,
+    revision: str | None = None,
+    base_model: str | None = None,
+    offline: bool = False,
+    device: str = "auto",
+    dtype: str = "auto",
+    preset: str = "default",
+    max_seconds: float | None = None,
+    threads: int = 4,
+) -> list[str]:
     """argv for one transcription; the driver resolves ``melody_only`` from ``task``."""
     if task not in TASKS:
         raise ValueError(f"task must be one of {', '.join(TASKS)}, got {task!r}")
-    cmd = [resolve_python(python), str(DRIVER), str(Path(audio_path).expanduser()),
-           "--output", str(Path(output_dir).expanduser()), "--task", task,
-           "--model", model or config.default_sheetsage_model(),
-           "--device", device, "--dtype", dtype, "--preset", preset]
+    cmd = [
+        resolve_python(python),
+        str(DRIVER),
+        str(Path(audio_path).expanduser()),
+        "--output",
+        str(Path(output_dir).expanduser()),
+        "--task",
+        task,
+        "--model",
+        model or config.default_sheetsage_model(),
+        "--device",
+        device,
+        "--dtype",
+        dtype,
+        "--preset",
+        preset,
+    ]
     if revision:
         cmd += ["--revision", revision]
     if base_model:
@@ -153,14 +192,32 @@ def build_command(audio_path, output_dir, *, python=None, task: str = "melody-fu
     return cmd
 
 
-def build_serve_command(*, python=None, model: str | None = None, revision: str | None = None,
-                        base_model: str | None = None, offline: bool = False,
-                        device: str = "auto", dtype: str = "auto", preset: str = "default",
-                        threads: int = 4) -> list[str]:
+def build_serve_command(
+    *,
+    python=None,
+    model: str | None = None,
+    revision: str | None = None,
+    base_model: str | None = None,
+    offline: bool = False,
+    device: str = "auto",
+    dtype: str = "auto",
+    preset: str = "default",
+    threads: int = 4,
+) -> list[str]:
     """argv for the resident worker (``--serve``); requests carry audio/task."""
-    cmd = [resolve_python(python), str(DRIVER), "--serve",
-           "--model", model or config.default_sheetsage_model(),
-           "--device", device, "--dtype", dtype, "--preset", preset]
+    cmd = [
+        resolve_python(python),
+        str(DRIVER),
+        "--serve",
+        "--model",
+        model or config.default_sheetsage_model(),
+        "--device",
+        device,
+        "--dtype",
+        dtype,
+        "--preset",
+        preset,
+    ]
     if revision:
         cmd += ["--revision", revision]
     if base_model:
@@ -183,7 +240,10 @@ def _unique_dir(directory: Path) -> Path:
 
 
 def _default_output_dir(audio: Path) -> Path:
-    stem = "".join(c if c.isalnum() or c in "-_" else "-" for c in audio.stem)[:40].strip("-") or "audio"
+    stem = (
+        "".join(c if c.isalnum() or c in "-_" else "-" for c in audio.stem)[:40].strip("-")
+        or "audio"
+    )
     return config.transcriptions_dir() / f"{time.strftime('%Y%m%d-%H%M%S')}-{stem}"
 
 
@@ -257,13 +317,19 @@ class _Worker:
 
     def start(self, timeout: float = 900.0) -> dict:
         self.process = subprocess.Popen(
-            self.cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            bufsize=1, start_new_session=(os.name == "posix"),
-            env=config.child_env(), **config.SUBPROCESS_TEXT)
-        threading.Thread(target=self._pump, args=(self.process.stdout, self._lines),
-                         daemon=True).start()
-        threading.Thread(target=self._pump, args=(self.process.stderr, None),
-                         daemon=True).start()
+            self.cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=1,
+            start_new_session=(os.name == "posix"),
+            env=config.child_env(),
+            **config.SUBPROCESS_TEXT,
+        )
+        threading.Thread(
+            target=self._pump, args=(self.process.stdout, self._lines), daemon=True
+        ).start()
+        threading.Thread(target=self._pump, args=(self.process.stderr, None), daemon=True).start()
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
@@ -271,18 +337,20 @@ class _Worker:
             except queue.Empty:
                 if not self.alive():
                     raise SheetsageFailed(
-                        "SheetSage2 worker exited while loading: " + self.stderr_tail()) from None
+                        "SheetSage2 worker exited while loading: " + self.stderr_tail()
+                    ) from None
                 continue
             if line is None:
-                raise SheetsageFailed("SheetSage2 worker exited while loading: " + self.stderr_tail())
+                raise SheetsageFailed(
+                    "SheetSage2 worker exited while loading: " + self.stderr_tail()
+                )
             if line.startswith(READY_PREFIX):
                 try:
-                    return json.loads(line[len(READY_PREFIX):])
+                    return json.loads(line[len(READY_PREFIX) :])
                 except ValueError as exc:
                     raise SheetsageFailed(f"Unreadable worker ready line: {line[:200]!r}") from exc
         self.stop()
-        raise SheetsageFailed(
-            f"SheetSage2 worker did not report ready within {timeout:.0f}s")
+        raise SheetsageFailed(f"SheetSage2 worker did not report ready within {timeout:.0f}s")
 
     def alive(self) -> bool:
         return self.process is not None and self.process.poll() is None
@@ -316,29 +384,43 @@ class _Worker:
                     pass
 
     # ── one request ─────────────────────────────────────────────────────────
-    def transcribe(self, request: dict, *, cancelled: Cancelled | None = None,
-                   progress: Progress | None = None, timeout: float | None = None) -> dict:
+    def transcribe(
+        self,
+        request: dict,
+        *,
+        cancelled: Cancelled | None = None,
+        progress: Progress | None = None,
+        timeout: float | None = None,
+    ) -> dict:
         if not self.alive():
             raise SheetsageFailed("SheetSage2 worker is not running")
         with self._lock:
-            self.last_used = time.monotonic()   # checked out: never reap mid-request
+            self.last_used = time.monotonic()  # checked out: never reap mid-request
             try:
-                return self._request(request, cancelled=cancelled, progress=progress,
-                                     timeout=timeout)
+                return self._request(
+                    request, cancelled=cancelled, progress=progress, timeout=timeout
+                )
             finally:
                 # Idle time starts when the request *ends*: a long transcription must
                 # not look expired the moment it finishes.
                 self.last_used = time.monotonic()
 
-    def _request(self, request: dict, *, cancelled: Cancelled | None,
-                 progress: Progress | None, timeout: float | None) -> dict:
+    def _request(
+        self,
+        request: dict,
+        *,
+        cancelled: Cancelled | None,
+        progress: Progress | None,
+        timeout: float | None,
+    ) -> dict:
         try:
             assert self.process is not None and self.process.stdin is not None
             self.process.stdin.write(json.dumps({"op": "transcribe", **request}) + "\n")
             self.process.stdin.flush()
         except (OSError, ValueError) as exc:
             raise SheetsageFailed(
-                "SheetSage2 worker closed its input: " + self.stderr_tail()) from exc
+                "SheetSage2 worker closed its input: " + self.stderr_tail()
+            ) from exc
         deadline = time.monotonic() + timeout if timeout else None
         while True:
             try:
@@ -347,11 +429,12 @@ class _Worker:
                 line = ""
             if line is None:
                 self.process = None
-                raise SheetsageFailed("SheetSage2 worker stopped unexpectedly: "
-                                      + self.stderr_tail())
+                raise SheetsageFailed(
+                    "SheetSage2 worker stopped unexpectedly: " + self.stderr_tail()
+                )
             if line.startswith(PROGRESS_PREFIX):
                 try:
-                    event = json.loads(line[len(PROGRESS_PREFIX):])
+                    event = json.loads(line[len(PROGRESS_PREFIX) :])
                 except ValueError:
                     event = {}
                 done, total = event.get("done"), event.get("total")
@@ -362,7 +445,7 @@ class _Worker:
                         progress(fraction, "Transcribing…" + (f" {done}/{total}" if total else ""))
             elif line.startswith(RESULT_PREFIX):
                 try:
-                    reply = json.loads(line[len(RESULT_PREFIX):])
+                    reply = json.loads(line[len(RESULT_PREFIX) :])
                 except ValueError as exc:
                     raise SheetsageFailed(f"Unreadable worker reply: {line[:200]!r}") from exc
                 if reply.get("ok"):
@@ -383,7 +466,7 @@ class _Worker:
 _WORKER: _Worker | None = None
 _WORKER_LOCK = threading.Lock()
 _REAPER: threading.Thread | None = None
-_REAPER_TICK = 5.0          # how often the background reaper checks the idle timeout
+_REAPER_TICK = 5.0  # how often the background reaper checks the idle timeout
 
 
 def _reap_idle_worker() -> bool:
@@ -409,7 +492,7 @@ def _reap_idle_worker() -> bool:
 def _reaper_loop() -> None:
     while True:
         time.sleep(_REAPER_TICK)
-        with contextlib.suppress(Exception):   # the reaper must never kill the process
+        with contextlib.suppress(Exception):  # the reaper must never kill the process
             _reap_idle_worker()
 
 
@@ -428,8 +511,9 @@ def _ensure_worker(cmd: list[str], idle_seconds: float) -> _Worker:
             worker.start()
             _WORKER = worker
             if _REAPER is None or not _REAPER.is_alive():
-                _REAPER = threading.Thread(target=_reaper_loop, daemon=True,
-                                           name="sheetsage-reaper")
+                _REAPER = threading.Thread(
+                    target=_reaper_loop, daemon=True, name="sheetsage-reaper"
+                )
                 _REAPER.start()
         # mark as just used so the reaper cannot race a request that is starting
         _WORKER.last_used = time.monotonic()
@@ -441,9 +525,11 @@ def worker_status() -> dict | None:
     with _WORKER_LOCK:
         if _WORKER is None or not _WORKER.alive():
             return None
-        return {"pid": _WORKER.process.pid if _WORKER.process else None,
-                "idle_seconds": round(time.monotonic() - _WORKER.last_used, 1),
-                "command": _WORKER.cmd.copy()}
+        return {
+            "pid": _WORKER.process.pid if _WORKER.process else None,
+            "idle_seconds": round(time.monotonic() - _WORKER.last_used, 1),
+            "command": _WORKER.cmd.copy(),
+        }
 
 
 def stop_worker() -> bool:
@@ -457,14 +543,27 @@ def stop_worker() -> bool:
     return True
 
 
-def transcribe(audio_path, *, output_dir=None, task: str = "melody-full",
-               melody_only: bool | None = None, model: str | None = None,
-               revision: str | None = None, base_model: str | None = None,
-               offline: bool = False, device: str = "auto", dtype: str = "auto",
-               preset: str = "default", max_seconds: float | None = None,
-               threads: int = 4, python: str | None = None, keep_warm: bool | None = None,
-               cancelled: Cancelled | None = None, progress: Progress | None = None,
-               timeout: float | None = None) -> dict:
+def transcribe(
+    audio_path,
+    *,
+    output_dir=None,
+    task: str = "melody-full",
+    melody_only: bool | None = None,
+    model: str | None = None,
+    revision: str | None = None,
+    base_model: str | None = None,
+    offline: bool = False,
+    device: str = "auto",
+    dtype: str = "auto",
+    preset: str = "default",
+    max_seconds: float | None = None,
+    threads: int = 4,
+    python: str | None = None,
+    keep_warm: bool | None = None,
+    cancelled: Cancelled | None = None,
+    progress: Progress | None = None,
+    timeout: float | None = None,
+) -> dict:
     """Transcribe one audio file and return the driver's result record.
 
     ``task`` selects vocal-melody / full-melody / full-score transcription; the
@@ -487,19 +586,35 @@ def transcribe(audio_path, *, output_dir=None, task: str = "melody-full",
 
     def report(fraction, description):
         if progress is not None:
-            with contextlib.suppress(Exception):   # a UI callback must never kill the job
+            with contextlib.suppress(Exception):  # a UI callback must never kill the job
                 progress(fraction, description)
 
     warm = config.sheetsage_keep_warm() if keep_warm is None else bool(keep_warm)
     if warm:
-        serve_cmd = build_serve_command(python=python, model=model, revision=revision,
-                                        base_model=base_model, offline=offline, device=device,
-                                        dtype=dtype, preset=preset, threads=threads)
+        serve_cmd = build_serve_command(
+            python=python,
+            model=model,
+            revision=revision,
+            base_model=base_model,
+            offline=offline,
+            device=device,
+            dtype=dtype,
+            preset=preset,
+            threads=threads,
+        )
         report(None, "Loading the SheetSage2 worker…")
         worker = _ensure_worker(serve_cmd, config.sheetsage_idle_seconds())
-        reply = worker.transcribe({"audio": str(audio), "output_dir": str(output), "task": task,
-                                   "max_seconds": max_seconds},
-                                  cancelled=cancelled, progress=progress, timeout=timeout)
+        reply = worker.transcribe(
+            {
+                "audio": str(audio),
+                "output_dir": str(output),
+                "task": task,
+                "max_seconds": max_seconds,
+            },
+            cancelled=cancelled,
+            progress=progress,
+            timeout=timeout,
+        )
         try:
             record = json.loads((output / "result.json").read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
@@ -510,24 +625,40 @@ def transcribe(audio_path, *, output_dir=None, task: str = "melody-full",
         record["task"] = task
         record["melody_only"] = bool(record.get("melody_only", task != "full"))
         record["command"] = serve_cmd
-        record["worker"] = {"pid": worker.process.pid if worker.process else None,
-                            "resident": True}
+        record["worker"] = {"pid": worker.process.pid if worker.process else None, "resident": True}
         if not reply.get("abc") and not record.get("abc"):
             raise SheetsageFailed(str(reply.get("error") or "SheetSage2 worker returned no ABC"))
         return record
 
     # One-shot: build the command first so a configuration error touches nothing.
-    cmd = build_command(audio, output, python=python, task=task, model=model,
-                        revision=revision, base_model=base_model, offline=offline,
-                        device=device, dtype=dtype, preset=preset,
-                        max_seconds=max_seconds, threads=threads)
+    cmd = build_command(
+        audio,
+        output,
+        python=python,
+        task=task,
+        model=model,
+        revision=revision,
+        base_model=base_model,
+        offline=offline,
+        device=device,
+        dtype=dtype,
+        preset=preset,
+        max_seconds=max_seconds,
+        threads=threads,
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     report(None, "Starting the SheetSage2 environment…")
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                               bufsize=1, stdin=subprocess.DEVNULL,
-                               start_new_session=(os.name == "posix"),
-                               env=config.child_env(), **config.SUBPROCESS_TEXT)
-    assert process.stdout is not None and process.stderr is not None   # both are PIPEs
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=1,
+        stdin=subprocess.DEVNULL,
+        start_new_session=(os.name == "posix"),
+        env=config.child_env(),
+        **config.SUBPROCESS_TEXT,
+    )
+    assert process.stdout is not None and process.stderr is not None  # both are PIPEs
     stdout, stderr = process.stdout, process.stderr
     lines: queue.Queue[str | None] = queue.Queue()
     stderr_lines: list[str] = []
@@ -542,7 +673,7 @@ def transcribe(audio_path, *, output_dir=None, task: str = "melody-full",
             lines.put(None)
 
     def pump_stderr():
-        with contextlib.suppress(OSError, ValueError):   # the pipe closes when the child exits
+        with contextlib.suppress(OSError, ValueError):  # the pipe closes when the child exits
             stderr_lines.extend(stderr)
 
     stdout_thread = threading.Thread(target=pump_stdout, daemon=True)
@@ -562,7 +693,7 @@ def transcribe(audio_path, *, output_dir=None, task: str = "melody-full",
             stream_done = True
         elif line.startswith(PROGRESS_PREFIX):
             try:
-                event = json.loads(line[len(PROGRESS_PREFIX):])
+                event = json.loads(line[len(PROGRESS_PREFIX) :])
             except ValueError:
                 event = {}
             done, total = event.get("done"), event.get("total")
@@ -575,7 +706,8 @@ def transcribe(audio_path, *, output_dir=None, task: str = "melody-full",
         if deadline is not None and time.monotonic() > deadline:
             _terminate(process)
             raise SheetsageFailed(
-                f"Transcription timed out after {timeout:.0f}s; the audio may be too long for this machine")
+                f"Transcription timed out after {timeout:.0f}s; the audio may be too long for this machine"
+            )
         if process.poll() is not None and (stream_done or lines.empty()):
             break
 
@@ -587,13 +719,15 @@ def transcribe(audio_path, *, output_dir=None, task: str = "melody-full",
     if process.returncode != 0:
         raise SheetsageFailed(
             f"SheetSage2 transcription failed (exit {process.returncode}): "
-            f"{_read_failure(output, ''.join(stderr_lines))}")
+            f"{_read_failure(output, ''.join(stderr_lines))}"
+        )
     try:
         record = json.loads((output / "result.json").read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise SheetsageFailed(
             f"SheetSage2 finished but wrote no readable result.json in {output}: "
-            f"{''.join(stderr_lines).strip()[-600:]}") from exc
+            f"{''.join(stderr_lines).strip()[-600:]}"
+        ) from exc
     record.setdefault("output_dir", str(output))
     record["task"], record["melody_only"] = task, bool(record.get("melody_only", task != "full"))
     record["command"] = cmd

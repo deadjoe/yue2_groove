@@ -4,6 +4,7 @@ It only states facts and offers actions that map to existing Studio handlers;
 the current work travels through a hidden bridge textbox that the client
 mirrors to localStorage (``mirror_current`` / ``publish_current``).
 """
+
 from __future__ import annotations
 
 import html
@@ -31,8 +32,8 @@ def publish_current(path):
     """Band for the hidden current-work bridge; clears an invalid stored path once."""
     text = workflow.band(runtime.RUNS, path)
     if (path or "").strip() and not text:
-        return "", gr.update(value="")      # (band, bridge): stale entry — clear both
-    return text, gr.update()                # band rendered, bridge untouched
+        return "", gr.update(value="")  # (band, bridge): stale entry — clear both
+    return text, gr.update()  # band rendered, bridge untouched
 
 
 def rel_of_run(value) -> str:
@@ -55,8 +56,13 @@ def rel_of_run(value) -> str:
 # checkbox), so there is no second copy of STYLE / LYRICS / ABC / sampling state.
 VIEW_CHOICES = ("song", "studio")
 SONG_ACTIONS = ("listen", "render", "edit", "retry", "check", "send", "library")
-SONG_STAGES = (("draft", "DRAFT"), ("score", "SCORE"), ("audio", "AUDIO"),
-                ("revise", "REVISE"), ("done", "DONE"))
+SONG_STAGES = (
+    ("draft", "DRAFT"),
+    ("score", "SCORE"),
+    ("audio", "AUDIO"),
+    ("revise", "REVISE"),
+    ("done", "DONE"),
+)
 
 
 def resolve_view(cli_view=None, cli_tab=None, env_view=None) -> tuple[str, int]:
@@ -129,8 +135,7 @@ def _song_stage_track(stage: str) -> str:
         elif index < current:
             classes.append("bb-stage-past")
         cells.append(f'<span class="{" ".join(classes)}">{label}</span>')
-    return '<div id="bb-song-stage">' +\
-        '<span class="bb-stage-sep">→</span>'.join(cells) + "</div>"
+    return '<div id="bb-song-stage">' + '<span class="bb-stage-sep">→</span>'.join(cells) + "</div>"
 
 
 def _song_identity(work: dict) -> str:
@@ -138,10 +143,10 @@ def _song_identity(work: dict) -> str:
         '<div id="bb-song-identity">'
         f'<div class="bb-song-title">{html.escape(work["title"])}</div>'
         '<div class="bb-song-meta">'
-        f'<span>KIND <b>{html.escape(work["kind_label"])}</b></span>'
-        f'<span>STAGE <b>{html.escape(work["stage_label"])}</b></span>'
-        f'<span>LAST <b>{html.escape(workflow.last_event(work))}</b></span>'
-        f'<span>RUN <b>{html.escape(work["rel"])}</b></span>'
+        f"<span>KIND <b>{html.escape(work['kind_label'])}</b></span>"
+        f"<span>STAGE <b>{html.escape(work['stage_label'])}</b></span>"
+        f"<span>LAST <b>{html.escape(workflow.last_event(work))}</b></span>"
+        f"<span>RUN <b>{html.escape(work['rel'])}</b></span>"
         "</div></div>"
     )
 
@@ -157,12 +162,13 @@ def _song_family(entries) -> str:
         rows.append(
             '<div class="bb-family-item">'
             f'<b class="bb-family-hit" data-bb-run="{html.escape(entry["path"], quote=True)}">'
-            f'{html.escape(entry["title"])}</b> '
+            f"{html.escape(entry['title'])}</b> "
             f'<span class="bb-family-rel">[{tag}] {relations}</span></div>'
         )
-    return ('<div id="bb-song-family"><div class="bb-score-title">FAMILY</div>'
-            '<div class="bb-family-list">'
-            + "".join(rows) + "</div></div>")
+    return (
+        '<div id="bb-song-family"><div class="bb-score-title">FAMILY</div>'
+        '<div class="bb-family-list">' + "".join(rows) + "</div></div>"
+    )
 
 
 def render_song(active):
@@ -170,14 +176,16 @@ def render_song(active):
     work = _song_work(active)
     if work is None:
         return (
-            gr.update(visible=True),                          # song_empty
-            gr.update(visible=False),                         # song_work
-            "", "", "",                                        # identity, stage, family
-            gr.update(value=None, visible=False),             # song_player
+            gr.update(visible=True),  # song_empty
+            gr.update(visible=False),  # song_work
+            "",
+            "",
+            "",  # identity, stage, family
+            gr.update(value=None, visible=False),  # song_player
             frontend.score_panel("SONG SCORE", "No current work.", abc=""),
             *[gr.update(visible=False) for _ in SONG_ACTIONS],
-            gr.update(visible=False),                         # song_studio_btn
-            gr.update(visible=False),                         # song_compare_btn
+            gr.update(visible=False),  # song_studio_btn
+            gr.update(visible=False),  # song_compare_btn
         )
     actions = workflow.next_actions(work)
     ids = {action["id"] for action in actions}
@@ -220,20 +228,37 @@ def song_render_action(active):
     noop = gr.update()
     current = str(Path(work["path"]).resolve())
     if work["kind"] == "transcription":
-        abc, style, lyrics, status, choices, _current, tabs = library_tab.library_use_in_cover(work["rel"])
-        return (noop, noop, noop, noop, abc, style, lyrics, status, choices, current, tabs,
-                gr.update(value="studio"))
+        abc, style, lyrics, status, choices, _current, tabs = library_tab.library_use_in_cover(
+            work["rel"]
+        )
+        return (
+            noop,
+            noop,
+            noop,
+            noop,
+            abc,
+            style,
+            lyrics,
+            status,
+            choices,
+            current,
+            tabs,
+            gr.update(value="studio"),
+        )
     request = work.get("request") or {}
     return (
-        gr.update(value=_song_abc(work)),                 # abc
-        gr.update(open=True),                             # score_input_accordion
-        gr.update(value=request.get("style") or ""),     # style
-        gr.update(value=request.get("lyrics") or ""),    # lyrics
-        noop, noop, noop, noop,                           # cover abc/style/lyrics/status
-        noop,                                             # cover_source
-        current,                                          # current_bridge
-        gr.update(selected="gen"),                       # tabs
-        gr.update(value="studio"),                       # view_bridge
+        gr.update(value=_song_abc(work)),  # abc
+        gr.update(open=True),  # score_input_accordion
+        gr.update(value=request.get("style") or ""),  # style
+        gr.update(value=request.get("lyrics") or ""),  # lyrics
+        noop,
+        noop,
+        noop,
+        noop,  # cover abc/style/lyrics/status
+        noop,  # cover_source
+        current,  # current_bridge
+        gr.update(selected="gen"),  # tabs
+        gr.update(value="studio"),  # view_bridge
     )
 
 
@@ -247,13 +272,13 @@ def song_retry(active):
     next_seed = seed + 1 if isinstance(seed, int) else 831001
     cot = request.get("cot") if request.get("cot") in ("full", "melody", "off") else "full"
     return (
-        gr.update(value=request.get("style") or ""),     # style
-        gr.update(value=request.get("lyrics") or ""),    # lyrics
-        gr.update(value=cot),                             # cot
-        gr.update(value=next_seed),                       # seed
-        str(Path(work["path"]).resolve()),               # current_bridge
-        gr.update(selected="gen"),                       # tabs
-        gr.update(value="studio"),                       # view_bridge
+        gr.update(value=request.get("style") or ""),  # style
+        gr.update(value=request.get("lyrics") or ""),  # lyrics
+        gr.update(value=cot),  # cot
+        gr.update(value=next_seed),  # seed
+        str(Path(work["path"]).resolve()),  # current_bridge
+        gr.update(selected="gen"),  # tabs
+        gr.update(value="studio"),  # view_bridge
     )
 
 
@@ -268,7 +293,8 @@ def song_send(active):
     request = work.get("request") or {}
     task = request.get("task") or "melody-full"
     abc, cot, style, lyrics, accordion, tabs, status = cover_tab.cover_send_to_generate(
-        abc_text, task, request.get("style") or "", request.get("lyrics") or "", "both")
+        abc_text, task, request.get("style") or "", request.get("lyrics") or "", "both"
+    )
     return (abc, cot, style, lyrics, accordion, tabs, status, gr.update(value="studio"))
 
 

@@ -1,4 +1,5 @@
 """Project metadata surfaced in the UI: version and the developer credit footer."""
+
 from __future__ import annotations
 
 import re
@@ -25,11 +26,21 @@ def test_release_version_is_consistent() -> None:
 def test_footer_credits_the_repository(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(webui.runtime, "RUNS", tmp_path / "runs")
     (tmp_path / "runs").mkdir()
-    demo = webui.build_ui({"device": "cpu", "dtype": "float32", "model": "m-a-p/YuE2-3B",
-                           "vae": "standard", "tab": 0, "status": ""})
-    footer = next(getattr(c, "value", "") for c in demo.blocks.values()
-                  if isinstance(getattr(c, "value", None), str)
-                  and "Developed by DEADJOE@GITHUB" in c.value)
+    demo = webui.build_ui(
+        {
+            "device": "cpu",
+            "dtype": "float32",
+            "model": "m-a-p/YuE2-3B",
+            "vae": "standard",
+            "tab": 0,
+            "status": "",
+        }
+    )
+    footer = next(
+        getattr(c, "value", "")
+        for c in demo.blocks.values()
+        if isinstance(getattr(c, "value", None), str) and "Developed by DEADJOE@GITHUB" in c.value
+    )
     assert f"GROOVE {yue2_groove.__version__}" in footer
     assert f'href="{REPO_URL}"' in footer
     assert 'target="_blank"' in footer and 'rel="noopener"' in footer

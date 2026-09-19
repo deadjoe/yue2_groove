@@ -5,6 +5,7 @@ graph, the defaults blob), the JS ↔ Python contract (PARAMS ids and keys), and
 the JS numeric core itself, which runs under node through the read-only
 `window.__BB_KNOB_INTERNALS__` export (skipped when node is not on PATH).
 """
+
 from __future__ import annotations
 
 import json
@@ -19,10 +20,20 @@ gr = pytest.importorskip("gradio")
 webui = pytest.importorskip("yue2_groove.webui")
 
 SLIDER_IDS = [
-    "bb-abc-temp", "bb-abc-p", "bb-abc-k", "bb-abc-rep", "bb-abc-win",
-    "bb-abc-min", "bb-abc-max",
-    "bb-sem-temp", "bb-sem-p", "bb-sem-k", "bb-sem-rep", "bb-sem-win",
-    "bb-sem-min", "bb-sem-max",
+    "bb-abc-temp",
+    "bb-abc-p",
+    "bb-abc-k",
+    "bb-abc-rep",
+    "bb-abc-win",
+    "bb-abc-min",
+    "bb-abc-max",
+    "bb-sem-temp",
+    "bb-sem-p",
+    "bb-sem-k",
+    "bb-sem-rep",
+    "bb-sem-win",
+    "bb-sem-min",
+    "bb-sem-max",
 ]
 PHASE_DEFAULTS = {"abc": webui.runtime.ABC_DEFAULTS, "sem": webui.runtime.SEM_DEFAULTS}
 
@@ -55,9 +66,17 @@ process.stdout.write(JSON.stringify(result));
 def _knob_js(body: str, **args):
     """Evaluate a JS function body over `I` (the knob internals) and `args` under node."""
     proc = subprocess.run(
-        [NODE, "-e", _NODE_SHIM, str(webui.frontend.SAMPLING_KNOBS_FILE),
-         json.dumps({"body": body, "args": args})],
-        capture_output=True, text=True, check=True)
+        [
+            NODE,
+            "-e",
+            _NODE_SHIM,
+            str(webui.frontend.SAMPLING_KNOBS_FILE),
+            json.dumps({"body": body, "args": args}),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
     return json.loads(proc.stdout)
 
 
@@ -65,7 +84,8 @@ def _params_from_js() -> list[dict]:
     """The PARAMS table, parsed from the script so the contract test needs no node."""
     js = webui.frontend.SAMPLING_KNOBS_FILE.read_text(encoding="utf-8")
     rows = re.findall(
-        r"\{ id: '([^']+)', key: '([^']+)', label: '([^']+)', phase: '(abc|sem)' \}", js)
+        r"\{ id: '([^']+)', key: '([^']+)', label: '([^']+)', phase: '(abc|sem)' \}", js
+    )
     return [{"id": i, "key": k, "label": lbl, "phase": ph} for i, k, lbl, ph in rows]
 
 
@@ -78,8 +98,16 @@ def _decimals(step: float) -> int:
 def demo(monkeypatch, tmp_path):
     monkeypatch.setattr(webui.runtime, "RUNS", tmp_path / "runs")
     (tmp_path / "runs").mkdir()
-    return webui.build_ui({"device": "cpu", "dtype": "float32", "model": "m-a-p/YuE2-3B",
-                           "vae": "standard", "tab": 0, "status": ""})
+    return webui.build_ui(
+        {
+            "device": "cpu",
+            "dtype": "float32",
+            "model": "m-a-p/YuE2-3B",
+            "vae": "standard",
+            "tab": 0,
+            "status": "",
+        }
+    )
 
 
 def _by_id(demo):
@@ -87,6 +115,7 @@ def _by_id(demo):
 
 
 # ── Python wiring ──────────────────────────────────────────────────────────
+
 
 def test_sampling_knobs_assets_and_defaults_are_wired() -> None:
     assert webui.frontend.SAMPLING_KNOBS_FILE.name == "sampling-knobs.js"
@@ -96,29 +125,35 @@ def test_sampling_knobs_assets_and_defaults_are_wired() -> None:
     assert "ns-resize" in webui.theme.BASE_CSS
     assert "bb-knob-dragging" in webui.theme.BASE_CSS
     assert "__bbToggleSamplingView" in webui.frontend.SAMPLING_VIEW_TOGGLE_JS
-    assert "file={SAMPLING_KNOBS_FILE}" in webui.frontend.HEAD_HTML or str(
-        webui.frontend.SAMPLING_KNOBS_FILE) in webui.frontend.HEAD_HTML
+    assert (
+        "file={SAMPLING_KNOBS_FILE}" in webui.frontend.HEAD_HTML
+        or str(webui.frontend.SAMPLING_KNOBS_FILE) in webui.frontend.HEAD_HTML
+    )
     # the double-click reset contract: the blob is exactly the Python defaults,
     # and it is defined before the script that reads it
     blob = re.search(r"__BB_SAMPLING_DEFAULTS__ = (\{.*?\});</script>", webui.frontend.HEAD_HTML)
     assert blob is not None
-    assert json.loads(blob.group(1)) == {"abc": webui.runtime.ABC_DEFAULTS, "sem": webui.runtime.SEM_DEFAULTS}
-    assert webui.frontend.HEAD_HTML.index("__BB_SAMPLING_DEFAULTS__") < webui.frontend.HEAD_HTML.index(
-        "sampling-knobs.js")
+    assert json.loads(blob.group(1)) == {
+        "abc": webui.runtime.ABC_DEFAULTS,
+        "sem": webui.runtime.SEM_DEFAULTS,
+    }
+    assert webui.frontend.HEAD_HTML.index(
+        "__BB_SAMPLING_DEFAULTS__"
+    ) < webui.frontend.HEAD_HTML.index("sampling-knobs.js")
     js = webui.frontend.SAMPLING_KNOBS_FILE.read_text(encoding="utf-8")
     assert "bb-sampling-view" in js
     assert "preventDefault" in js
     assert "__bbToggleSamplingView" in js
-    assert "MutationObserver" in js        # rebind when the accordion re-renders
-    assert "ensureView" in js               # the script, not the server, picks the view
+    assert "MutationObserver" in js  # rebind when the accordion re-renders
+    assert "ensureView" in js  # the script, not the server, picks the view
     assert "aria-valuenow" in js
-    assert "dblclick" in js                 # double-click restores the default
+    assert "dblclick" in js  # double-click restores the default
     # DOM-level guards from the numeric-control audit (the numeric core itself
     # is exercised under node below):
-    assert "activeDrag" in js                # window pointerup safety net
-    assert "setInterval" in js               # heartbeat resync for preset/reset values
+    assert "activeDrag" in js  # window pointerup safety net
+    assert "setInterval" in js  # heartbeat resync for preset/reset values
     assert "inputs.number.value !== s" in js  # number field is the written value
-    assert "inputs.range.value !== s" in js   # range only when no number field exists
+    assert "inputs.range.value !== s" in js  # range only when no number field exists
     assert "focus({ preventScroll: true })" in js  # arrows work right after a click
 
 
@@ -157,8 +192,9 @@ def test_sampling_sliders_remain_gradio_sliders_with_stable_ids(demo) -> None:
     assert by_id["bb-abc-temp"].value == webui.runtime.ABC_DEFAULTS["temperature"]
     assert by_id["bb-sem-max"].value == webui.runtime.SEM_DEFAULTS["max_tokens"]
     # concise phase labels over the two knob rows
-    headings = [str(getattr(c, "value", "")) for c in demo.blocks.values()
-                if isinstance(c, gr.Markdown)]
+    headings = [
+        str(getattr(c, "value", "")) for c in demo.blocks.values() if isinstance(c, gr.Markdown)
+    ]
     assert any("ABC PHASE · SCORE PLAN" in h for h in headings)
     assert any("SEMANTIC PHASE · AUDIO" in h for h in headings)
 
@@ -192,8 +228,7 @@ def test_preset_and_reset_still_drive_the_knob_sliders(demo) -> None:
     assert isinstance(reset.outputs[14], gr.Dropdown)
     assert reset.outputs[14].label == "BUDGET PRESET"
     assert len(reset.outputs) == 15
-    preset = next(f for f in demo.fns.values()
-                  if getattr(f.fn, "__name__", "") == "apply_preset")
+    preset = next(f for f in demo.fns.values() if getattr(f.fn, "__name__", "") == "apply_preset")
     touched = {o.elem_id for o in preset.outputs}
     assert touched <= set(SLIDER_IDS)
     assert {"bb-abc-max", "bb-sem-max"} <= touched
@@ -210,6 +245,7 @@ def test_reset_sampling_values_unchanged() -> None:
 
 # ── JS ↔ Python contract ──────────────────────────────────────────────────
 
+
 def test_knob_params_match_the_python_side() -> None:
     """A drifted id leaves a slider without a knob; a drifted key makes the
     double-click reset a silent no-op (`defaultsFor(phase)[key]` is undefined)."""
@@ -217,7 +253,7 @@ def test_knob_params_match_the_python_side() -> None:
     assert [p["id"] for p in params] == SLIDER_IDS
     for phase, defaults in PHASE_DEFAULTS.items():
         keys = [p["key"] for p in params if p["phase"] == phase]
-        assert keys == list(defaults), phase   # same order as _reset_sampling_values
+        assert keys == list(defaults), phase  # same order as _reset_sampling_values
     for p in params:
         assert p["id"].startswith(f"bb-{p['phase']}-"), p
         assert p["label"] == p["key"].upper(), p
@@ -225,15 +261,24 @@ def test_knob_params_match_the_python_side() -> None:
 
 # ── JS numeric core (node) ────────────────────────────────────────────────
 
+
 @needs_node
 def test_knob_numeric_core_matches_the_slider_grids(demo) -> None:
     by_id = _by_id(demo)
     params = []
     for p in _params_from_js():
         s = by_id[p["id"]]
-        params.append({"id": p["id"], "min": s.minimum, "max": s.maximum, "step": s.step,
-                       "default": PHASE_DEFAULTS[p["phase"]][p["key"]]})
-    report = _knob_js("""
+        params.append(
+            {
+                "id": p["id"],
+                "min": s.minimum,
+                "max": s.maximum,
+                "step": s.step,
+                "default": PHASE_DEFAULTS[p["phase"]][p["key"]],
+            }
+        )
+    report = _knob_js(
+        """
       return args.params.map(function (p) {
         var m = { min: p.min, max: p.max, step: p.step };
         var badGrid = 0, badFmt = 0;
@@ -252,7 +297,9 @@ def test_knob_numeric_core_matches_the_slider_grids(demo) -> None:
           badGrid: badGrid, badFmt: badFmt
         };
       });
-    """, params=params)
+    """,
+        params=params,
+    )
     assert [r["id"] for r in report] == SLIDER_IDS
     for p, r in zip(params, report, strict=True):
         lo, hi, step, default = p["min"], p["max"], p["step"], p["default"]
@@ -267,7 +314,7 @@ def test_knob_numeric_core_matches_the_slider_grids(demo) -> None:
         on_grid = abs(round((default - lo) / step) * step + lo - default) < 1e-9
         if on_grid:
             assert r["down"] == pytest.approx(max(lo, default - step)), p
-        else:   # sem_max 9000 sits off the 64-grid: ArrowDown reaches the nearest point
+        else:  # sem_max 9000 sits off the 64-grid: ArrowDown reaches the nearest point
             assert lo <= r["down"] < default and default - r["down"] <= step, p
         # the readout prints with the step's own precision
         assert r["decimals"] == _decimals(step), p
@@ -294,7 +341,7 @@ def test_knob_drag_accumulator_clamps_at_the_ends() -> None:
       };
     """)
     assert r["atMax"] == 5 and r["stillMax"] == 5
-    assert r["back"] < 5 and r["backShown"] == 4.95      # moves on the first pixel back
+    assert r["back"] < 5 and r["backShown"] == 4.95  # moves on the first pixel back
     assert r["floor"] == 0
     # drag feel: 120px = full sweep, Shift is 6x finer on the same grid
     assert (r["pxFull"], r["pxFine"]) == (120, 720)
@@ -312,11 +359,11 @@ def test_knob_arc_geometry_keeps_the_bottom_gap() -> None:
         start: I.polar(I.headDeg(0)), end: I.polar(I.headDeg(1)), center: I.polar(-90)
       };
     """)
-    assert (r["head0"], r["head1"]) == (135, 405)          # 270° sweep from bottom-left
+    assert (r["head0"], r["head1"]) == (135, 405)  # 270° sweep from bottom-left
     assert (r["clampLo"], r["clampHi"]) == (135, 405)
-    assert " 1 1 " in r["full"]                            # remaining arc > 180°: large-arc
+    assert " 1 1 " in r["full"]  # remaining arc > 180°: large-arc
     assert " 0 1 " in r["half"]
-    assert r["none"] == "" and r["tiny"] == ""             # nothing left to draw at max
+    assert r["none"] == "" and r["tiny"] == ""  # nothing left to draw at max
     # both ends sit below the centre (SVG y grows downward): the gap is at the bottom
     cx = cy = 44
     assert r["start"][0] < cx and r["start"][1] > cy

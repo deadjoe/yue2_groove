@@ -1,4 +1,5 @@
 """The webui kernel: settings as one value, the sampling pair, the job slot."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -10,8 +11,22 @@ gr = pytest.importorskip("gradio")
 webui = pytest.importorskip("yue2_groove.webui")
 runtime = webui.runtime
 
-RAIL = ("auto", "bfloat16", "torch", "none", False, 24, 32, "auto", "m-a-p/YuE2-3B",
-        "standard", "", "", "", False)
+RAIL = (
+    "auto",
+    "bfloat16",
+    "torch",
+    "none",
+    False,
+    24,
+    32,
+    "auto",
+    "m-a-p/YuE2-3B",
+    "standard",
+    "",
+    "",
+    "",
+    False,
+)
 SAMPLING = (0.7, 0.9, 30, 1.005, 100, 32, 4096, 1.0, 0.95, 100, 1.2, 50, 200, 9000)
 
 
@@ -45,8 +60,11 @@ def test_settings_key_identifies_a_loaded_pipeline() -> None:
 
 def test_get_pipe_reuses_the_cache_for_equal_settings(monkeypatch) -> None:
     loads = []
-    monkeypatch.setattr(runtime, "load_pipeline",
-                        lambda settings, progress=None: (loads.append(settings) or "pipe", "Loaded"))
+    monkeypatch.setattr(
+        runtime,
+        "load_pipeline",
+        lambda settings, progress=None: (loads.append(settings) or "pipe", "Loaded"),
+    )
     monkeypatch.setattr(runtime, "_PIPE", None)
     monkeypatch.setattr(runtime, "_PIPE_KEY", None)
     settings = runtime.RuntimeSettings(*RAIL)
@@ -64,7 +82,7 @@ def test_job_slot_is_exclusive_and_clears_a_stale_cancel() -> None:
     assert runtime.try_start_job() is True
     try:
         assert not runtime.CANCEL.is_set()
-        assert runtime.try_start_job() is False          # a second job is refused, not queued
+        assert runtime.try_start_job() is False  # a second job is refused, not queued
         assert "JOB RUNNING" in webui.frontend.busy_banner()
     finally:
         runtime.end_job()
@@ -76,8 +94,14 @@ def test_job_slot_is_exclusive_and_clears_a_stale_cancel() -> None:
 def test_a_closed_batch_generator_releases_the_job_slot(monkeypatch) -> None:
     """Regression: the first yield sat between acquiring the slot and the try/finally."""
     monkeypatch.setattr(runtime, "get_pipe", lambda settings, progress=None: ("pipe", "ready"))
-    gen = webui.generate_tab.batch_generate('{"id": "a", "style": "s", "lyrics": "l"}', None, "",
-                                            *SAMPLING, *RAIL, progress=lambda *a, **k: None)
+    gen = webui.generate_tab.batch_generate(
+        '{"id": "a", "style": "s", "lyrics": "l"}',
+        None,
+        "",
+        *SAMPLING,
+        *RAIL,
+        progress=lambda *a, **k: None,
+    )
     first = next(gen)
     assert first[1] == "Starting batch…"
     gen.close()

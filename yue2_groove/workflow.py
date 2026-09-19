@@ -24,6 +24,7 @@ Phase B constraints (stated here, enforced there): the SONG container must not
 contain textboxes / radios / sliders / numbers / checkboxes (no second copy of
 any editable state), and the status band must state facts only.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -37,11 +38,21 @@ from pathlib import Path
 from . import library
 
 STAGES = ("draft", "score", "audio", "revise", "done")
-STAGE_LABELS = {"draft": "DRAFT", "score": "SCORE", "audio": "AUDIO",
-                "revise": "REVISE", "done": "DONE"}
+STAGE_LABELS = {
+    "draft": "DRAFT",
+    "score": "SCORE",
+    "audio": "AUDIO",
+    "revise": "REVISE",
+    "done": "DONE",
+}
 KINDS = ("song", "plan", "transcription", "decode", "group")
-KIND_LABELS = {"song": "SONG", "plan": "PLAN", "transcription": "TRANSCRIPTION",
-               "decode": "DECODE", "group": "GROUP"}
+KIND_LABELS = {
+    "song": "SONG",
+    "plan": "PLAN",
+    "transcription": "TRANSCRIPTION",
+    "decode": "DECODE",
+    "group": "GROUP",
+}
 
 _ARTIFACTS = ("result.json", "audio.flac", "score.abc", "decode.json")
 _STAMP_RE = re.compile(r"^(\d{8})-(\d{6})-(.*)$")
@@ -122,8 +133,11 @@ def identify(root, path) -> dict | None:
         # a batch / all-modes group: run.json plus per-mode subdirectories
         if (path / "run.json").is_file():
             try:
-                children = [entry for entry in sorted(path.iterdir())
-                            if entry.is_dir() and any((entry / name).exists() for name in _ARTIFACTS)]
+                children = [
+                    entry
+                    for entry in sorted(path.iterdir())
+                    if entry.is_dir() and any((entry / name).exists() for name in _ARTIFACTS)
+                ]
             except OSError:
                 children = []
         if not children:
@@ -189,9 +203,13 @@ def last_event(work: dict) -> str:
         return f"finished {label}"
     if work["edited"]:
         return f"edited {label}"
-    return {"song": f"generated {label}", "decode": f"decoded {label}",
-            "transcription": f"transcribed {label}", "plan": f"planned {label}",
-            "group": f"created {label}"}.get(work["kind"], f"created {label}")
+    return {
+        "song": f"generated {label}",
+        "decode": f"decoded {label}",
+        "transcription": f"transcribed {label}",
+        "plan": f"planned {label}",
+        "group": f"created {label}",
+    }.get(work["kind"], f"created {label}")
 
 
 def band(root, path) -> str:
@@ -199,11 +217,13 @@ def band(root, path) -> str:
     work = identify(root, path)
     if work is None:
         return ""
-    cells = ['<span class="bb-eyebrow">CURRENT</span>',
-             f'<b>{html.escape(work["title"])}</b>',
-             html.escape(work["stage_label"]),
-             html.escape(work["kind_label"].lower()),
-             html.escape(last_event(work))]
+    cells = [
+        '<span class="bb-eyebrow">CURRENT</span>',
+        f"<b>{html.escape(work['title'])}</b>",
+        html.escape(work["stage_label"]),
+        html.escape(work["kind_label"].lower()),
+        html.escape(last_event(work)),
+    ]
     return '<div id="bb-current-band">' + " · ".join(cells) + "</div>"
 
 
@@ -238,8 +258,13 @@ def family(root, run: dict, limit: int = 12) -> list[dict]:
         if group and candidate["rel"].split("/")[0] == group:
             relations.append("same group")
         if relations:
-            out.append({**candidate, "relations": relations,
-                        "confidence": "exact" if exact else "heuristic"})
+            out.append(
+                {
+                    **candidate,
+                    "relations": relations,
+                    "confidence": "exact" if exact else "heuristic",
+                }
+            )
     out.sort(key=lambda entry: entry["created"], reverse=True)
     return out[:limit]
 

@@ -54,6 +54,7 @@ Visual language: Bearbone Design System v0.2 (warm near-black ground family + iv
 Model weights are CC BY-NC 4.0 (non-commercial); this UI is not affiliated with the
 YuE2 authors.
 """
+
 from __future__ import annotations
 
 # import order follows the dependency direction: kernel, page, tabs, wiring, CLI
@@ -73,5 +74,18 @@ from . import (
 from .cli import main
 from .layout import build_ui
 
-__all__ = ["build_ui", "cli", "cover_tab", "edit_tab", "frontend", "generate_tab", "layout",
-           "library_tab", "main", "runtime", "song_view", "theme", "tools_tab"]
+__all__ = [
+    "build_ui",
+    "cli",
+    "cover_tab",
+    "edit_tab",
+    "frontend",
+    "generate_tab",
+    "layout",
+    "library_tab",
+    "main",
+    "runtime",
+    "song_view",
+    "theme",
+    "tools_tab",
+]

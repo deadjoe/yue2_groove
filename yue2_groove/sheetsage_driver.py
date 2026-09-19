@@ -23,6 +23,7 @@ everything else on stdout/stderr is diagnostic text the adapter ignores.
 Adapted from the YuE2 skill helper ``skills/yue2-music/scripts/transcribe.py``
 (Apache 2.0, Copyright (c) 2026 the YuE2 authors); see NOTICE.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -81,8 +82,9 @@ def sha256(path: Path) -> str:
 
 
 def write_json(path: Path, value) -> None:
-    Path(path).write_text(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
-                          encoding="utf-8")
+    Path(path).write_text(
+        json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8"
+    )
 
 
 def fresh_directory(path: Path) -> Path:
@@ -93,6 +95,7 @@ def fresh_directory(path: Path) -> Path:
 
 def progress_callback():
     """A callback safe for any signature the model uses; prints one stdout line."""
+
     def report(*args, **kwargs):
         numbers, stage = [], None
         for value in list(args) + list(kwargs.values()):
@@ -110,6 +113,7 @@ def progress_callback():
         if stage:
             event["stage"] = stage
         print(PROGRESS_PREFIX + json.dumps(event, ensure_ascii=False), flush=True)
+
     return report
 
 
@@ -118,11 +122,15 @@ def check_melody_only_interface(model) -> None:
     try:
         parameter = inspect.signature(model.transcribe).parameters.get("melody_only")
     except (TypeError, ValueError) as exc:
-        raise DriverError("Cannot verify SheetSage2's melody_only interface; refresh the model "
-                          "code to a reviewed revision exposing melody_only explicitly") from exc
+        raise DriverError(
+            "Cannot verify SheetSage2's melody_only interface; refresh the model "
+            "code to a reviewed revision exposing melody_only explicitly"
+        ) from exc
     if parameter is None or parameter.kind == inspect.Parameter.POSITIONAL_ONLY:
-        raise DriverError("This SheetSage2 revision does not expose melody_only; refresh the model "
-                          "and remote code to a reviewed revision supporting melody_only=True")
+        raise DriverError(
+            "This SheetSage2 revision does not expose melody_only; refresh the model "
+            "and remote code to a reviewed revision supporting melody_only=True"
+        )
 
 
 def verify_melody_only_abc(abc: str) -> None:
@@ -141,7 +149,9 @@ def snapshot_hashes(snapshot: Path) -> dict:
     files = {}
     if snapshot.is_dir():
         for path in sorted(snapshot.iterdir()):
-            if path.is_file() and (path.suffix in {".py", ".safetensors"} or path.name == "config.json"):
+            if path.is_file() and (
+                path.suffix in {".py", ".safetensors"} or path.name == "config.json"
+            ):
                 files[path.name] = sha256(path)
     return files
 
@@ -185,11 +195,16 @@ def load_model(args):
 def provenance(args, model, device: str, dtype: str) -> dict:
     snapshot = Path(getattr(model, "_source_snapshot", args.model))
     return {
-        "model": args.model, "requested_revision": args.revision, "device": device,
-        "dtype": dtype, "config": model.config.to_dict(),
+        "model": args.model,
+        "requested_revision": args.revision,
+        "device": device,
+        "dtype": dtype,
+        "config": model.config.to_dict(),
         "snapshot_sha256": snapshot_hashes(snapshot),
-        "packages": {name: importlib.metadata.version(name)
-                     for name in ("torch", "transformers", "huggingface-hub")},
+        "packages": {
+            name: importlib.metadata.version(name)
+            for name in ("torch", "transformers", "huggingface-hub")
+        },
     }
 
 
@@ -207,17 +222,36 @@ def prepare_request(args, request: dict):
         raise DriverError("--max-seconds must be positive and explicitly crops the input")
     prompts, melody_only = task_settings(task)
     output = fresh_directory(Path(request["output_dir"]).expanduser())
-    write_json(output / "input.json", {
-        "source_name": audio.name, "source_audio_sha256": sha256(audio),
-        "model": args.model, "revision": args.revision, "offline": args.offline,
-        "base_model_path": args.base_model, "prompts": prompts, "task": task,
-        "melody_only": melody_only, "preset": args.preset, "max_seconds": max_seconds,
-        "device": args.device, "dtype": args.dtype,
-    })
+    write_json(
+        output / "input.json",
+        {
+            "source_name": audio.name,
+            "source_audio_sha256": sha256(audio),
+            "model": args.model,
+            "revision": args.revision,
+            "offline": args.offline,
+            "base_model_path": args.base_model,
+            "prompts": prompts,
+            "task": task,
+            "melody_only": melody_only,
+            "preset": args.preset,
+            "max_seconds": max_seconds,
+            "device": args.device,
+            "dtype": args.dtype,
+        },
+    )
     record = {
-        "status": "failed", "task": task, "melody_only": melody_only, "prompts": prompts,
-        "abc": None, "abc_error": None, "warnings": [], "num_events": None,
-        "output_dir": str(output), "source_audio": str(audio), "score_path": None,
+        "status": "failed",
+        "task": task,
+        "melody_only": melody_only,
+        "prompts": prompts,
+        "abc": None,
+        "abc_error": None,
+        "warnings": [],
+        "num_events": None,
+        "output_dir": str(output),
+        "source_audio": str(audio),
+        "score_path": None,
     }
     return audio, output, task, max_seconds, prompts, melody_only, record
 
@@ -225,15 +259,23 @@ def prepare_request(args, request: dict):
 def write_failure(output: Path, record: dict, exc: Exception) -> None:
     output = Path(output)
     if not (output / "failure.json").exists():
-        write_json(output / "failure.json", {
-            "status": "failed", "type": type(exc).__name__, "error": str(exc),
-            "abc_error": record.get("abc_error"), "warnings": record.get("warnings", [])})
+        write_json(
+            output / "failure.json",
+            {
+                "status": "failed",
+                "type": type(exc).__name__,
+                "error": str(exc),
+                "abc_error": record.get("abc_error"),
+                "warnings": record.get("warnings", []),
+            },
+        )
     if not (output / "result.json").exists():
         write_json(output / "result.json", record)
 
 
-def run_transcription(model, args, device: str, dtype: str, model_provenance: dict,
-                      request: dict) -> dict:
+def run_transcription(
+    model, args, device: str, dtype: str, model_provenance: dict, request: dict
+) -> dict:
     """Transcribe one request with an already loaded model into a fresh directory."""
     audio, output, _task, max_seconds, prompts, melody_only, record = prepare_request(args, request)
     write_json(output / "model_provenance.json", model_provenance)
@@ -243,22 +285,39 @@ def run_transcription(model, args, device: str, dtype: str, model_provenance: di
             check_melody_only_interface(model)
         options = {"melody_only": True} if melody_only else {}
         result = model.transcribe(
-            str(audio), output_dir=str(output), prompts=prompts,
-            dtype=dtype, preset=args.preset, max_seconds=max_seconds,
-            progress=progress_callback(), **options,
+            str(audio),
+            output_dir=str(output),
+            prompts=prompts,
+            dtype=dtype,
+            preset=args.preset,
+            max_seconds=max_seconds,
+            progress=progress_callback(),
+            **options,
         )
         if not isinstance(result, dict):
             raise DriverError(f"SheetSage2 returned {type(result).__name__}, expected a dict")
         abc = result.get("abc")
         abc_error = result.get("abc_error")
         warnings = list(result.get("warnings") or [])
-        record.update({"abc": abc, "abc_error": abc_error, "warnings": warnings,
-                       "num_events": result.get("num_events")})
+        record.update(
+            {
+                "abc": abc,
+                "abc_error": abc_error,
+                "warnings": warnings,
+                "num_events": result.get("num_events"),
+            }
+        )
         if abc_error or not abc:
-            write_json(output / "failure.json", {
-                "status": "failed", "type": "DriverError",
-                "error": f"Transcription produced no usable ABC: {abc_error}",
-                "abc_error": abc_error, "warnings": warnings})
+            write_json(
+                output / "failure.json",
+                {
+                    "status": "failed",
+                    "type": "DriverError",
+                    "error": f"Transcription produced no usable ABC: {abc_error}",
+                    "abc_error": abc_error,
+                    "warnings": warnings,
+                },
+            )
             write_json(output / "result.json", record)
             raise DriverError(f"Transcription produced no usable ABC: {abc_error}")
         if melody_only:
@@ -278,11 +337,16 @@ def run_transcription(model, args, device: str, dtype: str, model_provenance: di
 
 def run(args) -> dict:
     """One-shot mode: load, transcribe, exit (the safe default)."""
-    request = {"audio": str(args.audio), "output_dir": str(args.output), "task": args.task,
-               "max_seconds": args.max_seconds}
+    request = {
+        "audio": str(args.audio),
+        "output_dir": str(args.output),
+        "task": args.task,
+        "max_seconds": args.max_seconds,
+    }
     model, device, dtype = load_model(args)
-    return run_transcription(model, args, device, dtype, provenance(args, model, device, dtype),
-                             request)
+    return run_transcription(
+        model, args, device, dtype, provenance(args, model, device, dtype), request
+    )
 
 
 def serve(args) -> int:
@@ -305,8 +369,11 @@ def serve(args) -> int:
     """
     model, device, dtype = load_model(args)
     model_provenance = provenance(args, model, device, dtype)
-    print(READY_PREFIX + json.dumps(
-        {"model": args.model, "device": device, "dtype": dtype}, ensure_ascii=False), flush=True)
+    print(
+        READY_PREFIX
+        + json.dumps({"model": args.model, "device": device, "dtype": dtype}, ensure_ascii=False),
+        flush=True,
+    )
     for raw in sys.stdin:
         line = raw.strip()
         if not line:
@@ -314,8 +381,10 @@ def serve(args) -> int:
         try:
             request = json.loads(line)
         except ValueError as exc:
-            print(RESULT_PREFIX + json.dumps({"ok": False, "error": f"bad request JSON: {exc}"}),
-                  flush=True)
+            print(
+                RESULT_PREFIX + json.dumps({"ok": False, "error": f"bad request JSON: {exc}"}),
+                flush=True,
+            )
             continue
         op = request.get("op")
         if op == "stop":
@@ -324,19 +393,41 @@ def serve(args) -> int:
             print(RESULT_PREFIX + json.dumps({"ok": True, "pong": True}), flush=True)
             continue
         if op != "transcribe":
-            print(RESULT_PREFIX + json.dumps({"ok": False, "error": f"unknown op {op!r}"}),
-                  flush=True)
+            print(
+                RESULT_PREFIX + json.dumps({"ok": False, "error": f"unknown op {op!r}"}), flush=True
+            )
             continue
         try:
             record = run_transcription(model, args, device, dtype, model_provenance, request)
-            print(RESULT_PREFIX + json.dumps({
-                "ok": True, "output_dir": record["output_dir"], "abc": record["abc"],
-                "task": record["task"], "melody_only": record["melody_only"],
-                "warnings": record["warnings"]}, ensure_ascii=False), flush=True)
+            print(
+                RESULT_PREFIX
+                + json.dumps(
+                    {
+                        "ok": True,
+                        "output_dir": record["output_dir"],
+                        "abc": record["abc"],
+                        "task": record["task"],
+                        "melody_only": record["melody_only"],
+                        "warnings": record["warnings"],
+                    },
+                    ensure_ascii=False,
+                ),
+                flush=True,
+            )
         except Exception as exc:  # noqa: BLE001 - keep the worker alive for the next request
-            print(RESULT_PREFIX + json.dumps({
-                "ok": False, "type": type(exc).__name__, "error": str(exc),
-                "output_dir": request.get("output_dir")}, ensure_ascii=False), flush=True)
+            print(
+                RESULT_PREFIX
+                + json.dumps(
+                    {
+                        "ok": False,
+                        "type": type(exc).__name__,
+                        "error": str(exc),
+                        "output_dir": request.get("output_dir"),
+                    },
+                    ensure_ascii=False,
+                ),
+                flush=True,
+            )
     return 0
 
 
@@ -344,17 +435,24 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("audio", nargs="?", type=Path)
     parser.add_argument("--output", type=Path, help="Fresh output directory")
-    parser.add_argument("--serve", action="store_true",
-                        help="Stay resident: load once, then serve JSON requests on stdin")
+    parser.add_argument(
+        "--serve",
+        action="store_true",
+        help="Stay resident: load once, then serve JSON requests on stdin",
+    )
     parser.add_argument("--task", choices=TASKS, default="melody-full")
     parser.add_argument("--model", default="m-a-p/SheetSage2")
     parser.add_argument("--revision", help="Pin model and remote code to the same commit")
-    parser.add_argument("--base-model", help="Verified MERT-v2-FullSong snapshot for an offline adapter load")
+    parser.add_argument(
+        "--base-model", help="Verified MERT-v2-FullSong snapshot for an offline adapter load"
+    )
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--device", default="auto", choices=("auto", "cuda", "mps", "cpu"))
     parser.add_argument("--dtype", default="auto", choices=("auto", "bf16", "fp32"))
     parser.add_argument("--preset", choices=("default", "paper"), default="default")
-    parser.add_argument("--max-seconds", type=float, help="Explicitly crop the input; omitted processes it whole")
+    parser.add_argument(
+        "--max-seconds", type=float, help="Explicitly crop the input; omitted processes it whole"
+    )
     parser.add_argument("--threads", type=int, default=4)
     args = parser.parse_args()
     try:

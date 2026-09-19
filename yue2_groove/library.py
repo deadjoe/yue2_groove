@@ -11,6 +11,7 @@ Everything here is plain Python returning strings/structures.  The Gradio
 wiring lives in ``webui.py``; the pane's stylesheet and the player / score
 script are ``static/library.css`` and ``static/library.js``.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -116,7 +117,7 @@ def _request_of(path: Path):
 def _kind(result: dict, has_audio: bool, has_score: bool) -> str:
     if result and (result.get("weights") or has_audio):
         return "song"
-    if result and result.get("task"):          # SheetSage2 transcription result.json
+    if result and result.get("task"):  # SheetSage2 transcription result.json
         return "transcription"
     if result:
         return "song"
@@ -135,7 +136,7 @@ def _item(root: Path, path: Path) -> dict:
     has_score = (path / "score.abc").is_file()
     kind = _kind(result, has_audio, has_score)
     if pending and not result:
-        kind = "incomplete"   # audio without result.json is a run, not a decode
+        kind = "incomplete"  # audio without result.json is a run, not a decode
     truncated = result.get("truncated")
     if isinstance(truncated, dict):
         truncated = any(bool(v) for v in truncated.values())
@@ -230,8 +231,12 @@ def summarize(items) -> str:
     total = sum(int(i.get("size") or 0) for i in items)
     incomplete = sum(1 for i in items if i.get("pending"))
     bits = [f"{len(items)} item(s)"]
-    for count, word in ((songs, "song"), (plans, "plan"), (decodes, "decode"),
-                        (transcriptions, "transcription")):
+    for count, word in (
+        (songs, "song"),
+        (plans, "plan"),
+        (decodes, "decode"),
+        (transcriptions, "transcription"),
+    ):
         if count:
             bits.append(f"{count} {word}(s)")
     if incomplete:
@@ -266,9 +271,16 @@ def details(path) -> dict:
                     files.append({"name": entry.name, "bytes": entry.stat().st_size})
     except OSError:
         pass
-    return {"path": str(path), "request": request, "result": result, "config": config,
-            "local_env": local_env,
-            "abc": abc, "audio": str(audio) if audio.is_file() else None, "files": files}
+    return {
+        "path": str(path),
+        "request": request,
+        "result": result,
+        "config": config,
+        "local_env": local_env,
+        "abc": abc,
+        "audio": str(audio) if audio.is_file() else None,
+        "files": files,
+    }
 
 
 def player_html(audio_path: str) -> str:
@@ -288,12 +300,12 @@ def player_html(audio_path: str) -> str:
         '<button type="button" class="bb-pend" data-bb-end'
         ' aria-label="Jump to the end" title="Jump to the end"></button>'
         '<span class="bb-ptime" data-bb-time>0:00 / 0:00</span>'
-        '</div>'
+        "</div>"
         '<div class="bb-pseek" data-bb-seek>'
         '<canvas class="bb-pviz" data-bb-viz aria-hidden="true"></canvas>'
         '<div class="bb-pfill"></div>'
-        '</div>'
-        '</div>'
+        "</div>"
+        "</div>"
     )
 
 
@@ -301,12 +313,13 @@ def _table(title: str, rows) -> str:
     rows = [(name, v) for name, v in rows if v not in (None, "", "—", {})]
     if not rows:
         return ""
-    out = [f'<div class="bb-lib-section">{html.escape(title)}</div>',
-           '<table class="bb-lib-table"><tbody>']
+    out = [
+        f'<div class="bb-lib-section">{html.escape(title)}</div>',
+        '<table class="bb-lib-table"><tbody>',
+    ]
     for name, value in rows:
-        out.append(f'<tr><td>{html.escape(str(name))}</td>'
-                   f'<td>{html.escape(str(value))}</td></tr>')
-    out.append('</tbody></table>')
+        out.append(f"<tr><td>{html.escape(str(name))}</td><td>{html.escape(str(value))}</td></tr>")
+    out.append("</tbody></table>")
     return "".join(out)
 
 
@@ -321,20 +334,33 @@ def render_info_html(item: dict, det: dict) -> str:
     timing = result.get("timing") or {}
     semantic = timing.get("semantic") or {}
 
-    out = ['<div class="bb-lib-card">',
-           f'<div class="bb-lib-title">{html.escape(item["name"])}</div>',
-           '<div class="bb-lib-sub">' + " · ".join(html.escape(str(b)) for b in (
-               item.get("created_label"), format_seconds(item.get("duration")),
-               "INCOMPLETE" if item.get("pending") else item.get("kind", "").upper()) if b)
-           + '</div>',
-           (f'<div class="bb-lib-sub bb-lib-dim">{html.escape(item.get("rel", ""))}'
-            f' · {html.escape(format_bytes(item.get("size")))}</div>')]
+    out = [
+        '<div class="bb-lib-card">',
+        f'<div class="bb-lib-title">{html.escape(item["name"])}</div>',
+        '<div class="bb-lib-sub">'
+        + " · ".join(
+            html.escape(str(b))
+            for b in (
+                item.get("created_label"),
+                format_seconds(item.get("duration")),
+                "INCOMPLETE" if item.get("pending") else item.get("kind", "").upper(),
+            )
+            if b
+        )
+        + "</div>",
+        (
+            f'<div class="bb-lib-sub bb-lib-dim">{html.escape(item.get("rel", ""))}'
+            f" · {html.escape(format_bytes(item.get('size')))}</div>"
+        ),
+    ]
 
     if item.get("pending"):
         detail = item.get("pending_error") or item.get("status") or "unfinished"
-        out.append('<div class="bb-lib-note bb-lib-incomplete">INCOMPLETE — this run did not '
-                   'finish, so it was never saved as a song. The artifacts below are partial.'
-                   f'<span class="bb-lib-dim"> ({html.escape(str(detail))})</span></div>')
+        out.append(
+            '<div class="bb-lib-note bb-lib-incomplete">INCOMPLETE — this run did not '
+            "finish, so it was never saved as a song. The artifacts below are partial."
+            f'<span class="bb-lib-dim"> ({html.escape(str(detail))})</span></div>'
+        )
 
     chips = []
     if request.get("cot"):
@@ -352,14 +378,19 @@ def render_info_html(item: dict, det: dict) -> str:
     if item.get("truncated"):
         chips.append("TRUNCATED")
     if chips:
-        out.append('<div class="bb-lib-chips">' + "".join(
-            f'<span class="bb-chip">{html.escape(c)}</span>' for c in chips) + '</div>')
+        out.append(
+            '<div class="bb-lib-chips">'
+            + "".join(f'<span class="bb-chip">{html.escape(c)}</span>' for c in chips)
+            + "</div>"
+        )
 
     if det.get("audio"):
         out.append(player_html(det["audio"]))
     elif item.get("pending"):
-        out.append('<div class="bb-lib-note">No audio yet — the run was interrupted before '
-                   'the song was written.</div>')
+        out.append(
+            '<div class="bb-lib-note">No audio yet — the run was interrupted before '
+            "the song was written.</div>"
+        )
     else:
         out.append('<div class="bb-lib-note">No audio in this directory — score-only plan.</div>')
 
@@ -368,20 +399,36 @@ def render_info_html(item: dict, det: dict) -> str:
     if det.get("abc"):
         out.append(f'<pre id="bb-lib-abc-src" hidden>{html.escape(det["abc"])}</pre>')
 
-    out.append(_table("request", [
-        ("PLAN MODE", request.get("cot")), ("SEED", request.get("seed")),
-        ("CFG SCALE", request.get("cfg_scale")), ("REQUEST ID", request.get("id")),
-        ("EXTERNAL ABC", "yes" if request.get("abc") else "no"),
-    ]))
-    out.append(_table("sampling", [
-        ("ABC temperature", abc_sampling.get("temperature")),
-        ("ABC top_p", abc_sampling.get("top_p")), ("ABC top_k", abc_sampling.get("top_k")),
-        ("ABC max_tokens", abc_sampling.get("max_tokens")),
-        ("SEMANTIC temperature", sem_sampling.get("temperature")),
-        ("SEMANTIC top_p", sem_sampling.get("top_p")), ("SEMANTIC top_k", sem_sampling.get("top_k")),
-        ("SEMANTIC max_tokens", sem_sampling.get("max_tokens")),
-    ]))
-    ode = " · ".join(str(x) for x in (generation.get("ode_steps"), generation.get("ode_method")) if x)
+    out.append(
+        _table(
+            "request",
+            [
+                ("PLAN MODE", request.get("cot")),
+                ("SEED", request.get("seed")),
+                ("CFG SCALE", request.get("cfg_scale")),
+                ("REQUEST ID", request.get("id")),
+                ("EXTERNAL ABC", "yes" if request.get("abc") else "no"),
+            ],
+        )
+    )
+    out.append(
+        _table(
+            "sampling",
+            [
+                ("ABC temperature", abc_sampling.get("temperature")),
+                ("ABC top_p", abc_sampling.get("top_p")),
+                ("ABC top_k", abc_sampling.get("top_k")),
+                ("ABC max_tokens", abc_sampling.get("max_tokens")),
+                ("SEMANTIC temperature", sem_sampling.get("temperature")),
+                ("SEMANTIC top_p", sem_sampling.get("top_p")),
+                ("SEMANTIC top_k", sem_sampling.get("top_k")),
+                ("SEMANTIC max_tokens", sem_sampling.get("max_tokens")),
+            ],
+        )
+    )
+    ode = " · ".join(
+        str(x) for x in (generation.get("ode_steps"), generation.get("ode_method")) if x
+    )
     # local_env.json (a sidecar written by the web UI) records the device/dtype that
     # actually ran; upstream's config.json hardcodes model_dtype=bfloat16, so the two
     # disagree after an explicit float32 cast -- shown only when they differ.
@@ -389,35 +436,71 @@ def render_info_html(item: dict, det: dict) -> str:
     if local_env:
         bits = []
         if local_env.get("dtype") and local_env["dtype"] != config.get("model_dtype"):
-            bits.append(f"{local_env['dtype']} (cast at load; config.json records "
-                        f"{config.get('model_dtype') or '—'})")
+            bits.append(
+                f"{local_env['dtype']} (cast at load; config.json records "
+                f"{config.get('model_dtype') or '—'})"
+            )
         if local_env.get("device") and local_env["device"] != config.get("device"):
             bits.append(f"device {local_env['device']}")
         actual = " · ".join(bits) or None
-    out.append(_table("runtime", [
-        ("DEVICE", config.get("device")), ("MODEL DTYPE", config.get("model_dtype")),
-        ("WEBUI ACTUAL", actual),
-        ("VAE DTYPE", config.get("vae_dtype")), ("BACKEND", config.get("backend")),
-        ("QUANTIZATION", config.get("quantization")), ("ODE", ode),
-        ("CONTEXT", generation.get("context")), ("VAE CORE FRAMES", config.get("vae_core_frames")),
-        ("VAE DECODE", config.get("vae_decode")), ("OFFLOAD AR", config.get("offload_ar")),
-        ("MEMORY BUDGET (GiB)", config.get("memory_budget_gib")),
-    ]))
-    out.append(_table("timing", [
-        ("AUDIO LENGTH", format_seconds(result.get("audio_seconds"))),
-        ("SAMPLE RATE", f"{int(result['sample_rate']):,} Hz" if result.get("sample_rate") else None),
-        ("SEMANTIC TOKENS", f"{int(semantic['output_tokens']):,}" if semantic.get("output_tokens") else None),
-        ("SEMANTIC tok/s", f"{float(semantic['output_tps']):.2f}" if semantic.get("output_tps") else None),
-        ("ABC SECONDS", (timing.get("abc") or {}).get("seconds")),
-        ("NAR SECONDS", timing.get("nar_seconds")), ("VAE SECONDS", timing.get("vae_seconds")),
-        ("TOTAL SECONDS", timing.get("e2e_seconds")), ("STATUS", result.get("status")),
-    ]))
+    out.append(
+        _table(
+            "runtime",
+            [
+                ("DEVICE", config.get("device")),
+                ("MODEL DTYPE", config.get("model_dtype")),
+                ("WEBUI ACTUAL", actual),
+                ("VAE DTYPE", config.get("vae_dtype")),
+                ("BACKEND", config.get("backend")),
+                ("QUANTIZATION", config.get("quantization")),
+                ("ODE", ode),
+                ("CONTEXT", generation.get("context")),
+                ("VAE CORE FRAMES", config.get("vae_core_frames")),
+                ("VAE DECODE", config.get("vae_decode")),
+                ("OFFLOAD AR", config.get("offload_ar")),
+                ("MEMORY BUDGET (GiB)", config.get("memory_budget_gib")),
+            ],
+        )
+    )
+    out.append(
+        _table(
+            "timing",
+            [
+                ("AUDIO LENGTH", format_seconds(result.get("audio_seconds"))),
+                (
+                    "SAMPLE RATE",
+                    f"{int(result['sample_rate']):,} Hz" if result.get("sample_rate") else None,
+                ),
+                (
+                    "SEMANTIC TOKENS",
+                    f"{int(semantic['output_tokens']):,}"
+                    if semantic.get("output_tokens")
+                    else None,
+                ),
+                (
+                    "SEMANTIC tok/s",
+                    f"{float(semantic['output_tps']):.2f}" if semantic.get("output_tps") else None,
+                ),
+                ("ABC SECONDS", (timing.get("abc") or {}).get("seconds")),
+                ("NAR SECONDS", timing.get("nar_seconds")),
+                ("VAE SECONDS", timing.get("vae_seconds")),
+                ("TOTAL SECONDS", timing.get("e2e_seconds")),
+                ("STATUS", result.get("status")),
+            ],
+        )
+    )
     provenance = []
     for key, name in (("mot", "MODEL"), ("vae", "VAE")):
-        for filename, meta in (((result.get("weights") or {}).get(key) or {}).get("files") or {}).items():
+        for filename, meta in (
+            ((result.get("weights") or {}).get(key) or {}).get("files") or {}
+        ).items():
             info = meta or {}
-            provenance.append((f"{name} WEIGHT",
-                               f"{filename} · {format_bytes(info.get('bytes'))} · {str(info.get('sha256', ''))[:12]}"))
+            provenance.append(
+                (
+                    f"{name} WEIGHT",
+                    f"{filename} · {format_bytes(info.get('bytes'))} · {str(info.get('sha256', ''))[:12]}",
+                )
+            )
     if config.get("runtime_sha256"):
         provenance.append(("RUNTIME SHA", str(config["runtime_sha256"])[:12]))
     if config.get("validation_status"):
@@ -426,13 +509,17 @@ def render_info_html(item: dict, det: dict) -> str:
 
     files = det.get("files") or []
     if files:
-        out.append('<div class="bb-lib-section">files</div>'
-                   '<table class="bb-lib-table bb-lib-filetable"><tbody>')
-        out.extend(f'<tr><td>{html.escape(entry["name"])}</td>'
-                   f'<td>{html.escape(format_bytes(entry["bytes"]))}</td></tr>'
-                   for entry in files)
-        out.append('</tbody></table>')
-    out.append('</div>')
+        out.append(
+            '<div class="bb-lib-section">files</div>'
+            '<table class="bb-lib-table bb-lib-filetable"><tbody>'
+        )
+        out.extend(
+            f"<tr><td>{html.escape(entry['name'])}</td>"
+            f"<td>{html.escape(format_bytes(entry['bytes']))}</td></tr>"
+            for entry in files
+        )
+        out.append("</tbody></table>")
+    out.append("</div>")
     return "".join(out)
 
 
@@ -442,9 +529,11 @@ def render_empty_html(message: str = "No work selected.") -> str:
 
 def render_multi_html(rels) -> str:
     rows = "".join(f"<li>{html.escape(str(r))}</li>" for r in rels)
-    return (f'<div class="bb-lib-card"><div class="bb-lib-section">{len(rels)} works selected</div>'
-            f'<ul class="bb-lib-list-plain">{rows}</ul>'
-            '<div class="bb-lib-note">Select a single work to see its details.</div></div>')
+    return (
+        f'<div class="bb-lib-card"><div class="bb-lib-section">{len(rels)} works selected</div>'
+        f'<ul class="bb-lib-list-plain">{rows}</ul>'
+        '<div class="bb-lib-note">Select a single work to see its details.</div></div>'
+    )
 
 
 def render_confirm_html(items) -> str:
@@ -452,10 +541,13 @@ def render_confirm_html(items) -> str:
         return ""
     rows = "".join(
         f'<li>{html.escape(i["name"])}<span class="bb-lib-dim"> · {html.escape(i["rel"])}</span></li>'
-        for i in items)
-    return ('<div class="bb-lib-confirm">'
-            f'<div class="bb-lib-section">delete {len(items)} item(s) — this cannot be undone</div>'
-            f'<ul class="bb-lib-list-plain">{rows}</ul></div>')
+        for i in items
+    )
+    return (
+        '<div class="bb-lib-confirm">'
+        f'<div class="bb-lib-section">delete {len(items)} item(s) — this cannot be undone</div>'
+        f'<ul class="bb-lib-list-plain">{rows}</ul></div>'
+    )
 
 
 # ─────────────────────────────────────────────────────────── mutations ──

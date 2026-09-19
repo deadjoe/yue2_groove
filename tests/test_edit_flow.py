@@ -1,4 +1,5 @@
 """``yue2_groove.edit_flow``: baselines, invariant checks, edit manifests."""
+
 from __future__ import annotations
 
 import json
@@ -35,9 +36,18 @@ def make_work(root: Path, name: str = "20260901-120000-source") -> Path:
     directory = root / name
     directory.mkdir(parents=True)
     (directory / "score.abc").write_text(BASE_ABC, encoding="utf-8")
-    (directory / "request.json").write_text(json.dumps({
-        "id": "source", "style": "English piano pop", "lyrics": "[Verse]\nla",
-        "cot": "full", "seed": 5}), encoding="utf-8")
+    (directory / "request.json").write_text(
+        json.dumps(
+            {
+                "id": "source",
+                "style": "English piano pop",
+                "lyrics": "[Verse]\nla",
+                "cot": "full",
+                "seed": 5,
+            }
+        ),
+        encoding="utf-8",
+    )
     (directory / "audio.flac").write_bytes(b"fLaC" + b"\x00" * 16)
     (directory / "result.json").write_text(json.dumps({"status": "complete"}), encoding="utf-8")
     return directory
@@ -51,6 +61,7 @@ class FakeRequest:
 
 
 # ── baseline ─────────────────────────────────────────────────────────────
+
 
 def test_freeze_baseline_copies_small_artifacts_and_hashes(tmp_path: Path) -> None:
     source = make_work(tmp_path)
@@ -85,6 +96,7 @@ def test_freeze_baseline_is_unique_and_guards_the_root(tmp_path: Path) -> None:
 
 
 # ── invariants ───────────────────────────────────────────────────────────
+
 
 def test_check_invariants_matches_identical_scores() -> None:
     result = edit_flow.check_invariants(BASE_ABC, BASE_ABC)
@@ -129,6 +141,7 @@ def test_check_invariants_requires_both_scores() -> None:
 
 # ── request / manifest ───────────────────────────────────────────────────
 
+
 def test_validate_edited_abc_refuses_to_lose_edits() -> None:
     assert edit_flow.validate_edited_abc("  " + BASE_ABC) == BASE_ABC.strip()
     with pytest.raises(ValueError, match="empty"):
@@ -138,12 +151,21 @@ def test_validate_edited_abc_refuses_to_lose_edits() -> None:
 
 
 def test_build_edit_request_always_carries_the_abc() -> None:
-    request = edit_flow.build_edit_request("jazz", "la", BASE_ABC, cot="full", seed=9,
-                                           cfg_scale=1.1, id=" edit ", request_factory=FakeRequest)
+    request = edit_flow.build_edit_request(
+        "jazz",
+        "la",
+        BASE_ABC,
+        cot="full",
+        seed=9,
+        cfg_scale=1.1,
+        id=" edit ",
+        request_factory=FakeRequest,
+    )
     assert request.cot == "full" and request.abc.startswith("X:1")
     assert request.seed == 9 and request.cfg_scale == 1.1 and request.id == "edit"
-    melody = edit_flow.build_edit_request("pop", "la", BASE_ABC, cot="melody",
-                                          request_factory=FakeRequest)
+    melody = edit_flow.build_edit_request(
+        "pop", "la", BASE_ABC, cot="melody", request_factory=FakeRequest
+    )
     assert melody.cot == "melody" and melody.abc
     with pytest.raises(ValueError, match="cot=full"):
         edit_flow.build_edit_request("pop", "la", BASE_ABC, cot="off", request_factory=FakeRequest)
@@ -154,26 +176,50 @@ def test_build_edit_request_always_carries_the_abc() -> None:
 def test_build_edit_manifest_records_hashes_and_permissions() -> None:
     invariants = edit_flow.check_invariants(BASE_ABC, CHORD_EDIT)
     manifest = edit_flow.build_edit_manifest(
-        source_rel="20260901-120000-source", before_abc=BASE_ABC, after_abc=CHORD_EDIT,
-        cot="full", seed=5, cfg_scale=None, invariants=invariants, voices="Vocal",
-        allow_tempo_change=True, allow_changes=False, now=0)
+        source_rel="20260901-120000-source",
+        before_abc=BASE_ABC,
+        after_abc=CHORD_EDIT,
+        cot="full",
+        seed=5,
+        cfg_scale=None,
+        invariants=invariants,
+        voices="Vocal",
+        allow_tempo_change=True,
+        allow_changes=False,
+        now=0,
+    )
     assert manifest["schema"] == "yue2-groove-edit-v1"
     assert manifest["source"]["frozen"] is False and manifest["source"]["baseline"] is None
     assert manifest["abc"]["before_sha256"] != manifest["abc"]["after_sha256"]
     assert manifest["request"] == {"cot": "full", "seed": 5, "cfg_scale": None}
-    assert manifest["permitted"] == {"compared_voices": ["Vocal"], "contract": "exact",
-                                     "tempo_change": True, "meter_change": False,
-                                     "changes_override": False}
+    assert manifest["permitted"] == {
+        "compared_voices": ["Vocal"],
+        "contract": "exact",
+        "tempo_change": True,
+        "meter_change": False,
+        "changes_override": False,
+    }
     assert manifest["invariants"]["match"] is True
     from datetime import datetime
+
     assert manifest["created"] == datetime.fromtimestamp(0).astimezone().isoformat(
-        timespec="seconds")
+        timespec="seconds"
+    )
 
     frozen = edit_flow.build_edit_manifest(
-        source_rel="20260901-120000-source", before_abc=BASE_ABC, after_abc=CHORD_EDIT,
-        cot="full", seed=5, cfg_scale=None, invariants=invariants, voices="both",
-        allow_tempo_change=False, allow_changes=False,
-        baseline={"schema": "yue2-groove-baseline-v1", "baseline": {"path": "/tmp/b"}}, now=0)
+        source_rel="20260901-120000-source",
+        before_abc=BASE_ABC,
+        after_abc=CHORD_EDIT,
+        cot="full",
+        seed=5,
+        cfg_scale=None,
+        invariants=invariants,
+        voices="both",
+        allow_tempo_change=False,
+        allow_changes=False,
+        baseline={"schema": "yue2-groove-baseline-v1", "baseline": {"path": "/tmp/b"}},
+        now=0,
+    )
     assert frozen["source"]["frozen"] is True
     assert frozen["source"]["baseline"]["baseline"]["path"] == "/tmp/b"
 
@@ -199,7 +245,7 @@ def test_pitch_contract_still_gates_pitch_changes() -> None:
 def test_free_contract_reports_without_gating() -> None:
     result = edit_flow.check_invariants(BASE_ABC, PITCH_EDIT, contract="free")
     assert result["match"] is True and result["contract"] == "free"
-    assert result["differences"]                       # reported, not gated
+    assert result["differences"]  # reported, not gated
     same = edit_flow.check_invariants(BASE_ABC, BASE_ABC, contract="free")
     assert same["match"] is True and same["differences"] == []
     with pytest.raises(ValueError, match="contract must be one of"):
@@ -208,11 +254,12 @@ def test_free_contract_reports_without_gating() -> None:
 
 def test_exact_contract_can_allow_a_meter_change() -> None:
     """Same sounding notes re-barred into 2/4: a violation by default, allowed on request."""
-    in_two_four = (BASE_ABC
-                   .replace("M:4/4", "M:2/4")
-                   .replace("E2G2A2G2E2D2C4|", "E2G2A2G2|E2D2C4|")
-                   .replace("D2E2G2E2D2C2D4|", "D2E2G2E2|D2C2D4|")
-                   .replace("Z2|", "Z4|"))
+    in_two_four = (
+        BASE_ABC.replace("M:4/4", "M:2/4")
+        .replace("E2G2A2G2E2D2C4|", "E2G2A2G2|E2D2C4|")
+        .replace("D2E2G2E2D2C2D4|", "D2E2G2E2|D2C2D4|")
+        .replace("Z2|", "Z4|")
+    )
     strict = edit_flow.check_invariants(BASE_ABC, in_two_four)
     assert strict["match"] is False
     assert any("meter/time grid differs" in d for d in strict["differences"])

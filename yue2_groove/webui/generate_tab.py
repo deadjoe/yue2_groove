@@ -1,4 +1,5 @@
 """01 GENERATE, 06 DECODE and 07 BATCH handlers (plus ALL MODES and PLAN ONLY)."""
+
 from __future__ import annotations
 
 import json
@@ -42,39 +43,102 @@ def fill_from_batch(label):
         raise gr.Error("Pick a batch run first")
     for choice, path in scan_batches():
         if choice == label:
-            songs = [str(p) for p in sorted(Path(path).iterdir())
-                     if p.is_dir() and (p / "result.json").is_file()]
+            songs = [
+                str(p)
+                for p in sorted(Path(path).iterdir())
+                if p.is_dir() and (p / "result.json").is_file()
+            ]
             return "\n".join(songs)
     raise gr.Error("That batch directory is gone; press REFRESH LIST")
 
 
 def reset_sampling_values():
     a, s = runtime.ABC_DEFAULTS, runtime.SEM_DEFAULTS
-    return (a["temperature"], a["top_p"], a["top_k"], a["repetition_penalty"],
-            a["penalty_window"], a["min_tokens"], a["max_tokens"],
-            s["temperature"], s["top_p"], s["top_k"], s["repetition_penalty"],
-            s["penalty_window"], s["min_tokens"], s["max_tokens"],
-            "Protocol defaults (full)")
+    return (
+        a["temperature"],
+        a["top_p"],
+        a["top_k"],
+        a["repetition_penalty"],
+        a["penalty_window"],
+        a["min_tokens"],
+        a["max_tokens"],
+        s["temperature"],
+        s["top_p"],
+        s["top_k"],
+        s["repetition_penalty"],
+        s["penalty_window"],
+        s["min_tokens"],
+        s["max_tokens"],
+        "Protocol defaults (full)",
+    )
 
 
 def duration_text(tokens):
     seconds = max(0, int(tokens)) / 25.0
     minutes = seconds / 60.0
-    return (f"**Estimated audio length:** ≈ {seconds:.0f} s "
-            f"({minutes:.1f} min) at {int(tokens)} semantic tokens")
+    return (
+        f"**Estimated audio length:** ≈ {seconds:.0f} s "
+        f"({minutes:.1f} min) at {int(tokens)} semantic tokens"
+    )
 
 
-def generate(style, lyrics, cot, seed, cfg_scale, abc_text, out_id, preset,
-             abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
-             sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max,
-             device, dtype, backend, quantization, offload_ar, budget, ode_steps,
-             vae_core_frames, model, vae_choice, vae_custom, revision, vae_revision, offline,
-             progress=gr.Progress()):
+def generate(
+    style,
+    lyrics,
+    cot,
+    seed,
+    cfg_scale,
+    abc_text,
+    out_id,
+    preset,
+    abc_temp,
+    abc_p,
+    abc_k,
+    abc_rep,
+    abc_win,
+    abc_min,
+    abc_max,
+    sem_temp,
+    sem_p,
+    sem_k,
+    sem_rep,
+    sem_win,
+    sem_min,
+    sem_max,
+    device,
+    dtype,
+    backend,
+    quantization,
+    offload_ar,
+    budget,
+    ode_steps,
+    vae_core_frames,
+    model,
+    vae_choice,
+    vae_custom,
+    revision,
+    vae_revision,
+    offline,
+    progress=gr.Progress(),
+):
     """Generator: disables the action buttons until the run finishes."""
-    style, lyrics = runtime.request_texts(style, lyrics)   # empty input is an error
+    style, lyrics = runtime.request_texts(style, lyrics)  # empty input is an error
     abc_sampling, sem_sampling = runtime.sampling_pair(
-        abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
-        sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max)
+        abc_temp,
+        abc_p,
+        abc_k,
+        abc_rep,
+        abc_win,
+        abc_min,
+        abc_max,
+        sem_temp,
+        sem_p,
+        sem_k,
+        sem_rep,
+        sem_win,
+        sem_min,
+        sem_max,
+    )
     kwargs = {}
     if (out_id or "").strip():
         kwargs["id"] = out_id.strip()
@@ -87,18 +151,40 @@ def generate(style, lyrics, cot, seed, cfg_scale, abc_text, out_id, preset,
         # expects clean ABC lines ("X:1", "V: Vocal", ...). Strip the common indent.
         kwargs["abc"] = textwrap.dedent(abc_text).strip()
     try:
-        request = adapter.song_request(style=style, lyrics=lyrics, cot=cot, seed=int(seed), **kwargs)
+        request = adapter.song_request(
+            style=style, lyrics=lyrics, cot=cot, seed=int(seed), **kwargs
+        )
     except (ValueError, TypeError) as exc:
         raise gr.Error(f"Invalid request: {exc}") from exc
 
     settings = runtime.RuntimeSettings(
-        device, dtype, backend, quantization, offload_ar, budget, ode_steps,
-        vae_core_frames, model, vae_choice, vae_custom, revision, vae_revision, offline)
+        device,
+        dtype,
+        backend,
+        quantization,
+        offload_ar,
+        budget,
+        ode_steps,
+        vae_core_frames,
+        model,
+        vae_choice,
+        vae_custom,
+        revision,
+        vae_revision,
+        offline,
+    )
     if not runtime.try_start_job():
         # A fast double-click can queue a second run before the button disables.
         # Keep the buttons as they are (the running job owns them).
-        yield gr.update(), gr.update(), runtime.BUSY_MESSAGE,\
-            gr.update(), gr.update(), gr.update(), gr.skip()
+        yield (
+            gr.update(),
+            gr.update(),
+            runtime.BUSY_MESSAGE,
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.skip(),
+        )
         return
     busy = (gr.update(interactive=False), gr.update(interactive=False))
     idle = (gr.update(interactive=True), gr.update(interactive=True))
@@ -108,11 +194,22 @@ def generate(style, lyrics, cot, seed, cfg_scale, abc_text, out_id, preset,
         progress(0.02, desc="Starting generation…")
         outdir = runtime.run_dir(request.id if request.id != "song" else runtime.slug(style))
         song, result, elapsed = runtime.run_generation(
-            pipe, request, outdir, abc_sampling=abc_sampling, semantic_sampling=sem_sampling,
-            progress=progress, note=note)
-        yield str(outdir / "audio.flac"), (song.abc or ""),\
-            runtime.generation_status(song, result, outdir, elapsed, request, note),\
-            runtime.artifact_files(outdir, bool(song.abc)), *idle, str(outdir)
+            pipe,
+            request,
+            outdir,
+            abc_sampling=abc_sampling,
+            semantic_sampling=sem_sampling,
+            progress=progress,
+            note=note,
+        )
+        yield (
+            str(outdir / "audio.flac"),
+            (song.abc or ""),
+            runtime.generation_status(song, result, outdir, elapsed, request, note),
+            runtime.artifact_files(outdir, bool(song.abc)),
+            *idle,
+            str(outdir),
+        )
     except Exception as exc:  # noqa: BLE001 — the UI reports, never crashes
         yield gr.update(), gr.update(), runtime.failure_text(exc), gr.update(), *idle, gr.skip()
     finally:
@@ -122,12 +219,43 @@ def generate(style, lyrics, cot, seed, cfg_scale, abc_text, out_id, preset,
 ALL_MODES = ("full", "melody", "off")
 
 
-def generate_all_modes(style, lyrics, seed, cfg_scale, abc_text, out_id,
-                       abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
-                       sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max,
-                       device, dtype, backend, quantization, offload_ar, budget, ode_steps,
-                       vae_core_frames, model, vae_choice, vae_custom, revision, vae_revision,
-                       offline, progress=gr.Progress()):
+def generate_all_modes(
+    style,
+    lyrics,
+    seed,
+    cfg_scale,
+    abc_text,
+    out_id,
+    abc_temp,
+    abc_p,
+    abc_k,
+    abc_rep,
+    abc_win,
+    abc_min,
+    abc_max,
+    sem_temp,
+    sem_p,
+    sem_k,
+    sem_rep,
+    sem_win,
+    sem_min,
+    sem_max,
+    device,
+    dtype,
+    backend,
+    quantization,
+    offload_ar,
+    budget,
+    ode_steps,
+    vae_core_frames,
+    model,
+    vae_choice,
+    vae_custom,
+    revision,
+    vae_revision,
+    offline,
+    progress=gr.Progress(),
+):
     """Generator: the same text request as full / melody / off, then a comparison.
 
     Mirrors upstream's ``all-modes``: text-only input (``cot=off`` cannot accept an
@@ -137,8 +265,10 @@ def generate_all_modes(style, lyrics, seed, cfg_scale, abc_text, out_id,
     mode.
     """
     if (abc_text or "").strip():
-        raise gr.Error("ALL MODES is text-only: cot=off cannot accept an ABC score. Clear "
-                       "ABC SCORE, or generate the modes one by one with their own ABC.")
+        raise gr.Error(
+            "ALL MODES is text-only: cot=off cannot accept an ABC score. Clear "
+            "ABC SCORE, or generate the modes one by one with their own ABC."
+        )
     style, lyrics = runtime.request_texts(style, lyrics)
     base_id = (out_id or "").strip() or runtime.slug(style)
     try:
@@ -146,21 +276,59 @@ def generate_all_modes(style, lyrics, seed, cfg_scale, abc_text, out_id,
     except (ValueError, TypeError) as exc:
         raise gr.Error(f"Invalid request: {exc}") from exc
     abc_sampling, sem_sampling = runtime.sampling_pair(
-        abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
-        sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max)
+        abc_temp,
+        abc_p,
+        abc_k,
+        abc_rep,
+        abc_win,
+        abc_min,
+        abc_max,
+        sem_temp,
+        sem_p,
+        sem_k,
+        sem_rep,
+        sem_win,
+        sem_min,
+        sem_max,
+    )
 
     settings = runtime.RuntimeSettings(
-        device, dtype, backend, quantization, offload_ar, budget, ode_steps,
-        vae_core_frames, model, vae_choice, vae_custom, revision, vae_revision, offline)
+        device,
+        dtype,
+        backend,
+        quantization,
+        offload_ar,
+        budget,
+        ode_steps,
+        vae_core_frames,
+        model,
+        vae_choice,
+        vae_custom,
+        revision,
+        vae_revision,
+        offline,
+    )
     if not runtime.try_start_job():
-        yield (runtime.BUSY_MESSAGE,
-               gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.skip())
+        yield (
+            runtime.BUSY_MESSAGE,
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.skip(),
+        )
         return
     busy = (gr.update(interactive=False),) * 3
     idle = (gr.update(interactive=True),) * 3
     try:
-        yield ("Starting ALL MODES (full → melody → off)…",
-               gr.update(), gr.update(), *busy, gr.skip())
+        yield (
+            "Starting ALL MODES (full → melody → off)…",
+            gr.update(),
+            gr.update(),
+            *busy,
+            gr.skip(),
+        )
         pipe, note = runtime.get_pipe(settings, progress)
         root = runtime.run_dir("allmodes", runtime.slug(base_id))
         results, files, done_dirs = [], [], []
@@ -169,52 +337,86 @@ def generate_all_modes(style, lyrics, seed, cfg_scale, abc_text, out_id,
             if runtime.CANCEL.is_set():
                 results.append({"mode": mode, "status": "cancelled"})
                 break
-            kwargs = {"style": style, "lyrics": lyrics, "cot": mode, "seed": int(seed),
-                      "id": f"{base_id}_{mode}"}
+            kwargs = {
+                "style": style,
+                "lyrics": lyrics,
+                "cot": mode,
+                "seed": int(seed),
+                "id": f"{base_id}_{mode}",
+            }
             if cfg_scale:
                 kwargs["cfg_scale"] = float(cfg_scale)
             request = adapter.song_request(**kwargs)
 
             def scoped(value, desc=None, position=position, mode=mode):
                 fraction = position + (0.0 if value is None else min(1.0, float(value)))
-                progress(min(1.0, fraction / len(ALL_MODES)),
-                         desc=f"[{mode}] {desc}" if desc else f"[{mode}]")
+                progress(
+                    min(1.0, fraction / len(ALL_MODES)),
+                    desc=f"[{mode}] {desc}" if desc else f"[{mode}]",
+                )
 
             try:
                 mode_dir.mkdir(parents=True, exist_ok=True)
                 (mode_dir / "input.json").write_text(
                     json.dumps(request.to_dict(), ensure_ascii=False, indent=2) + "\n",
-                    encoding="utf-8")
+                    encoding="utf-8",
+                )
                 song, receipt, elapsed = runtime.run_generation(
-                    pipe, request, mode_dir, abc_sampling=abc_sampling,
-                    semantic_sampling=sem_sampling, progress=scoped, note=note)
-                results.append({"mode": mode, "status": "complete",
-                                "audio_seconds": receipt["audio_seconds"],
-                                "truncated": receipt["truncated"],
-                                "seconds": round(elapsed, 2)})
+                    pipe,
+                    request,
+                    mode_dir,
+                    abc_sampling=abc_sampling,
+                    semantic_sampling=sem_sampling,
+                    progress=scoped,
+                    note=note,
+                )
+                results.append(
+                    {
+                        "mode": mode,
+                        "status": "complete",
+                        "audio_seconds": receipt["audio_seconds"],
+                        "truncated": receipt["truncated"],
+                        "seconds": round(elapsed, 2),
+                    }
+                )
                 files += runtime.artifact_files(mode_dir, bool(song.abc))
                 done_dirs.append(str(mode_dir))
             except InterruptedError as exc:
                 record = {"mode": mode, "status": "cancelled", "error": str(exc)}
                 (mode_dir / "failure.json").write_text(
-                    json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                    json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+                )
                 results.append(record)
                 break
             except Exception as exc:  # noqa: BLE001 — keep going; the failure is retained
-                record = {"mode": mode, "status": "failed", "type": type(exc).__name__,
-                          "error": str(exc)}
+                record = {
+                    "mode": mode,
+                    "status": "failed",
+                    "type": type(exc).__name__,
+                    "error": str(exc),
+                }
                 mode_dir.mkdir(parents=True, exist_ok=True)
                 (mode_dir / "failure.json").write_text(
-                    json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                    json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+                )
                 results.append(record)
             progress((position + 1) / len(ALL_MODES), desc=f"{mode} finished")
 
         root.mkdir(parents=True, exist_ok=True)
-        summary = {"action": "all-modes", "request": {"style": style, "lyrics": lyrics,
-                   "seed": int(seed), "cfg_scale": float(cfg_scale) if cfg_scale else None,
-                   "id": base_id}, "results": results}
+        summary = {
+            "action": "all-modes",
+            "request": {
+                "style": style,
+                "lyrics": lyrics,
+                "seed": int(seed),
+                "cfg_scale": float(cfg_scale) if cfg_scale else None,
+                "id": base_id,
+            },
+            "results": results,
+        }
         (root / "run.json").write_text(
-            json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
 
         link, comparison = "", ""
         if len(done_dirs) >= 2:
@@ -227,11 +429,12 @@ def generate_all_modes(style, lyrics, seed, cfg_scale, abc_text, out_id,
         lines = [f"ALL MODES finished: {root}", ""]
         for record in results:
             if record["status"] == "complete":
-                lines.append(f"  {record['mode']:<7} complete  {record['audio_seconds']:.1f}s "
-                             f"audio in {record['seconds']:.0f}s  truncated={record['truncated']}")
+                lines.append(
+                    f"  {record['mode']:<7} complete  {record['audio_seconds']:.1f}s "
+                    f"audio in {record['seconds']:.0f}s  truncated={record['truncated']}"
+                )
             else:
-                lines.append(f"  {record['mode']:<7} {record['status']}  "
-                             f"{record.get('error', '')}")
+                lines.append(f"  {record['mode']:<7} {record['status']}  {record.get('error', '')}")
         lines += ["", note]
         if comparison:
             lines.append(comparison)
@@ -239,36 +442,82 @@ def generate_all_modes(style, lyrics, seed, cfg_scale, abc_text, out_id,
             lines.append("(the comparison needs at least two completed modes)")
         yield "\n".join(lines), files, link, *idle, str(root)
     except Exception as exc:  # noqa: BLE001
-        yield (f"ALL MODES failed: {type(exc).__name__}: {exc}",
-               gr.update(), gr.update(), *idle, gr.skip())
+        yield (
+            f"ALL MODES failed: {type(exc).__name__}: {exc}",
+            gr.update(),
+            gr.update(),
+            *idle,
+            gr.skip(),
+        )
     finally:
         runtime.end_job()
 
 
-def plan_only(style, lyrics, cot, seed, cfg_scale, out_id,
-              abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
-              device, dtype, backend, quantization, offload_ar, budget, ode_steps,
-              vae_core_frames, model, vae_choice, vae_custom, revision, vae_revision, offline,
-              progress=gr.Progress()):
+def plan_only(
+    style,
+    lyrics,
+    cot,
+    seed,
+    cfg_scale,
+    out_id,
+    abc_temp,
+    abc_p,
+    abc_k,
+    abc_rep,
+    abc_win,
+    abc_min,
+    abc_max,
+    device,
+    dtype,
+    backend,
+    quantization,
+    offload_ar,
+    budget,
+    ode_steps,
+    vae_core_frames,
+    model,
+    vae_choice,
+    vae_custom,
+    revision,
+    vae_revision,
+    offline,
+    progress=gr.Progress(),
+):
     """Generator: disables the action buttons until planning finishes."""
-    style, lyrics = runtime.request_texts(style, lyrics)   # empty input is an error
-    abc_sampling = runtime.sampling(abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max, "ABC phase")
+    style, lyrics = runtime.request_texts(style, lyrics)  # empty input is an error
+    abc_sampling = runtime.sampling(
+        abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max, "ABC phase"
+    )
     kwargs = {}
     if (out_id or "").strip():
         kwargs["id"] = out_id.strip()
     if cfg_scale:
         kwargs["cfg_scale"] = float(cfg_scale)
     try:
-        request = adapter.song_request(style=style, lyrics=lyrics, cot=cot, seed=int(seed), **kwargs)
+        request = adapter.song_request(
+            style=style, lyrics=lyrics, cot=cot, seed=int(seed), **kwargs
+        )
     except (ValueError, TypeError) as exc:
         raise gr.Error(f"Invalid request: {exc}") from exc
 
     settings = runtime.RuntimeSettings(
-        device, dtype, backend, quantization, offload_ar, budget, ode_steps,
-        vae_core_frames, model, vae_choice, vae_custom, revision, vae_revision, offline)
+        device,
+        dtype,
+        backend,
+        quantization,
+        offload_ar,
+        budget,
+        ode_steps,
+        vae_core_frames,
+        model,
+        vae_choice,
+        vae_custom,
+        revision,
+        vae_revision,
+        offline,
+    )
     if not runtime.try_start_job():
-        yield gr.update(), runtime.BUSY_MESSAGE,\
-            gr.update(), gr.update(), gr.update(), gr.skip()
+        yield gr.update(), runtime.BUSY_MESSAGE, gr.update(), gr.update(), gr.update(), gr.skip()
         return
     busy = (gr.update(interactive=False), gr.update(interactive=False))
     idle = (gr.update(interactive=True), gr.update(interactive=True))
@@ -276,11 +525,18 @@ def plan_only(style, lyrics, cot, seed, cfg_scale, out_id,
         yield gr.update(), "Planning score…", gr.update(), *busy, gr.skip()
         pipe, note = runtime.get_pipe(settings, progress)
         progress(0.05, desc="Planning score…")
-        plan = adapter.plan(pipe, request, abc_sampling=abc_sampling, cancelled=runtime.CANCEL.is_set)
-        outdir = runtime.run_dir(request.id if request.id != "song" else runtime.slug(style), "plan")
+        plan = adapter.plan(
+            pipe, request, abc_sampling=abc_sampling, cancelled=runtime.CANCEL.is_set
+        )
+        outdir = runtime.run_dir(
+            request.id if request.id != "song" else runtime.slug(style), "plan"
+        )
         plan.save(outdir)
-        files = [str(outdir / n) for n in ("score.abc", "plan.json", "abc_tokens.npy", "prefix.npy")
-                 if (outdir / n).exists()]
+        files = [
+            str(outdir / n)
+            for n in ("score.abc", "plan.json", "abc_tokens.npy", "prefix.npy")
+            if (outdir / n).exists()
+        ]
         yield (plan.abc or ""), f"Plan saved: {outdir}\n{note}", files, *idle, str(outdir)
     except Exception as exc:  # noqa: BLE001 — the UI reports, never crashes
         yield gr.update(), runtime.failure_text(exc, "Planning"), gr.update(), *idle, gr.skip()
@@ -288,10 +544,29 @@ def plan_only(style, lyrics, cot, seed, cfg_scale, out_id,
         runtime.end_job()
 
 
-def decode_run(source_dir, latent_file, dec_vae_choice, dec_vae_custom, dec_vae_revision,
-               full_decode, device, dtype, backend, quantization, offload_ar,
-               budget, ode_steps, vae_core_frames, model, gen_vae_choice, gen_vae_custom,
-               revision, gen_vae_revision, offline, progress=gr.Progress()):
+def decode_run(
+    source_dir,
+    latent_file,
+    dec_vae_choice,
+    dec_vae_custom,
+    dec_vae_revision,
+    full_decode,
+    device,
+    dtype,
+    backend,
+    quantization,
+    offload_ar,
+    budget,
+    ode_steps,
+    vae_core_frames,
+    model,
+    gen_vae_choice,
+    gen_vae_custom,
+    revision,
+    gen_vae_revision,
+    offline,
+    progress=gr.Progress(),
+):
     """Generator: re-decodes saved latents; disables the decode button while running."""
     path = None
     if (latent_file or "").strip():
@@ -305,11 +580,23 @@ def decode_run(source_dir, latent_file, dec_vae_choice, dec_vae_custom, dec_vae_
         raise gr.Error(f"Latent shape must be [T,64], got {latents.shape}")
 
     settings = runtime.RuntimeSettings(
-        device, dtype, backend, quantization, offload_ar, budget, ode_steps,
-        vae_core_frames, model, gen_vae_choice, gen_vae_custom, revision, gen_vae_revision, offline)
+        device,
+        dtype,
+        backend,
+        quantization,
+        offload_ar,
+        budget,
+        ode_steps,
+        vae_core_frames,
+        model,
+        gen_vae_choice,
+        gen_vae_custom,
+        revision,
+        gen_vae_revision,
+        offline,
+    )
     if not runtime.try_start_job():
-        yield gr.update(), runtime.BUSY_MESSAGE,\
-            gr.update(), gr.skip()
+        yield gr.update(), runtime.BUSY_MESSAGE, gr.update(), gr.skip()
         return
     try:
         yield gr.update(), "Decoding…", gr.update(interactive=False), gr.skip()
@@ -320,35 +607,59 @@ def decode_run(source_dir, latent_file, dec_vae_choice, dec_vae_custom, dec_vae_
         else:
             vae_name = "source-generation VAE"
         if dec_vae_choice != "keep" and dec_vae_revision:
-            override = str(adapter.resolve_model(override, revision=dec_vae_revision,
-                                                 local_files_only=bool(offline)))
+            override = str(
+                adapter.resolve_model(
+                    override, revision=dec_vae_revision, local_files_only=bool(offline)
+                )
+            )
         progress(0.1, desc=f"Decoding {latents.shape[0]} frames ({vae_name})…")
         t0 = time.perf_counter()
 
         def on_progress(done, total):
-            progress(0.1 + 0.85 * min(1.0, done / max(1, total)),
-                     desc=f"Decoding audio: chunk {done}/{total}")
+            progress(
+                0.1 + 0.85 * min(1.0, done / max(1, total)),
+                desc=f"Decoding audio: chunk {done}/{total}",
+            )
 
-        audio = adapter.decode(pipe, latents, full=bool(full_decode), vae=override,
-                               on_progress=on_progress)
+        audio = adapter.decode(
+            pipe, latents, full=bool(full_decode), vae=override, on_progress=on_progress
+        )
         seconds = time.perf_counter() - t0
         outdir = runtime.run_dir("decode", runtime.slug(vae_name))
         outdir.mkdir(parents=True, exist_ok=True)
         sf.write(outdir / "audio.flac", audio, 48000, subtype="PCM_24")
         np.save(outdir / "latent.npy", latents.astype(np.float32))
-        (outdir / "decode.json").write_text(json.dumps({
-            "operation": "decode_cached_latents", "source_latent": str(path),
-            "vae": override or str(pipe.vae_dir), "full_decode": bool(full_decode),
-            "core_frames": None if full_decode else pipe.vae_core_frames,
-            "seconds": seconds, "device": str(pipe.device),
-        }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        (outdir / "decode.json").write_text(
+            json.dumps(
+                {
+                    "operation": "decode_cached_latents",
+                    "source_latent": str(path),
+                    "vae": override or str(pipe.vae_dir),
+                    "full_decode": bool(full_decode),
+                    "core_frames": None if full_decode else pipe.vae_core_frames,
+                    "seconds": seconds,
+                    "device": str(pipe.device),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         runtime.write_local_env(outdir, pipe, note)
-        status = (f"Decoded {len(audio) / 48000:.1f}s audio in {seconds:.0f}s\n"
-                  f"VAE={vae_name}  mode={'full' if full_decode else 'tiled'}  "
-                  f"source={path}\nrun directory: {outdir}\n{note}")
+        status = (
+            f"Decoded {len(audio) / 48000:.1f}s audio in {seconds:.0f}s\n"
+            f"VAE={vae_name}  mode={'full' if full_decode else 'tiled'}  "
+            f"source={path}\nrun directory: {outdir}\n{note}"
+        )
         yield str(outdir / "audio.flac"), status, gr.update(interactive=True), str(outdir)
     except Exception as exc:  # noqa: BLE001 — the UI reports, never crashes
-        yield gr.update(), runtime.failure_text(exc, "Decode"), gr.update(interactive=True), gr.skip()
+        yield (
+            gr.update(),
+            runtime.failure_text(exc, "Decode"),
+            gr.update(interactive=True),
+            gr.skip(),
+        )
     finally:
         runtime.end_job()
 
@@ -356,16 +667,52 @@ def decode_run(source_dir, latent_file, dec_vae_choice, dec_vae_custom, dec_vae_
 def _row_sampling(base, overrides: dict | None, label: str):
     """A batch row's sampling: the shared sliders with the row's overrides on top."""
     v = {k: (overrides or {}).get(k, getattr(base, k)) for k in adapter.sampling_fields(base)}
-    return runtime.sampling(v["temperature"], v["top_p"], v["top_k"], v["repetition_penalty"],
-                            v["penalty_window"], v["min_tokens"], v["max_tokens"], label)
+    return runtime.sampling(
+        v["temperature"],
+        v["top_p"],
+        v["top_k"],
+        v["repetition_penalty"],
+        v["penalty_window"],
+        v["min_tokens"],
+        v["max_tokens"],
+        label,
+    )
 
 
-def batch_generate(jsonl_text, jsonl_file, out_id,
-                   abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
-                   sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max,
-                   device, dtype, backend, quantization, offload_ar, budget, ode_steps,
-                   vae_core_frames, model, vae_choice, vae_custom, revision, vae_revision,
-                   offline, progress=gr.Progress()):
+def batch_generate(
+    jsonl_text,
+    jsonl_file,
+    out_id,
+    abc_temp,
+    abc_p,
+    abc_k,
+    abc_rep,
+    abc_win,
+    abc_min,
+    abc_max,
+    sem_temp,
+    sem_p,
+    sem_k,
+    sem_rep,
+    sem_win,
+    sem_min,
+    sem_max,
+    device,
+    dtype,
+    backend,
+    quantization,
+    offload_ar,
+    budget,
+    ode_steps,
+    vae_core_frames,
+    model,
+    vae_choice,
+    vae_custom,
+    revision,
+    vae_revision,
+    offline,
+    progress=gr.Progress(),
+):
     """Generator: runs a JSONL queue; disables the batch button while running."""
     text = ""
     base = Path.cwd()
@@ -381,15 +728,40 @@ def batch_generate(jsonl_text, jsonl_file, out_id,
     if any(x is None for x in ids) or len(set(ids)) != len(ids):
         raise gr.Error("Every line needs a unique id")
     abc_sampling, sem_sampling = runtime.sampling_pair(
-        abc_temp, abc_p, abc_k, abc_rep, abc_win, abc_min, abc_max,
-        sem_temp, sem_p, sem_k, sem_rep, sem_win, sem_min, sem_max)
+        abc_temp,
+        abc_p,
+        abc_k,
+        abc_rep,
+        abc_win,
+        abc_min,
+        abc_max,
+        sem_temp,
+        sem_p,
+        sem_k,
+        sem_rep,
+        sem_win,
+        sem_min,
+        sem_max,
+    )
 
     settings = runtime.RuntimeSettings(
-        device, dtype, backend, quantization, offload_ar, budget, ode_steps,
-        vae_core_frames, model, vae_choice, vae_custom, revision, vae_revision, offline)
+        device,
+        dtype,
+        backend,
+        quantization,
+        offload_ar,
+        budget,
+        ode_steps,
+        vae_core_frames,
+        model,
+        vae_choice,
+        vae_custom,
+        revision,
+        vae_revision,
+        offline,
+    )
     if not runtime.try_start_job():
-        yield gr.update(), runtime.BUSY_MESSAGE,\
-            gr.update(), gr.skip()
+        yield gr.update(), runtime.BUSY_MESSAGE, gr.update(), gr.skip()
         return
     try:
         yield gr.update(), "Starting batch…", gr.update(interactive=False), gr.skip()
@@ -430,32 +802,59 @@ def batch_generate(jsonl_text, jsonl_file, out_id,
                 progress(min(1.0, (index - 1) * span + span * inner), desc=desc)
 
             try:
-                song = adapter.generate(pipe, request, abc_sampling=a_s, semantic_sampling=s_s,
-                                        cancelled=runtime.CANCEL.is_set, on_token=on_token,
-                                        on_progress=on_progress)
+                song = adapter.generate(
+                    pipe,
+                    request,
+                    abc_sampling=a_s,
+                    semantic_sampling=s_s,
+                    cancelled=runtime.CANCEL.is_set,
+                    on_token=on_token,
+                    on_progress=on_progress,
+                )
                 receipt = song.save_artifacts(outdir / row["id"])
                 runtime.write_local_env(outdir / row["id"], pipe, note)
-                results.append([row["id"], "complete", f"{receipt['audio_seconds']:.1f}s",
-                                f"{time.perf_counter() - row_start:.0f}s", str(outdir / row["id"])])
+                results.append(
+                    [
+                        row["id"],
+                        "complete",
+                        f"{receipt['audio_seconds']:.1f}s",
+                        f"{time.perf_counter() - row_start:.0f}s",
+                        str(outdir / row["id"]),
+                    ]
+                )
             except InterruptedError:
-                results.append([row["id"], "cancelled", "",
-                                f"{time.perf_counter() - row_start:.0f}s", ""])
+                results.append(
+                    [row["id"], "cancelled", "", f"{time.perf_counter() - row_start:.0f}s", ""]
+                )
                 break
             except Exception as exc:  # noqa: BLE001
                 failures += 1
-                results.append([row["id"], f"failed: {type(exc).__name__}: {exc}", "",
-                                f"{time.perf_counter() - row_start:.0f}s", ""])
+                results.append(
+                    [
+                        row["id"],
+                        f"failed: {type(exc).__name__}: {exc}",
+                        "",
+                        f"{time.perf_counter() - row_start:.0f}s",
+                        "",
+                    ]
+                )
             progress(index / len(rows), desc=f"Completed {index}/{len(rows)}")
         total = time.perf_counter() - batch_start
-        status = (f"Batch finished: {len(results)} rows, {failures} failed in {total:.0f}s "
-                  f"({total / max(1, len(results)):.0f}s per song)\n"
-                  f"run directory: {outdir}\n{note}")
+        status = (
+            f"Batch finished: {len(results)} rows, {failures} failed in {total:.0f}s "
+            f"({total / max(1, len(results)):.0f}s per song)\n"
+            f"run directory: {outdir}\n{note}"
+        )
         yield results, status, gr.update(interactive=True), str(outdir)
     except Exception as exc:  # noqa: BLE001 — the UI reports, never crashes
-        yield gr.update(), runtime.failure_text(exc, "Batch"), gr.update(interactive=True), gr.skip()
+        yield (
+            gr.update(),
+            runtime.failure_text(exc, "Batch"),
+            gr.update(interactive=True),
+            gr.skip(),
+        )
     finally:
         runtime.end_job()
-
 
 
 def apply_preset(name):
@@ -465,5 +864,9 @@ def apply_preset(name):
         "Quick test (~20 s)": (16, 256, 32, 512),
     }
     a_min, a_max, s_min, s_max = presets[name]
-    return (gr.update(value=a_min), gr.update(value=a_max),
-            gr.update(value=s_min), gr.update(value=s_max))
+    return (
+        gr.update(value=a_min),
+        gr.update(value=a_max),
+        gr.update(value=s_min),
+        gr.update(value=s_max),
+    )

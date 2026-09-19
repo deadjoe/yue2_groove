@@ -3,6 +3,7 @@
 The module is stdlib-only by design (it reads saved artifacts by file convention
 and never imports ``yue2``), so these tests are fast and model-free.
 """
+
 from __future__ import annotations
 
 import json
@@ -18,29 +19,68 @@ from yue2_groove import library as lib
 def make_work(root: Path, name: str, kind: str = "song") -> Path:
     d = root / name
     d.mkdir(parents=True, exist_ok=True)
-    (d / "request.json").write_text(json.dumps({
-        "id": name, "style": "English, test tone", "lyrics": "[Verse]\nHello",
-        "cot": "full", "seed": 7, "cfg_scale": 1.25}), encoding="utf-8")
+    (d / "request.json").write_text(
+        json.dumps(
+            {
+                "id": name,
+                "style": "English, test tone",
+                "lyrics": "[Verse]\nHello",
+                "cot": "full",
+                "seed": 7,
+                "cfg_scale": 1.25,
+            }
+        ),
+        encoding="utf-8",
+    )
     (d / "score.abc").write_text(
-        'X:1\nT:\nM:4/4\nL:1/32\nQ:1/4=120\n'
+        "X:1\nT:\nM:4/4\nL:1/32\nQ:1/4=120\n"
         'V: Vocal clef=treble name="Vocal Melody" snm="Vocal"\n'
         'V: Ins clef=treble name="Ins Melody" snm="Inst."\nK:C\n'
-        'V: Vocal\n"C"E4E4G4G4E8z8|\nV: Ins\nZ|\n', encoding="utf-8")
+        'V: Vocal\n"C"E4E4G4G4E8z8|\nV: Ins\nZ|\n',
+        encoding="utf-8",
+    )
     if kind == "song":
-        (d / "result.json").write_text(json.dumps({
-            "status": "complete", "truncated": {"abc": False, "semantic": False},
-            "sample_rate": 48000, "audio_seconds": 12.5,
-            "timing": {"semantic": {"seconds": 2.0, "output_tokens": 25, "output_tps": 12.5},
-                       "nar_seconds": 1.0, "vae_seconds": 0.2, "e2e_seconds": 3.7},
-            "weights": {"mot": {"files": {"model.safetensors": {"bytes": 10, "sha256": "ab" * 32}}},
-                        "vae": {"files": {"model.safetensors": {"bytes": 5, "sha256": "cd" * 32}}}}},
-            ), encoding="utf-8")
-        (d / "config.json").write_text(json.dumps({
-            "generation": {"abc": {"temperature": .7, "max_tokens": 4096},
-                           "semantic": {"temperature": 1.0, "max_tokens": 9000},
-                           "ode_steps": 32, "ode_method": "midpoint", "context": 24576},
-            "cot": "full", "cfg_scale": 1.25, "device": "mps", "model_dtype": "bfloat16",
-            "vae_dtype": "float32", "validation_status": "ok"}), encoding="utf-8")
+        (d / "result.json").write_text(
+            json.dumps(
+                {
+                    "status": "complete",
+                    "truncated": {"abc": False, "semantic": False},
+                    "sample_rate": 48000,
+                    "audio_seconds": 12.5,
+                    "timing": {
+                        "semantic": {"seconds": 2.0, "output_tokens": 25, "output_tps": 12.5},
+                        "nar_seconds": 1.0,
+                        "vae_seconds": 0.2,
+                        "e2e_seconds": 3.7,
+                    },
+                    "weights": {
+                        "mot": {"files": {"model.safetensors": {"bytes": 10, "sha256": "ab" * 32}}},
+                        "vae": {"files": {"model.safetensors": {"bytes": 5, "sha256": "cd" * 32}}},
+                    },
+                },
+            ),
+            encoding="utf-8",
+        )
+        (d / "config.json").write_text(
+            json.dumps(
+                {
+                    "generation": {
+                        "abc": {"temperature": 0.7, "max_tokens": 4096},
+                        "semantic": {"temperature": 1.0, "max_tokens": 9000},
+                        "ode_steps": 32,
+                        "ode_method": "midpoint",
+                        "context": 24576,
+                    },
+                    "cot": "full",
+                    "cfg_scale": 1.25,
+                    "device": "mps",
+                    "model_dtype": "bfloat16",
+                    "vae_dtype": "float32",
+                    "validation_status": "ok",
+                }
+            ),
+            encoding="utf-8",
+        )
         (d / "audio.flac").write_bytes(b"fLaC" + b"\x00" * 64)
     return d
 
@@ -49,14 +89,26 @@ def test_transcription_result_is_its_own_kind(tmp_path: Path) -> None:
     """SheetSage2 outputs are result.json + score.abc without weights/audio."""
     d = tmp_path / "transcriptions" / "20260901-130000-reference"
     d.mkdir(parents=True)
-    (d / "result.json").write_text(json.dumps({
-        "status": "complete", "task": "melody-vocal", "melody_only": True,
-        "abc": "X:1", "warnings": [], "output_dir": str(d)}), encoding="utf-8")
+    (d / "result.json").write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "task": "melody-vocal",
+                "melody_only": True,
+                "abc": "X:1",
+                "warnings": [],
+                "output_dir": str(d),
+            }
+        ),
+        encoding="utf-8",
+    )
     (d / "score.abc").write_text(
-        'X:1\nT:\nM:4/4\nL:1/32\nQ:1/4=120\n'
+        "X:1\nT:\nM:4/4\nL:1/32\nQ:1/4=120\n"
         'V: Vocal clef=treble name="Vocal Melody" snm="Vocal"\n'
         'V: Ins clef=treble name="Ins Melody" snm="Inst."\nK:C\n'
-        'V: Vocal\nz32|\nV: Ins\nZ|\n', encoding="utf-8")
+        "V: Vocal\nz32|\nV: Ins\nZ|\n",
+        encoding="utf-8",
+    )
 
     items = lib.scan(tmp_path)
     item = next(i for i in items if i["kind"] == "transcription")
@@ -91,12 +143,17 @@ def test_scan_kinds_sort_and_label(tmp_path: Path) -> None:
 
     items = lib.scan(tmp_path)
     kinds = {i["rel"]: i["kind"] for i in items}
-    assert kinds == {"20260901-120000-old": "song", "20260902-130000-plan": "plan",
-                     "batch-1/song-a": "song", "20260903-140000-decode": "decode"}
+    assert kinds == {
+        "20260901-120000-old": "song",
+        "20260902-130000-plan": "plan",
+        "batch-1/song-a": "song",
+        "20260903-140000-decode": "decode",
+    }
 
     # compare only entries with a timestamp prefix (unprefixed dirs, e.g. batch songs, sort by mtime)
-    timed = [i["rel"] for i in lib.sort_items(items, "time_desc")
-             if re.match(r"\d{8}-\d{6}-", i["rel"])]
+    timed = [
+        i["rel"] for i in lib.sort_items(items, "time_desc") if re.match(r"\d{8}-\d{6}-", i["rel"])
+    ]
     assert timed[0] == "20260903-140000-decode"
     # name order uses the display name (timestamp prefix removed)
     assert next(i["rel"] for i in lib.sort_items(items, "name_asc")) == "20260903-140000-decode"
@@ -118,8 +175,15 @@ def test_details_and_html_render(tmp_path: Path) -> None:
     assert det["audio"] and det["audio"].endswith("audio.flac")
 
     html = lib.render_info_html(item, det)
-    for needle in ("bb-lib-card", "bb-player", "bb-lib-table", "bb-lib-abc-src",
-                   "bfloat16", "complete", "12.5"):
+    for needle in (
+        "bb-lib-card",
+        "bb-player",
+        "bb-lib-table",
+        "bb-lib-abc-src",
+        "bfloat16",
+        "complete",
+        "12.5",
+    ):
         assert needle in html, needle
     assert "bb-lib-card" in lib.render_multi_html(["a", "b"])
     assert "cannot be undone" in lib.render_confirm_html([item])
@@ -173,9 +237,18 @@ def test_delete_guards_and_real_delete(tmp_path: Path) -> None:
 def test_local_env_sidecar_reports_actual_dtype(tmp_path: Path) -> None:
     """config.json hardcodes bfloat16; the sidecar must expose an explicit fp32 cast."""
     d = make_work(tmp_path, "20260901-120000-fp32", "song")
-    (d / "local_env.json").write_text(json.dumps({
-        "tool": "yue2_groove", "device": "mps", "dtype": "float32",
-        "torch": "2.14.0", "note": ""}), encoding="utf-8")
+    (d / "local_env.json").write_text(
+        json.dumps(
+            {
+                "tool": "yue2_groove",
+                "device": "mps",
+                "dtype": "float32",
+                "torch": "2.14.0",
+                "note": "",
+            }
+        ),
+        encoding="utf-8",
+    )
     item, det = lib.load(tmp_path, "20260901-120000-fp32")
     assert det["local_env"]["dtype"] == "float32"
     html = lib.render_info_html(item, det)
@@ -183,8 +256,9 @@ def test_local_env_sidecar_reports_actual_dtype(tmp_path: Path) -> None:
 
     # the same dtype as config.json -> no row at all (filtered out)
     d2 = make_work(tmp_path, "20260901-120000-bf16", "song")
-    (d2 / "local_env.json").write_text(json.dumps({
-        "device": "mps", "dtype": "bfloat16", "torch": "2.14.0"}), encoding="utf-8")
+    (d2 / "local_env.json").write_text(
+        json.dumps({"device": "mps", "dtype": "bfloat16", "torch": "2.14.0"}), encoding="utf-8"
+    )
     item2, det2 = lib.load(tmp_path, "20260901-120000-bf16")
     assert "WEBUI ACTUAL" not in lib.render_info_html(item2, det2)
     # and a run without the sidecar still renders fine

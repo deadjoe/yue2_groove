@@ -596,8 +596,9 @@ def sdpa(query, key, value, *, attn_mask=None, is_causal=False):
         key = key.repeat_interleave(groups, dim=1)
         value = value.repeat_interleave(groups, dim=1)
         grouped = False
-    return F.scaled_dot_product_attention(query, key, value, attn_mask=attn_mask,
-                                          is_causal=is_causal, enable_gqa=grouped)
+    return F.scaled_dot_product_attention(
+        query, key, value, attn_mask=attn_mask, is_causal=is_causal, enable_gqa=grouped
+    )
 ```
 
 | | CUDA (bf16) | MPS |

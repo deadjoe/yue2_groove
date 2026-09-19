@@ -5,6 +5,7 @@ rest of the UI is 10–12px wide-tracked caps, so the bars read as four equal
 slabs.  These tests pin the replacement: a 12/11px scale, Primary filled,
 Secondary outlined, Cancel ghost, Tool quiet and content-width.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -15,8 +16,16 @@ webui = pytest.importorskip("yue2_groove.webui")
 
 
 def build():
-    return webui.build_ui({"device": "cpu", "dtype": "float32", "model": "m",
-                           "vae": "standard", "tab": 0, "status": ""})
+    return webui.build_ui(
+        {
+            "device": "cpu",
+            "dtype": "float32",
+            "model": "m",
+            "vae": "standard",
+            "tab": 0,
+            "status": "",
+        }
+    )
 
 
 def by_id(demo, elem_id):
@@ -29,8 +38,8 @@ def by_value(demo, label):
 
 def test_theme_uses_the_ops_scale() -> None:
     values = webui.theme._theme_values(webui.theme.DARK)
-    assert values["button_large_text_size"] == "12px"     # was Gradio's 16px
-    assert values["button_small_text_size"] == "11px"     # was 12px
+    assert values["button_large_text_size"] == "12px"  # was Gradio's 16px
+    assert values["button_small_text_size"] == "11px"  # was 12px
     assert values["button_large_text_weight"] == "600"
     assert values["button_large_padding"] == "8px 18px"
     assert values["button_small_padding"] == "4px 10px"
@@ -41,10 +50,15 @@ def test_css_defines_three_tiers_and_context_bars() -> None:
     assert "button.lg {" in css and "height: 34px" in css
     assert "button.sm {" in css and "height: 27px" in css
     assert "white-space: nowrap" in css
-    for rule in (".bb-actionbar", ".bb-actionbar .bb-push-right", ".bb-tools",
-                 "bb-danger-solid", "#bb-song-cards .bb-song-card"):
+    for rule in (
+        ".bb-actionbar",
+        ".bb-actionbar .bb-push-right",
+        ".bb-tools",
+        "bb-danger-solid",
+        "#bb-song-cards .bb-song-card",
+    ):
         assert rule in css, rule
-    assert "flex-wrap: wrap !important" in css            # phones wrap, not clip
+    assert "flex-wrap: wrap !important" in css  # phones wrap, not clip
 
 
 def test_action_bar_is_one_focus_plus_lighter_alternatives() -> None:
@@ -53,7 +67,7 @@ def test_action_bar_is_one_focus_plus_lighter_alternatives() -> None:
     assert generate.size == "lg" and generate.variant == "primary"
     for elem_id in ("bb-plan", "bb-allmodes"):
         alternative = by_id(demo, elem_id)
-        assert alternative.size == "sm"                   # demoted off lg
+        assert alternative.size == "sm"  # demoted off lg
         assert alternative.variant == "secondary"
     cancel = by_id(demo, "bb-cancel")
     assert cancel.size == "sm" and cancel.variant == "stop"
@@ -63,7 +77,7 @@ def test_action_bar_is_one_focus_plus_lighter_alternatives() -> None:
 def test_02_keeps_one_solid_primary_in_the_generate_area() -> None:
     demo = build()
     sends = [c for c in demo.blocks.values() if getattr(c, "value", None) == "SEND TO GENERATE"]
-    assert {c.size for c in sends} == {"sm", "lg"}        # SONG action + COVER primary
+    assert {c.size for c in sends} == {"sm", "lg"}  # SONG action + COVER primary
     assert any(c.size == "lg" and c.variant == "primary" for c in sends)
     generate_cover = by_id(demo, "bb-cover-generate")
     assert generate_cover.size == "sm" and generate_cover.variant == "secondary"
@@ -80,9 +94,10 @@ def test_destructive_confirm_is_the_only_solid_danger() -> None:
 
 def test_action_bars_and_tool_rows_exist() -> None:
     demo = build()
-    classes = [c.elem_classes or [] for c in demo.blocks.values()
-               if getattr(c, "elem_classes", None)]
-    assert sum("bb-actionbar" in c for c in classes) >= 4   # 01 / 02 / 03 / 06
+    classes = [
+        c.elem_classes or [] for c in demo.blocks.values() if getattr(c, "elem_classes", None)
+    ]
+    assert sum("bb-actionbar" in c for c in classes) >= 4  # 01 / 02 / 03 / 06
     assert sum("bb-tools" in c for c in classes) >= 5
 
 
@@ -104,8 +119,8 @@ def test_song_starters_are_cards_with_small_buttons() -> None:
     demo = build()
     starts = [c for c in demo.blocks.values() if getattr(c, "value", None) == "START"]
     assert len(starts) == 3 and all(c.size == "sm" for c in starts)
-    htmls = [c.value for c in demo.blocks.values()
-             if isinstance(getattr(c, "value", None), str)]
+    htmls = [c.value for c in demo.blocks.values() if isinstance(getattr(c, "value", None), str)]
     assert any("bb-card-title" in h and "NEW SONG" in h for h in htmls)
-    assert not any(getattr(c, "value", None) == "NEW SONG"
-                   for c in demo.blocks.values())            # no longer a button label
+    assert not any(
+        getattr(c, "value", None) == "NEW SONG" for c in demo.blocks.values()
+    )  # no longer a button label
