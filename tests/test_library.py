@@ -239,7 +239,7 @@ def test_library_js_survives_gradio_morphing_the_details_pane() -> None:
     Playwright (Chromium + WebKit): listeners 1 → 2 → 3 per selection, calls
     ['play', 'pause'] on the dead clicks.
     """
-    js = lib.LIBRARY_JS
+    js = (Path(lib.__file__).parent / "static" / "library.js").read_text(encoding="utf-8")
     # state is a property of the <audio> (dies with the element, not the markup)
     assert "if (audio.__bbState) return audio.__bbState;" in js
     assert "data-bb-bound" not in js and "bind(" not in js

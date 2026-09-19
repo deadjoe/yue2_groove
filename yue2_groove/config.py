@@ -48,6 +48,11 @@ STATIC_DIR = PACKAGE_DIR / "static"
 EXAMPLES_DIR = PACKAGE_DIR / "examples"
 
 
+def static_text(name: str) -> str:
+    """A bundled frontend file (stylesheet / script) as text."""
+    return (STATIC_DIR / name).read_text(encoding="utf-8")
+
+
 def load_env(path=None, environ=None) -> int:
     """Load a repo-root ``.env`` into the process environment.
 
