@@ -2077,15 +2077,31 @@ def _scene_css(selector, values, palette=None):
 
 
 BASE_CSS = """
+/* ── the outer frame ─────────────────────────────────────────────────────
+   Gradio 6 rewrites this stylesheet (prefix_css): a top-level rule is emitted
+   twice, as written and prefixed with `.gradio-container.gradio-container-X
+   .contain`, but a rule inside @media / @container keeps ONLY the prefixed
+   copy.  So anything outside <main class="contain"> (html, body, gradio-app,
+   .gradio-container, .main.app) can be styled from here only by top-level
+   rules: a phone @media on .gradio-container silently never matches.  The
+   frame therefore scales with clamp() instead of a breakpoint.  Desktop keeps
+   its 42 / 22 / 24px (26 + Gradio's 16 top, 8 + 16 bottom); a 390px phone
+   gets 22 / 12 / 16px. */
 .gradio-container {
   width: 100% !important;   /* keep the frame stable when the settings rail is hidden */
   max-width: 1400px !important;
   margin: 0 auto !important;
-  padding: 26px 22px 8px !important;
+  padding: clamp(22px, 3vw, 42px) clamp(10px, 3vw, 22px) clamp(16px, 2vw, 24px) !important;
   position: relative !important;
   font-family: "Berkeley Mono", "Sarasa Mono SC", "JetBrains Mono", "SF Mono",
                ui-monospace, Menlo, monospace !important;
 }
+/* Gradio's own frame inside ours: `.app` pads 16px 32px at every width (32px
+   a side is a third of a phone) and, without fill_width, caps the content at
+   640 / 768 / 1024 / 1280px steps (iPad landscape got 1024 - 64 = 960px).
+   fill_width=True on the Blocks removes the cap; the padding folds into the
+   clamp() above so the frame has one set of margins. */
+.gradio-container .main.app { padding: 0 !important; }
 html, body, .gradio-container, gradio-app {
   background: var(--bb-field) !important;
   color: var(--bb-ink) !important;
@@ -2347,7 +2363,11 @@ table { border-color: var(--bb-line) !important; }
 #bb-current-work { display: none !important; }
 /* the view bridge is a hidden Textbox too: the view itself is an <html> class */
 #bb-view { display: none !important; }
-#bb-current-band-wrap { min-height: 0; }
+/* the band and the busy banner are gr.HTML blocks that are usually empty;
+   Gradio still pads the empty .html-container 12px top and bottom, which
+   stacked to a blank 88px band under the header.  The band / banner carry
+   their own padding and margin-bottom, so the wrapper needs none. */
+#bb-current-band-wrap .html-container, #bb-busy-wrap .html-container { padding: 0 !important; }
 #bb-current-band {
   display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline;
   border: 1px solid var(--bb-line); border-radius: 8px; background: var(--bb-panel);
@@ -2456,7 +2476,6 @@ html.bb-view-studio #bb-song-root { display: none !important; }
 #bb-song-family .bb-family-hit.bb-family-active { color: var(--bb-ink2); }
 
 /* global busy banner */
-#bb-busy-wrap { min-height: 0; }
 #bb-busy {
   border: 1px solid var(--bb-line2); border-radius: 8px; padding: 7px 12px; margin-bottom: 10px;
   font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--bb-ink2);
@@ -2646,14 +2665,12 @@ html.bb-knob-dragging { touch-action: none; }
 }
 
 /* ── phones ──────────────────────────────────────────────────────────────
-   Gradio 6 hides overflowing tabs behind a tiny ⋯ menu and the theme button
-   is absolutely positioned over the title. Below 700px: tighter frame, theme
-   button parked in the header corner with reserved room, and the tabs
-   wrap (the overflow containers become display:contents so every tab is
-   always visible instead of hidden in the dropdown). */
+   Everything below is inside <main class="contain">, so these @media rules
+   survive prefix_css (the frame itself is handled above, and the tab strip
+   by the container query in LAYOUT_HEAD_CSS).  Below 700px the theme button,
+   normally absolute over the title, parks in its own row, and the action
+   bars wrap instead of running off the screen. */
 @media (max-width: 700px) {
-  .gradio-container { padding: 14px 10px 6px !important; }
-  /* action bars and tool rows wrap instead of running off the screen */
   .bb-actionbar, .bb-tools { flex-wrap: wrap !important; }
   .bb-actionbar .bb-push-right { margin-left: 0 !important; }
   #bb-header { padding: 16px 12px 12px; contain: inline-size; }
@@ -2665,39 +2682,16 @@ html.bb-knob-dragging { touch-action: none; }
   #bb-rail-btn { width: 46px !important; min-width: 46px !important; height: 32px; }
   #bb-theme-btn { flex: 0 0 auto !important; width: 46px !important; min-width: 46px !important;
                   height: 32px; margin: 0 !important; }
-  .tabs .tab-wrapper { display: flex !important; flex-wrap: wrap !important; height: auto !important; min-height: 32px; }
-  .tabs .tab-container[role="tablist"],
-  .tabs .overflow-menu,
-  .tabs .overflow-dropdown { display: contents !important; }
-  .tabs .overflow-menu > button { display: none !important; }
-  .tabs .tab-container[role="tablist"] > button,
-  .tabs .overflow-dropdown > button {
-    flex: 1 1 44% !important; min-height: 40px; padding: 10px 6px !important;
-    font-size: 10.5px !important; letter-spacing: .08em !important;
-  }
   .bb-score-panel { max-height: 60vh !important; }
 }
 @media (max-width: 360px) { #bb-header h1 { font-size: 16px; } }
 
 /* ── tablets / narrow laptops ────────────────────────────────────────────
    Below ~1024px the two-column workspace would squeeze the main column; the
-   settings rail wraps underneath instead, and the tabs wrap four-up so Gradio's
-   overflow menu does not hide them behind a ⋯ button. */
+   settings rail wraps underneath instead. */
 @media (max-width: 1024px) {
   .bb-workspace { flex-wrap: wrap !important; }
   .bb-workspace #bb-rail { flex-basis: 100% !important; min-width: 0 !important; }
-}
-@media (min-width: 701px) and (max-width: 1024px) {
-  .tabs .tab-wrapper { display: flex !important; flex-wrap: wrap !important; height: auto !important; }
-  .tabs .tab-container[role="tablist"],
-  .tabs .overflow-menu,
-  .tabs .overflow-dropdown { display: contents !important; }
-  .tabs .overflow-menu > button { display: none !important; }
-  .tabs .tab-container[role="tablist"] > button,
-  .tabs .overflow-dropdown > button {
-    flex: 1 1 22% !important; min-height: 38px; padding: 9px 6px !important;
-    font-size: 10.5px !important; letter-spacing: .08em !important;
-  }
 }
 
 /* ── touch devices ────────────────────────────────────────────────────────
@@ -2912,7 +2906,41 @@ TIP_JS = """(function () {
   setInterval(inject, 600);
 })();"""
 
-HEAD_HTML = """<meta name="color-scheme" content="dark light">
+# ── the tab strip follows the width of its column, not the viewport ──────
+# Gradio 6 hides overflowing tabs behind a tiny ⋯ menu.  What decides whether
+# the seven tabs fit is the main column, which is 100% of the frame on a phone
+# or an iPad in portrait but 5/7 of it with the settings rail open (an iPad in
+# landscape lost 05..07 that way, a 1440px desktop lost 07).  A container
+# query on #bb-main sees exactly that width.  It has to travel in the <head>:
+# prefix_css (see BASE_CSS) only knows style / @media / @keyframes /
+# @font-face rules and drops an @container block from `css=` outright.  The
+# head is mounted after the custom css, so this also wins ties on order.
+# Two-up under 660px of column, four-up to 900px (the strip needs ~880px for
+# one row), Gradio's own single row above that; the overflow containers turn
+# into display:contents so every tab is a wrapped flex item rather than a
+# dropdown entry.
+LAYOUT_HEAD_CSS = """<style id="bb-layout">
+#bb-main { container-type: inline-size; }
+@container (width <= 900px) {
+  .tabs .tab-wrapper { display: flex !important; flex-wrap: wrap !important;
+                       height: auto !important; min-height: 32px; }
+  .tabs .tab-container[role="tablist"],
+  .tabs .overflow-menu,
+  .tabs .overflow-dropdown { display: contents !important; }
+  .tabs .overflow-menu > button { display: none !important; }
+  .tabs .tab-container[role="tablist"] > button,
+  .tabs .overflow-dropdown > button {
+    flex: 1 1 22% !important; min-height: 38px; padding: 9px 6px !important;
+    font-size: 10.5px !important; letter-spacing: .08em !important;
+  }
+}
+@container (width <= 660px) {
+  .tabs .tab-container[role="tablist"] > button,
+  .tabs .overflow-dropdown > button { flex-basis: 44% !important; min-height: 40px; padding: 10px 6px !important; }
+}
+</style>"""
+
+HEAD_HTML = LAYOUT_HEAD_CSS + """<meta name="color-scheme" content="dark light">
 <script>
 (function () {
   try {
@@ -3467,7 +3495,9 @@ def build_ui(defaults):
   <span>Developed by DEADJOE@GITHUB(<a href="https://github.com/deadjoe/yue2_groove" target="_blank" rel="noopener">yue2_groove</a>)</span>
 </div>"""
 
-    with gr.Blocks(title="YUE2 // GROOVE") as demo:
+    # fill_width: Gradio would otherwise cap the content at 640..1920px steps
+    # inside our 1400px frame (see the outer-frame note in BASE_CSS).
+    with gr.Blocks(title="YUE2 // GROOVE", fill_width=True) as demo:
         gr.HTML(header)
         current_band = gr.HTML("", elem_id="bb-current-band-wrap")
         current_bridge = gr.Textbox(value="", elem_id="bb-current-work",
@@ -3540,7 +3570,8 @@ def build_ui(defaults):
         with gr.Row(equal_height=False, elem_id="bb-studio-root",
                     elem_classes=["bb-workspace"]):
             # ═══════════ main work area ═══════════
-            with gr.Column(scale=5, min_width=520):
+            # bb-main is the container the tab strip queries (LAYOUT_HEAD_CSS)
+            with gr.Column(scale=5, min_width=520, elem_id="bb-main"):
                 with gr.Tabs(selected=("gen", "cover", "edit", "library", "tools", "decode", "batch")
                                [int(defaults.get("tab", 0)) % 7]) as tabs:
                     # ───── 01 GENERATE ─────
