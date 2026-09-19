@@ -125,3 +125,21 @@ def test_empty_chrome_placeholders_collapse() -> None:
         "#bb-current-band-wrap .html-container, #bb-busy-wrap .html-container "
         "{ padding: 0 !important; }"
     ) in css
+
+
+def test_ios_zoom_is_switched_off_without_touching_other_platforms() -> None:
+    """A field taking focus zoomed the page on an iPhone and it stayed zoomed after blur.
+
+    Two mechanisms, two mitigations: iOS's focus auto-zoom is off under
+    maximum-scale=1 (iOS ignores the cap for pinch zoom, Android does not, so only
+    iOS gets it, at boot); the double-tap smart zoom is off under
+    touch-action: manipulation, which keeps pan and pinch.
+    """
+    css = webui.theme.BASE_CSS
+    assert "body { touch-action: manipulation; }" in css  # top-level: body is outside .contain
+    head = webui.frontend.HEAD_HTML
+    assert "maximum-scale=1" in head
+    assert "navigator.maxTouchPoints > 1" in head  # iPadOS reports a Mac UA
+    assert "/iP(hone|ad|od)/.test(navigator.userAgent)" in head
+    # the editable fields stay at 16px on touch screens (the other focus-zoom trigger)
+    assert "textarea:not([disabled]):not([readonly])" in css and "font-size: 16px !important" in css

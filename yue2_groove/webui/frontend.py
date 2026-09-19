@@ -218,6 +218,18 @@ HEAD_HTML = (
       document.documentElement.classList.add('bb-rail-hidden');
     }
   } catch (e) {}
+  try {
+    // iOS zooms the page in when a field takes focus and keeps that zoom after
+    // blur.  maximum-scale=1 switches the focus zoom off; iOS has ignored the cap
+    // for pinch zoom since iOS 10, so the user can still zoom.  Android honours
+    // the cap (no pinch), so only iOS gets it — iPadOS reports a Mac UA with touch.
+    var ios = /iP(hone|ad|od)/.test(navigator.userAgent) ||
+              (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    var vp = document.querySelector('meta[name="viewport"]');
+    if (ios && vp) {
+      vp.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, shrink-to-fit=no');
+    }
+  } catch (e) {}
   function sync() {
     var on = document.documentElement.classList.contains('bb-bright');
     var wrap = document.getElementById('bb-theme-btn');

@@ -32,6 +32,11 @@ html, body, .gradio-container, gradio-app {
   background: var(--bb-field) !important;
   color: var(--bb-ink) !important;
 }
+/* iOS "smart zoom": a double tap (tap a field, tap again for the Paste callout)
+   zooms the block and never zooms back.  `manipulation` keeps pan and pinch and
+   drops only the double-tap zoom.  Top-level on purpose: body is outside
+   <main class="contain"> (see the outer-frame note above). */
+body { touch-action: manipulation; }
 /* hide Gradio's own footer / API link */
 footer, #footer, .built-with, .show-api, .api-links { display: none !important; }
 /* header top-right controls: settings-rail toggle + scene switch */
