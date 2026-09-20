@@ -731,8 +731,18 @@ class GgufPipeline:
                 "backbone_gguf": self.backbone.name,
                 "vae_gguf": self.vae.name,
             },
+            "decoder_release": self._decoder_release(),
             "validation_status": "unvalidated",
         }
+
+    def _decoder_release(self):
+        """``release_variant`` of the VAE checkpoint, as upstream records it (the listening page shows it)."""
+        try:
+            return json.loads((self.vae_dir / "config.json").read_text(encoding="utf-8")).get(
+                "release_variant"
+            )
+        except (OSError, ValueError):
+            return None
 
     def generate(
         self,
