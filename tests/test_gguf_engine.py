@@ -426,8 +426,9 @@ def test_binary_lookup_order_and_install_hint(tmp_path, monkeypatch):
 @pytest.mark.parametrize(
     ("device", "vram", "installed", "expected"),
     [
-        ("cuda", 11.99, True, "gguf"),  # a 12 GB card
-        ("cuda", 15.9, True, "gguf"),
+        ("cuda", 11.99, True, "gguf"),  # a 12 GB card (12288 MiB reads as 11.99 GiB)
+        ("cuda", 15.4, True, "gguf"),
+        ("cuda", 15.99, True, "torch"),  # a 16 GB card reports 16376 MiB = 15.99 GiB: it is 16
         ("cuda", 16.0, True, "torch"),  # 16 GB runs the reference configuration
         ("cuda", 23.5, True, "torch"),
         ("cuda", 11.99, False, "torch"),  # no binaries: reference engine, with a hint

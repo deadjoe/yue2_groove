@@ -200,31 +200,33 @@ def auto_backend(device: str, total_vram_gib: float | None, *, installed: bool |
 
     The GGUF engine is chosen only for a CUDA card below the threshold with the binaries
     installed; every other host keeps the reference PyTorch engine.  *reason* says why, for
-    the status line and the log — including why a small card did **not** get it.
+    the status line and the log — including why a small card did **not** get it.  Cards are
+    compared by their marketed size: a "16 GB" card reports 15.99 GiB and must count as 16.
     """
     installed = available() if installed is None else installed
     threshold = vram_threshold_gib()
     if total_vram_gib is None:
         return "torch", ""
+    card_gb = round(total_vram_gib)
     if device != "cuda":
         # an NVIDIA card torch cannot see (a CPU-only torch build, e.g. PyPI's Windows wheel):
         # the reference engine would run on the CPU for hours; yue2.cpp drives the card itself
         if device == "cpu" and installed:
             return "gguf", (
-                f"auto: NVIDIA card ({total_vram_gib:.0f} GiB) present but torch has no CUDA "
+                f"auto: NVIDIA card ({card_gb} GB) present but torch has no CUDA "
                 f"→ GGUF {quant()} engine on the GPU"
             )
         return "torch", ""
-    if total_vram_gib >= threshold:
+    if card_gb >= threshold:
         return "torch", ""
     if not installed:
         return "torch", (
-            f"{total_vram_gib:.0f} GiB card: the GGUF engine would fit better, but no yue2.cpp "
+            f"{card_gb} GB card: the GGUF engine would fit better, but no yue2.cpp "
             "binaries are installed (see docs/GGUF_ENGINE.md)"
         )
     return (
         "gguf",
-        f"auto: {total_vram_gib:.0f} GiB card < {threshold:.0f} GiB → GGUF {quant()} engine",
+        f"auto: {card_gb} GB card < {threshold:.0f} GB → GGUF {quant()} engine",
     )
 
 
