@@ -788,7 +788,7 @@ def batch_generate(
             a_s = _row_sampling(abc_sampling, row.get("abc_sampling"), "ABC phase")
             s_s = _row_sampling(sem_sampling, row.get("semantic_sampling"), "semantic phase")
 
-            def on_token(phase, token, index=index):
+            def on_token(phase, token, count=1, index=index):
                 progress((index - 1 + 0.5) / len(rows), desc=f"Song {index}/{len(rows)}: {phase}")
 
             def on_progress(stage, done, total, index=index):

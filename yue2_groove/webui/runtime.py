@@ -29,7 +29,7 @@ from pathlib import Path
 import gradio as gr
 import torch
 
-from .. import adapter, config
+from .. import adapter, config, gguf_engine
 
 # Where generated works are stored; main() may override it with --runs.
 RUNS = config.runs_dir()
@@ -49,7 +49,22 @@ DTYPE_CHOICES = [
 # vLLM is upstream's optional Linux/CUDA backend (``yue2-infer[fast]``).  Offer it
 # only when the package is importable, so the dropdown never promises a backend
 # that ends in ImportError at generate time (macOS, Windows, or a plain install).
-BACKEND_CHOICES = ["torch", "torch-eager"] + (["vllm"] if importlib.util.find_spec("vllm") else [])
+# ``gguf`` is the yue2.cpp engine (yue2_groove.gguf_engine): always listed, because
+# BACKEND=auto may select it at startup and the rail must be able to show that; loading
+# it without the binaries fails with the install hint rather than a stack trace.
+BACKEND_CHOICES = (
+    ["torch", "torch-eager"] + (["vllm"] if importlib.util.find_spec("vllm") else []) + ["gguf"]
+)
+BACKEND_MODES = ["auto", *BACKEND_CHOICES]  # what --backend / YUE2_GROOVE_BACKEND accept
+
+
+def resolve_backend(mode: str, device: str) -> tuple[str, str]:
+    """The concrete BACKEND for a launch: ``auto`` applies the VRAM rule (``(backend, note)``)."""
+    mode = (mode or "auto").strip().lower()
+    if mode != "auto":
+        return (mode if mode in BACKEND_CHOICES else "torch"), ""
+    return gguf_engine.auto_backend(device, gguf_engine.cuda_total_vram_gib())
+
 
 ABC_DEFAULTS = {
     "temperature": 0.7,
@@ -202,6 +217,11 @@ def load_pipeline(settings: RuntimeSettings, progress=None):
     vae_path, vae_name = resolve_vae(settings.vae_choice, settings.vae_custom)
     key = settings.key
     if _PIPE is not None and key == _PIPE_KEY:
+        if isinstance(_PIPE, gguf_engine.GgufPipeline):
+            return (
+                _PIPE,
+                f"Model ready: engine=yue2.cpp ({_PIPE.quant} GGUF) backend=gguf vae={vae_name}",
+            )
         return _PIPE, (
             f"Model ready: device={device} dtype={settings.dtype} "
             f"backend={backend}{fallback} vae={vae_name}"
@@ -212,6 +232,9 @@ def load_pipeline(settings: RuntimeSettings, progress=None):
         )
     if settings.quantization == "fp8" and device != "cuda":
         raise gr.Error("FP8 quantization requires NVIDIA CUDA (sm89+)")
+
+    if backend == "gguf":
+        return _load_gguf(settings, vae_path, vae_name, key, progress)
 
     unload_pipeline()
     if progress is not None:
@@ -236,6 +259,50 @@ def load_pipeline(settings: RuntimeSettings, progress=None):
     note = (
         f"Loaded: device={device} dtype={used_dtype} backend={backend}{fallback} "
         f"vae={vae_name} ode_steps={settings.ode_steps} cores={settings.cores or 'auto'}"
+    )
+    return _PIPE, note
+
+
+def _load_gguf(settings: RuntimeSettings, vae_path: str, vae_name: str, key, progress):
+    """The yue2.cpp engine: nothing resident, but the GGUF files must exist (prepared once
+    from the checkpoints already on disk) and the tokenizer needs the checkpoint directory.
+    DTYPE / QUANTIZATION / OFFLOAD / MEMORY BUDGET do not apply and are ignored."""
+    global _PIPE, _PIPE_KEY
+    if settings.vae_choice != "standard":
+        raise gr.Error(
+            "the GGUF engine uses the standard YuE2-Vae; pick STANDARD or the torch backend"
+        )
+    if not gguf_engine.available():
+        raise gr.Error(gguf_engine.INSTALL_HINT)
+    unload_pipeline()
+    if progress is not None:
+        progress(0.05, desc="Preparing the GGUF engine…")
+
+    def say(line: str) -> None:
+        log.info("gguf: %s", line)
+        if progress is not None:
+            progress(0.05, desc=line[:120])
+
+    with _LOCK:
+        model_dir = adapter.resolve_model(
+            settings.model, revision=settings.revision or None, local_files_only=settings.offline
+        )
+        vae_dir = adapter.resolve_model(
+            vae_path, revision=settings.vae_revision or None, local_files_only=settings.offline
+        )
+        pipe = gguf_engine.GgufPipeline.open(
+            model_dir=Path(model_dir),
+            vae_dir=Path(vae_dir),
+            ode_steps=settings.ode_steps,
+            vae_core_frames=settings.cores,
+            log=say,
+        )
+        _PIPE, _PIPE_KEY = pipe, key
+    note = (
+        f"Loaded: engine=yue2.cpp ({pipe.quant} GGUF, {pipe.backbone.name}) backend=gguf "
+        f"vae={vae_name} ode_steps={settings.ode_steps} cores={settings.cores or 'auto'}"
+        + (f" max_seq={pipe.max_seq}" if pipe.max_seq else "")
+        + " — not the reference configuration: a different take for the same seed"
     )
     return _PIPE, note
 
@@ -275,6 +342,8 @@ def write_local_env(directory: Path, pipe, note: str = "") -> None:
             "yue2": adapter.yue2_version(),
             "note": note or None,
         }
+        if isinstance(pipe, gguf_engine.GgufPipeline):
+            payload.update(gguf_engine.local_env(pipe))
         (Path(directory) / "local_env.json").write_text(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
@@ -444,8 +513,8 @@ def run_generation(
     abc_budget = abc_sampling.max_tokens if request.cot != "off" else 0
     sem_budget = semantic_sampling.max_tokens
 
-    def on_token(phase, token):
-        counts[phase] = counts.get(phase, 0) + 1
+    def on_token(phase, token, count=1):  # the GGUF engine reports in 100-token strides
+        counts[phase] = counts.get(phase, 0) + count
         if request.cot == "off":
             frac = 0.55 * min(1.0, counts["semantic"] / max(1, sem_budget))
         else:

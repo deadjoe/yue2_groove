@@ -12,7 +12,8 @@ measured ([LINUX_CUDA.md](LINUX_CUDA.md)); Windows numbers are estimates (§4).
 | **16 GB** (RTX 4060 Ti 16G, 4070 Ti Super, 4080, 5060 Ti 16G, 5070 Ti, 5080, …) | Yes | Everything, including the longest song the app can make (6 min) at any CFG | Nothing |
 | **12 GB** (RTX 3060 12G, 4070, 4070 Super, 4070 Ti, 5070, …) — Linux or Docker | With limits | Songs of ~5 min at CFG 1.0 · songs ≤ 3 min at CFG 1.5 · longer at CFG 1.5: §3 | MEMORY BUDGET **12**, CFG SCALE **empty** |
 | **12 GB** — Windows | Borderline | Songs ≤ 3 min at CFG 1.0 to start · CFG 1.5: FP8 or Docker (§3) | MEMORY BUDGET **12**, CFG SCALE **empty**, max_tokens **4 500** |
-| **8–11 GB** (RTX 4060, 3070, 3080 10G, all RTX 20 series, …) | **No** | — | Rent a cloud GPU (RunPod, …) with the [Docker image](../deploy/docker/README.md); 16 GB there is enough |
+| **12 GB**, any OS, with the [GGUF engine](GGUF_ENGINE.md) installed | Yes | Full-length songs at any CFG, faster AR stage; a different take for the same seed | Nothing — BACKEND=auto picks it |
+| **8–11 GB** (RTX 4060, 3070, 3080 10G, all RTX 20 series, …) | **No** on the reference engine | — | The [GGUF engine](GGUF_ENGINE.md) with `YUE2_GROOVE_GGUF_MAX_SEQ` (untested on real 8 GB cards), or a cloud GPU (RunPod, …) with the [Docker image](../deploy/docker/README.md); 16 GB there is enough |
 
 ## 2. Where to set it
 
@@ -37,6 +38,7 @@ Start at the top; go down one row only if that row is not what you want.
 | CFG 1.5, song ≤ 3 min | + max_tokens **4 500**, shorter lyrics | Works (measured with a 2-min song) |
 | CFG 1.5, song ≤ 4:45 | + max_tokens **7 200** | Works with almost no margin; long lyrics or a long score can push it over |
 | CFG 1.5, full length | QUANTIZATION → **fp8** (RTX 40 series or newer; not RTX 30) | Works, **~4× slower** (23 min instead of 5½ on an L4) |
+| CFG 1.5, full length, any card | Install the [GGUF engine](GGUF_ENGINE.md) (`python -m yue2_groove.gguf_engine install`) | Works, faster than FP8; not the reference configuration — a different take for the same seed |
 | Windows: the Linux rows above | [Docker image](../deploy/docker/README.md) under Docker Desktop + WSL2 | Linux numbers and speed |
 
 Every one of these changes (CFG, length, FP8, Windows vs Linux) turns the same seed into a
@@ -67,5 +69,5 @@ on Windows, see the last row of §4.
 |---|---|
 | OFFLOAD AR WEIGHTS | Does not lower the peak (measured) |
 | ODE STEPS | Changes render time and sound, not memory |
-| DTYPE, BACKEND, VAE CORE FRAMES | `auto` / `torch` / `auto`; the app picks the right path |
+| DTYPE, BACKEND, VAE CORE FRAMES | Leave what the app picked: `auto` / the launch default / `auto`. BACKEND → `gguf` is the one deliberate change, see §1 |
 | MEMORY BUDGET below your card's size | Saves nothing; runs fail sooner |

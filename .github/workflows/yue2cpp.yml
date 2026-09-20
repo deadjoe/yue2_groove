@@ -1,0 +1,189 @@
+# Builds the yue2.cpp binaries the GGUF engine (yue2_groove/gguf_engine.py) runs, at the
+# commit that module pins, for the three platforms the app supports — and attaches them to
+# the app's GitHub release so the launcher and `python -m yue2_groove.gguf_engine install`
+# can fetch them.  yue2.cpp is MIT (its LICENSE ships inside every archive).
+#
+#   release published  → build all three, upload as release assets (yue2cpp-<pin>-<platform>)
+#   workflow_dispatch  → build, upload as workflow artifacts; with `release_tag`, also attach
+#
+# Keep `YUE2CPP_REF` equal to `gguf_engine.YUE2CPP_PIN`; tests/test_gguf_engine.py does not
+# check that (it cannot see this file) — the release ritual does.
+name: yue2.cpp binaries
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to attach the binaries to (empty: artifacts only)"
+        required: false
+        type: string
+
+env:
+  YUE2CPP_REPO: ServeurpersoCom/yue2.cpp
+  YUE2CPP_REF: e8b39f7
+  VULKAN_SDK_VERSION: 1.4.309.0
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    name: linux-x64 (CUDA + Vulkan + CPU)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.YUE2CPP_REPO }}
+          ref: ${{ env.YUE2CPP_REF }}
+          submodules: recursive
+      - name: Build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake build-essential pkg-config libopenblas-dev patchelf
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          create-symlink: true
+          key: yue2cpp-linux-${{ env.YUE2CPP_REF }}
+      - uses: Jimver/cuda-toolkit@v0.2.30
+        with:
+          cuda: "12.8.1"
+          log-file-suffix: linux.txt
+      - uses: humbletim/install-vulkan-sdk@v1.2
+        with:
+          version: ${{ env.VULKAN_SDK_VERSION }}
+          cache: true
+      - name: Configure and build
+        run: |
+          export PATH=/usr/local/cuda/bin:$PATH
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_CPU_ALL_VARIANTS=ON -DGGML_CUDA=ON -DGGML_VULKAN=ON -DGGML_BACKEND_DL=ON \
+            -DGGML_BLAS=ON
+          cmake --build build --config Release -j "$(nproc)"
+      - name: Package
+        run: |
+          set -e
+          mkdir -p dist
+          cp build/yue-synth build/yue-plan build/yue-server build/yue-transcribe \
+             build/neural-codec build/quantize build/mp3-codec dist/
+          find build -name 'libggml*.so*' -exec cp -P {} dist/ \;
+          # the CUDA runtime the cuda backend needs on a machine that has only the driver
+          for lib in libcudart.so.12 libcublas.so.12 libcublasLt.so.12; do
+            cp "$(find /usr/local/cuda -name "$lib" | head -1)" dist/
+          done
+          for bin in dist/yue-* dist/neural-codec dist/quantize dist/mp3-codec; do
+            patchelf --set-rpath '$ORIGIN' "$bin"
+          done
+          for lib in dist/libggml*.so*; do
+            [ -L "$lib" ] || patchelf --set-rpath '$ORIGIN' "$lib" || true
+          done
+          cp LICENSE dist/LICENSE.yue2cpp
+          echo "yue2.cpp ${YUE2CPP_REF} linux-x64 cuda12.8 vulkan cpu" > dist/VERSION
+          tar -C dist -czf "yue2cpp-${YUE2CPP_REF}-linux-x64.tar.gz" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yue2cpp-${{ env.YUE2CPP_REF }}-linux-x64
+          path: yue2cpp-${{ env.YUE2CPP_REF }}-linux-x64.tar.gz
+      - name: Attach to release
+        if: github.event_name == 'release' || inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name || inputs.release_tag }}" \
+            "yue2cpp-${YUE2CPP_REF}-linux-x64.tar.gz" --clobber
+
+  macos:
+    name: macos-arm64 (Metal)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.YUE2CPP_REPO }}
+          ref: ${{ env.YUE2CPP_REF }}
+          submodules: recursive
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          create-symlink: true
+          key: yue2cpp-macos-${{ env.YUE2CPP_REF }}
+      - name: Configure and build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DGGML_BLAS=ON
+          cmake --build build --config Release -j "$(sysctl -n hw.ncpu)"
+      - name: Package
+        run: |
+          set -e
+          mkdir -p dist
+          cd build
+          for bin in yue-synth yue-plan yue-server yue-transcribe neural-codec quantize mp3-codec; do
+            install_name_tool -add_rpath @executable_path "$bin"
+            cp "$bin" ../dist/
+          done
+          cp -P libggml*.dylib ../dist/
+          cd ..
+          cp LICENSE dist/LICENSE.yue2cpp
+          echo "yue2.cpp ${YUE2CPP_REF} macos-arm64 metal" > dist/VERSION
+          tar -C dist -czf "yue2cpp-${YUE2CPP_REF}-macos-arm64-metal.tar.gz" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yue2cpp-${{ env.YUE2CPP_REF }}-macos-arm64-metal
+          path: yue2cpp-${{ env.YUE2CPP_REF }}-macos-arm64-metal.tar.gz
+      - name: Attach to release
+        if: github.event_name == 'release' || inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name || inputs.release_tag }}" \
+            "yue2cpp-${YUE2CPP_REF}-macos-arm64-metal.tar.gz" --clobber
+
+  windows:
+    name: windows-x64 (CUDA + Vulkan + CPU)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.YUE2CPP_REPO }}
+          ref: ${{ env.YUE2CPP_REF }}
+          submodules: recursive
+      - uses: Jimver/cuda-toolkit@v0.2.30
+        with:
+          cuda: "12.8.1"
+          log-file-suffix: windows.txt
+      - uses: humbletim/install-vulkan-sdk@v1.2
+        with:
+          version: ${{ env.VULKAN_SDK_VERSION }}
+          cache: true
+      - name: Configure and build
+        shell: pwsh
+        run: |
+          cmake -S . -B build -DGGML_CPU_ALL_VARIANTS=ON -DGGML_CUDA=ON -DGGML_VULKAN=ON -DGGML_BACKEND_DL=ON
+          cmake --build build --config Release -j $env:NUMBER_OF_PROCESSORS -- /v:minimal
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist | Out-Null
+          Get-ChildItem -Recurse build -Include yue-*.exe, neural-codec.exe, quantize.exe, mp3-codec.exe, ggml*.dll |
+            ForEach-Object { Copy-Item $_.FullName dist\ }
+          # the CUDA runtime the cuda backend needs on a machine that has only the driver
+          $cuda = $env:CUDA_PATH
+          foreach ($dll in @("cudart64_12.dll", "cublas64_12.dll", "cublasLt64_12.dll")) {
+            Copy-Item (Join-Path $cuda "bin\$dll") dist\
+          }
+          Copy-Item LICENSE dist\LICENSE.yue2cpp
+          "yue2.cpp $env:YUE2CPP_REF windows-x64 cuda12.8 vulkan cpu" | Out-File -Encoding ascii dist\VERSION
+          Compress-Archive -Path dist\* -DestinationPath "yue2cpp-$env:YUE2CPP_REF-windows-x64.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yue2cpp-${{ env.YUE2CPP_REF }}-windows-x64
+          path: yue2cpp-${{ env.YUE2CPP_REF }}-windows-x64.zip
+      - name: Attach to release
+        if: github.event_name == 'release' || inputs.release_tag != ''
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $tag = "${{ github.event.release.tag_name || inputs.release_tag }}"
+          gh release upload $tag "yue2cpp-$env:YUE2CPP_REF-windows-x64.zip" --clobber

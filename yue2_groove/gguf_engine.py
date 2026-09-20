@@ -1,0 +1,990 @@
+"""The GGUF engine: YuE2 through yue2.cpp (GGML) instead of PyTorch.
+
+A second, clearly labelled engine for cards the reference configuration does not fit —
+12 GB and 8 GB NVIDIA cards, and Windows hosts whose PyTorch build has no FlashAttention.
+It runs ``yue-synth`` / ``yue-plan`` / ``neural-codec`` from the pinned yue2.cpp release
+as child processes (the same boundary the SheetSage2 environment uses: JSON in, files
+out, nothing imported), and writes the same run directory the PyTorch engine writes, so
+04 LIBRARY / 03 EDIT / 06 DECODE / the comparison page accept a GGUF run like any other.
+
+What it is not: the reference configuration.  Even the BF16 GGUF does not reproduce the
+PyTorch engine bit for bit, and a quantized backbone samples a *different take* for the
+same seed (any perturbation forks the token stream — see docs/CROSS_PLATFORM.md).  Runs
+record ``engine`` / GGUF hashes in ``config.json`` and ``result.json`` so the two never mix.
+
+Measured (docs/GGUF_ENGINE.md): with the reference run's tokens and noise, Q8_0's rendering
+lands 24 dB from the CUDA reference — the same size as a CUDA → MPS platform change — and
+was not distinguishable from it in a blind ABX (6/12).  Q6_K and below degrade measurably.
+
+Selection: ``YUE2_GROOVE_BACKEND=auto`` (the default) picks this engine on a CUDA host whose
+card has less than ``YUE2_GROOVE_GGUF_VRAM_GIB`` (16) GiB and a yue2.cpp binary installed;
+otherwise the PyTorch engine.  BACKEND in the settings rail overrides either way.
+
+Layout: binaries in ``YUE2_GROOVE_YUE2CPP`` (default ``<repo>/bin/yue2cpp``, else PATH);
+GGUF files in ``YUE2_GROOVE_GGUF`` (default ``<repo>/models/gguf``), prepared on first use
+from the already-downloaded checkpoints with yue2.cpp's own converter (vendored,
+byte-identical) and ``quantize`` — the local Q8_0 is tensor-for-tensor identical to the
+published ``Serveurperso/YuE2-GGUF`` file.  ``YUE2_GROOVE_GGUF_QUANT`` (Q8_0) picks the
+variant; ``YUE2_GROOVE_GGUF_MAX_SEQ`` caps the KV cache for 8 GB cards.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import hashlib
+import importlib.util
+import json
+import os
+import platform
+import queue
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+from . import config
+
+# The yue2.cpp revision this engine is written against (request JSON fields, CLI flags,
+# log lines parsed below).  The CI workflow builds exactly this commit; bump both together.
+YUE2CPP_PIN = "e8b39f7"
+YUE2CPP_REPO = "https://github.com/ServeurpersoCom/yue2.cpp"
+
+QUANTS = ("Q8_0", "Q6_K", "Q5_K_M", "BF16")
+DEFAULT_QUANT = "Q8_0"
+DEFAULT_VRAM_THRESHOLD_GIB = 16.0
+CONTEXT = 24576
+CODEC_OFFSET = 151853
+SAMPLE_RATE = 48000
+
+BINARIES = ("yue-synth", "yue-plan", "neural-codec", "quantize")
+
+INSTALL_HINT = (
+    "yue2.cpp binaries not found. Download the yue2cpp-<platform> asset of this release "
+    "(github.com/deadjoe/yue2_groove/releases) into <repo>/bin/yue2cpp, or set "
+    "YUE2_GROOVE_YUE2CPP to a directory holding yue-synth / yue-plan / neural-codec / "
+    f"quantize (built from {YUE2CPP_REPO} at {YUE2CPP_PIN})."
+)
+
+StageProgress = Callable[[str, int, int], None]
+
+
+# ── locating things ──────────────────────────────────────────────────────────
+
+
+def repo_root() -> Path:
+    return config.PACKAGE_DIR.parent
+
+
+def binary_dir() -> Path | None:
+    """Directory holding the yue2.cpp binaries, or None when none is installed."""
+    explicit = (os.environ.get("YUE2_GROOVE_YUE2CPP") or "").strip()
+    candidates = [Path(explicit).expanduser()] if explicit else []
+    candidates.append(repo_root() / "bin" / "yue2cpp")
+    for candidate in candidates:
+        if _binary(candidate, "yue-synth") is not None:
+            return candidate
+    on_path = shutil.which("yue-synth")
+    return Path(on_path).parent if on_path else None
+
+
+def _binary(directory: Path, name: str) -> Path | None:
+    for suffix in ("", ".exe"):
+        candidate = directory / f"{name}{suffix}"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def binary(name: str) -> Path:
+    directory = binary_dir()
+    found = _binary(directory, name) if directory is not None else None
+    if found is None:
+        raise RuntimeError(INSTALL_HINT)
+    return found
+
+
+def available() -> bool:
+    return binary_dir() is not None
+
+
+def gguf_dir() -> Path:
+    explicit = (os.environ.get("YUE2_GROOVE_GGUF") or "").strip()
+    if explicit:
+        return Path(explicit).expanduser()
+    models = (os.environ.get("YUE2_GROOVE_MODELS") or "").strip()
+    if models:
+        return Path(models).expanduser() / "gguf"
+    return repo_root() / "models" / "gguf"
+
+
+def quant() -> str:
+    value = (os.environ.get("YUE2_GROOVE_GGUF_QUANT") or DEFAULT_QUANT).strip().upper()
+    return value if value in QUANTS else DEFAULT_QUANT
+
+
+def max_seq() -> int | None:
+    """Optional KV-cache cap (``--max-seq``) for cards the full 24 576 context does not fit."""
+    raw = (os.environ.get("YUE2_GROOVE_GGUF_MAX_SEQ") or "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if 0 < value < CONTEXT else None
+
+
+def vram_threshold_gib() -> float:
+    try:
+        return float(os.environ.get("YUE2_GROOVE_GGUF_VRAM_GIB") or DEFAULT_VRAM_THRESHOLD_GIB)
+    except ValueError:
+        return DEFAULT_VRAM_THRESHOLD_GIB
+
+
+def backbone_name(quant_label: str) -> str:
+    return f"YuE2-3B-{quant_label}.gguf"
+
+
+VAE_NAME = "YuE2-Vae-F32.gguf"
+
+
+def auto_backend(device: str, total_vram_gib: float | None, *, installed: bool | None = None):
+    """``(backend, reason)`` for BACKEND=auto.
+
+    The GGUF engine is chosen only for a CUDA card below the threshold with the binaries
+    installed; every other host keeps the reference PyTorch engine.  *reason* says why, for
+    the status line and the log — including why a small card did **not** get it.
+    """
+    installed = available() if installed is None else installed
+    threshold = vram_threshold_gib()
+    if device != "cuda" or total_vram_gib is None:
+        return "torch", ""
+    if total_vram_gib >= threshold:
+        return "torch", ""
+    if not installed:
+        return "torch", (
+            f"{total_vram_gib:.0f} GiB card: the GGUF engine would fit better, but no yue2.cpp "
+            "binaries are installed (see docs/GGUF_ENGINE.md)"
+        )
+    return (
+        "gguf",
+        f"auto: {total_vram_gib:.0f} GiB card < {threshold:.0f} GiB → GGUF {quant()} engine",
+    )
+
+
+def cuda_total_vram_gib() -> float | None:
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return None
+        return torch.cuda.get_device_properties(0).total_memory / 2**30
+    except Exception:  # noqa: BLE001 — no torch / no driver: the rule simply does not apply
+        return None
+
+
+# ── hashes ───────────────────────────────────────────────────────────────────
+
+
+def sha256_file(path: Path, *, cache: bool = True) -> str:
+    """SHA-256 of a (large) file; cached in ``<file>.sha256`` keyed by size + mtime."""
+    path = Path(path)
+    stat = path.stat()
+    side = path.with_name(path.name + ".sha256")
+    if cache and side.is_file():
+        try:
+            cached = json.loads(side.read_text(encoding="utf-8"))
+            if cached.get("bytes") == stat.st_size and cached.get("mtime") == stat.st_mtime:
+                return cached["sha256"]
+        except (OSError, ValueError, KeyError):
+            pass
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 24), b""):
+            h.update(chunk)
+    digest = h.hexdigest()
+    if cache:
+        with contextlib.suppress(OSError):
+            side.write_text(
+                json.dumps({"sha256": digest, "bytes": stat.st_size, "mtime": stat.st_mtime}),
+                encoding="utf-8",
+            )
+    return digest
+
+
+# ── preparing the GGUF files ─────────────────────────────────────────────────
+
+
+def prepare(
+    model_dir: Path,
+    vae_dir: Path,
+    out_dir: Path | None = None,
+    *,
+    quant_label: str | None = None,
+    log: Callable[[str], None] | None = None,
+) -> tuple[Path, Path]:
+    """Make sure ``<out>/YuE2-3B-<quant>.gguf`` and ``<out>/YuE2-Vae-F32.gguf`` exist.
+
+    Converts the checkpoint directories with yue2.cpp's converter (a byte-identical vendored
+    copy driven in a child interpreter) and quantizes with the release's ``quantize``; the
+    BF16 intermediate is removed afterwards (a quant other than BF16 needs about 4.3 GB of
+    disk in total).  Idempotent: existing files are kept.  Returns ``(backbone, vae)``.
+    """
+    out_dir = Path(out_dir or gguf_dir())
+    quant_label = quant_label or quant()
+    say = log or (lambda _msg: None)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    backbone = out_dir / backbone_name(quant_label)
+    vae = out_dir / VAE_NAME
+    native = out_dir / backbone_name("BF16")
+
+    need_native = not native.is_file() and not backbone.is_file()
+    if need_native or not vae.is_file():
+        components = {}
+        if need_native:
+            components["backbone"] = str(Path(model_dir).resolve())
+        if not vae.is_file():
+            components["vae"] = str(Path(vae_dir).resolve())
+        say(f"Converting checkpoints to GGUF ({', '.join(components)}) — one-time, a few minutes…")
+        _run_converter(components, out_dir, say)
+    if not backbone.is_file():
+        if quant_label == "BF16":
+            raise RuntimeError(f"conversion did not produce {native}")
+        say(f"Quantizing to {quant_label} — one-time…")
+        _run([str(binary("quantize")), str(native), str(backbone), quant_label], say)
+        # the 7.2 GB BF16 intermediate is not needed at run time; re-converting takes seconds
+        with contextlib.suppress(OSError):
+            native.unlink()
+    for path in (backbone, vae):
+        if not path.is_file():
+            raise RuntimeError(f"GGUF preparation did not produce {path}")
+    return backbone, vae
+
+
+def _run_converter(components: dict[str, str], out_dir: Path, say) -> None:
+    """The vendored converter in a child interpreter: paths patched, memory released on exit."""
+    if importlib.util.find_spec("gguf") is None:
+        raise RuntimeError(
+            "GGUF conversion needs the `gguf` package: uv pip install gguf   "
+            "(or point YUE2_GROOVE_GGUF at a directory with ready-made GGUF files)"
+        )
+    code = (
+        "import json, sys\n"
+        "import yue2_groove.vendor.yue2cpp_convert as cv\n"
+        "spec = json.loads(sys.argv[1])\n"
+        "cv.CHECKPOINT_DIR = ''\n"
+        "cv.OUTPUT_DIR = spec['out']\n"
+        "cv.COMPONENTS.update(spec['components'])\n"
+        "for name in spec['components']:\n"
+        "    cv.convert(name)\n"
+    )
+    spec = json.dumps({"out": str(out_dir), "components": components})
+    _run([sys.executable, "-c", code, spec], say)
+
+
+def _run(argv: list[str], say) -> None:
+    proc = subprocess.Popen(
+        argv,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        env=config.child_env(),
+        **config.SUBPROCESS_TEXT,
+    )
+    tail: list[str] = []
+    assert proc.stderr is not None
+    for raw in proc.stderr:
+        line = raw.rstrip()
+        if line:
+            tail = (tail + [line])[-20:]
+            say(line)
+    if proc.wait() != 0:
+        raise RuntimeError(
+            f"{Path(argv[0]).name} failed (exit {proc.returncode}):\n" + "\n".join(tail)
+        )
+
+
+# ── the request ──────────────────────────────────────────────────────────────
+
+
+def _sampling_dict(sampling) -> dict:
+    return {
+        "temperature": float(sampling.temperature),
+        "top_p": float(sampling.top_p),
+        "top_k": int(sampling.top_k),
+        "repetition_penalty": float(sampling.repetition_penalty),
+        "penalty_window": int(sampling.penalty_window),
+        "min_tokens": int(sampling.min_tokens),
+        "max_tokens": int(sampling.max_tokens),
+    }
+
+
+def build_request(request, *, abc_sampling, semantic_sampling, steps: int, semantic_tokens=None):
+    """yue2.cpp's request JSON from the app's ``SongRequest`` and two ``Sampling`` values.
+
+    Field for field the same protocol: ``cot`` / ``abc`` / ``cfg_scale`` (``-1`` = protocol
+    default, exactly like ``cfg_scale=None`` upstream), both seeds from the one request seed
+    (upstream runs both stages from it), ``duration`` left at the semantic cap.
+    """
+    payload = {
+        "style": request.style,
+        "lyrics": request.lyrics,
+        "abc": request.abc or "",
+        "cot": request.cot,
+        "lm_seed": int(request.seed),
+        "seed": int(request.seed),
+        "steps": int(steps),
+        "cfg_scale": -1.0 if request.cfg_scale is None else float(request.cfg_scale),
+        "output_format": "wav32",
+        "abc_sampling": _sampling_dict(abc_sampling),
+        "semantic_sampling": _sampling_dict(semantic_sampling),
+    }
+    if semantic_tokens is not None:
+        payload["semantic_tokens"] = ",".join(str(int(t)) for t in semantic_tokens)
+    return payload
+
+
+# ── the child process ────────────────────────────────────────────────────────
+
+# yue2.cpp labels its two AR phases "Score" and "Semantic"; the app calls them abc / semantic
+_PHASE = {"Score": "abc", "Semantic": "semantic"}
+_AR_STEP = re.compile(r"^\[AR\] (Score|Semantic) (\d+)/(\d+)$")
+_AR_SONG = re.compile(r"^\[AR\] (Score|Semantic) song 0: (\d+) tokens( \(truncated\))?$")
+_AR_DONE = re.compile(
+    r"^\[AR\] (Score|Semantic): (\d+) tokens over \d+ songs, (\d+) steps, ([\d.]+) s \(([\d.]+) ms/step\)$"
+)
+_NAR_STEP = re.compile(r"^\[NAR\] Step (\d+)/(\d+), (\d+) ms$")
+_VAE_DONE = re.compile(r"^\[VAE\] Tiled decode done: .* (\d+) ms$")
+_VAE_ONE = re.compile(r"^\[VAE\] Decoded: .* (\d+) ms$")  # a song of one tile decodes untiled
+_PIPE_DONE = re.compile(r"^\[Pipeline\] Done: .* in ([\d.]+) s")
+_BACKEND = re.compile(r"^\[Load\] (?:LM|NAR|VAE|KV) backend: (\S+)")
+_LOAD = re.compile(r"^\[Store\] Load (LM|NAR|VAE): (\d+) ms$")
+_FATAL = re.compile(r"FATAL: (.*)$")
+
+
+@dataclass
+class ChildLog:
+    """What the parser pulled out of a yue2.cpp stderr stream."""
+
+    backend: str = ""
+    timing: dict = field(default_factory=dict)
+    truncated: dict = field(default_factory=lambda: {"abc": False, "semantic": False})
+    tokens: dict = field(default_factory=lambda: {"abc": 0, "semantic": 0})
+    fatal: str = ""
+    lines: list[str] = field(default_factory=list)
+
+
+def _advance(log: ChildLog, phase: str, count: int, on_token) -> None:
+    """The AR stage reports every 100 tokens; ``on_token(phase, None, count=stride)`` once per report."""
+    delta = count - log.tokens[phase]
+    if delta > 0:
+        log.tokens[phase] = count
+        if on_token is not None:
+            on_token(phase, None, count=delta)
+
+
+def parse_line(
+    line: str, log: ChildLog, *, on_token=None, on_progress: StageProgress | None = None
+):
+    """Fold one stderr line into *log*, forwarding progress to the app's callbacks.
+
+    ``on_token(phase, token, count=)`` is the app's per-token callback with a stride: the
+    child prints ``[AR] Score 100/4096`` every 100 tokens, not one line per token."""
+    log.lines = (log.lines + [line])[-40:]
+    m = _BACKEND.match(line)
+    if m and not log.backend:
+        log.backend = m.group(1)
+        return
+    m = _AR_STEP.match(line)
+    if m:
+        _advance(log, _PHASE[m.group(1)], int(m.group(2)), on_token)
+        return
+    m = _AR_SONG.match(line)
+    if m:
+        phase = _PHASE[m.group(1)]
+        log.truncated[phase] = bool(m.group(3))
+        _advance(log, phase, int(m.group(2)), on_token)
+        return
+    m = _AR_DONE.match(line)
+    if m:
+        label, count, steps, seconds, ms = m.groups()
+        log.timing[_PHASE[label]] = {
+            "seconds": float(seconds),
+            "output_tokens": int(count),
+            "steps": int(steps),
+            "ms_per_step": float(ms),
+            "output_tps": int(count) / float(seconds) if float(seconds) > 0 else 0.0,
+        }
+        return
+    m = _NAR_STEP.match(line)
+    if m:
+        done, total, ms = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        log.timing["nar_seconds"] = log.timing.get("nar_seconds", 0.0) + ms / 1000
+        if on_progress is not None:
+            on_progress("nar", done, total)
+        return
+    m = _VAE_DONE.match(line) or _VAE_ONE.match(line)
+    if m:
+        log.timing["vae_seconds"] = int(m.group(1)) / 1000
+        if on_progress is not None:
+            on_progress("vae", 1, 1)
+        return
+    m = _LOAD.match(line)
+    if m:
+        log.timing.setdefault("load", {})[f"{m.group(1).lower()}_load_seconds"] = (
+            int(m.group(2)) / 1000
+        )
+        return
+    m = _PIPE_DONE.match(line)
+    if m:
+        log.timing["e2e_seconds"] = float(m.group(1))
+        return
+    m = _FATAL.search(line)
+    if m and not log.fatal:
+        log.fatal = m.group(1).strip()
+
+
+def run_child(
+    argv: list[str],
+    *,
+    cancelled=None,
+    on_token=None,
+    on_progress: StageProgress | None = None,
+    cwd: Path | None = None,
+) -> ChildLog:
+    """Run a yue2.cpp binary, streaming its stderr through :func:`parse_line`.
+
+    ``cancelled()`` is polled twice a second; a cancel terminates the child and raises
+    ``InterruptedError`` (the app treats that as "cancelled", not "failed").
+    """
+    log = ChildLog()
+    proc = subprocess.Popen(
+        argv,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        cwd=str(cwd) if cwd else None,
+        env=config.child_env(),
+        **config.SUBPROCESS_TEXT,
+    )
+    lines: queue.Queue[str | None] = queue.Queue()
+
+    def pump():  # the reader only queues; parsing (and the callbacks) stay on the caller's thread
+        assert proc.stderr is not None
+        for raw in proc.stderr:
+            lines.put(raw.rstrip("\r\n"))
+        lines.put(None)
+
+    threading.Thread(target=pump, daemon=True).start()
+    while True:
+        try:
+            line = lines.get(timeout=0.5)
+        except queue.Empty:
+            line = ""
+        else:
+            if line is None:
+                break
+        if line:
+            parse_line(line, log, on_token=on_token, on_progress=on_progress)
+        if cancelled is not None and cancelled() and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            raise InterruptedError("yue2.cpp stopped")
+    code = proc.wait()
+    if code != 0:
+        detail = log.fatal or "\n".join(log.lines[-8:])
+        raise RuntimeError(f"{Path(argv[0]).name} failed (exit {code}): {detail}")
+    return log
+
+
+# ── the pipeline object the app holds ────────────────────────────────────────
+
+
+@dataclass
+class GgufPipeline:
+    """Stands in for the loaded PyTorch pipeline in ``runtime._PIPE``.
+
+    Nothing is resident: every generation is one ``yue-synth`` process (Metal pays a
+    ~20 s shader compile per process; CUDA a second or two of loads from the page cache).
+    ``adapter.generate / plan / decode / model_dtype / close_pipeline`` dispatch on this type.
+    """
+
+    backbone: Path
+    vae: Path
+    model_dir: Path
+    vae_dir: Path
+    quant: str
+    ode_steps: int = 32
+    vae_core_frames: int | None = None
+    max_seq: int | None = None
+    device: str = "gguf"  # replaced by the child's backend name (MTL0 / CUDA0 / …) after a run
+    weights: dict = field(default_factory=dict)
+
+    engine = "yue2.cpp"
+
+    @classmethod
+    def open(
+        cls,
+        *,
+        model_dir: Path,
+        vae_dir: Path,
+        ode_steps: int,
+        vae_core_frames: int | None,
+        quant_label: str | None = None,
+        log: Callable[[str], None] | None = None,
+    ) -> GgufPipeline:
+        binary("yue-synth")  # fail early, with the install hint
+        quant_label = quant_label or quant()
+        backbone, vae = prepare(model_dir, vae_dir, quant_label=quant_label, log=log)
+        weights = {
+            "mot": {
+                "files": {
+                    backbone.name: {
+                        "sha256": sha256_file(backbone),
+                        "bytes": backbone.stat().st_size,
+                    }
+                }
+            },
+            "vae": {"files": {vae.name: {"sha256": sha256_file(vae), "bytes": vae.stat().st_size}}},
+        }
+        return cls(
+            backbone=backbone,
+            vae=vae,
+            model_dir=Path(model_dir),
+            vae_dir=Path(vae_dir),
+            quant=quant_label,
+            ode_steps=int(ode_steps),
+            vae_core_frames=vae_core_frames,
+            max_seq=max_seq(),
+            weights=weights,
+        )
+
+    # the attributes the tabs read off the PyTorch pipeline
+    @property
+    def dtype_label(self) -> str:
+        return f"{self.quant.lower()} (gguf)"
+
+    def _common_flags(self) -> list[str]:
+        flags = []
+        if self.max_seq:
+            flags += ["--max-seq", str(self.max_seq)]
+        return flags
+
+    def _synth_flags(self) -> list[str]:
+        flags = self._common_flags()
+        if self.vae_core_frames:
+            flags += ["--vae-core", str(self.vae_core_frames)]
+        return flags
+
+    def config_dict(self, request, abc_sampling, semantic_sampling) -> dict:
+        """``config.json`` for a GGUF run: the keys the Library reads, plus ``engine``."""
+        guidance = request.guidance
+        return {
+            "generation": {
+                "abc": _sampling_dict(abc_sampling),
+                "semantic": _sampling_dict(semantic_sampling),
+                "ode_steps": self.ode_steps,
+                "ode_method": "midpoint",
+                "context": CONTEXT,
+                "version": "yue2-native-v1",
+            },
+            "overrides": {} if request.cfg_scale is None else {"cfg_scale": guidance},
+            "cot": request.cot,
+            "cfg_scale": guidance,
+            "cfg_negative": "instruction_only"
+            if request.cot == "off"
+            else "same_instruction_and_exact_abc",
+            "backend": "gguf",
+            "quantization": self.quant,
+            "model_dtype": self.dtype_label,
+            "vae_dtype": "float32",
+            "vae_decode": "halo_crop",
+            "vae_core_frames": self.vae_core_frames or 512,
+            "vae_halo_frames": 16,
+            "device": self.device,
+            "memory_budget_gib": None,
+            "max_seq": self.max_seq,
+            "offload_ar": False,
+            "engine": {
+                "name": "yue2.cpp",
+                "pin": YUE2CPP_PIN,
+                "backbone_gguf": self.backbone.name,
+                "vae_gguf": self.vae.name,
+            },
+            "validation_status": "unvalidated",
+        }
+
+    def generate(
+        self,
+        request,
+        *,
+        abc_sampling,
+        semantic_sampling,
+        cancelled=None,
+        on_token=None,
+        on_progress: StageProgress | None = None,
+    ) -> GgufSong:
+        from . import adapter  # tokenizer + plan objects come through the one yue2 door
+
+        payload = build_request(
+            request,
+            abc_sampling=abc_sampling,
+            semantic_sampling=semantic_sampling,
+            steps=self.ode_steps,
+        )
+        started = time.perf_counter()
+        with tempfile.TemporaryDirectory(prefix="yue2cpp-") as tmp:
+            work = Path(tmp)
+            (work / "request.json").write_text(
+                json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+            )
+            argv = [
+                str(binary("yue-synth")),
+                "--model",
+                str(self.backbone),
+                "--vae",
+                str(self.vae),
+                "--request",
+                str(work / "request.json"),
+                "--out",
+                str(work / "audio.wav"),
+                "--tokens",
+                str(work / "tokens.csv"),
+                "--latent",
+                str(work / "latent.vae"),
+                "--score",
+                str(work / "score.abc"),
+                *self._synth_flags(),
+            ]
+            log = run_child(argv, cancelled=cancelled, on_token=on_token, on_progress=on_progress)
+            if log.backend:
+                self.device = log.backend
+            audio = _read_wav32(work / "audio.wav")
+            tokens = [
+                int(t) for t in (work / "tokens.csv").read_text().strip().split(",") if t.strip()
+            ]
+            latents = np.fromfile(work / "latent.vae", dtype=np.float32).reshape(-1, 64)
+            score = (
+                (work / "score.abc").read_text(encoding="utf-8")
+                if (work / "score.abc").is_file()
+                else None
+            )
+        if request.cot == "off":
+            score = None
+        elif request.abc is not None:
+            score = request.abc  # the exact text the prefix was built from
+        tokenizer = adapter.text_tokenizer(self.model_dir)
+        abc_ids = tokenizer.encode(score) if score is not None else []
+        prefix = adapter.token_prefixes(request, tokenizer, abc_ids if score is not None else None)
+        plan_timing = (
+            {"seconds": 0.0, "output_tokens": 0, "external_prefix_tokens": len(abc_ids)}
+            if request.abc is not None
+            else log.timing.get("abc", {"seconds": 0.0, "output_tokens": 0})
+        )
+        plan = adapter.symbolic_plan(
+            request, score, abc_ids, prefix, plan_timing, log.truncated["abc"]
+        )
+        timing = {
+            "abc": plan_timing,
+            "semantic": log.timing.get("semantic", {"seconds": 0.0, "output_tokens": len(tokens)}),
+            "nar_seconds": log.timing.get("nar_seconds", 0.0),
+            "vae_seconds": log.timing.get("vae_seconds", 0.0),
+            "load": log.timing.get("load", {}),
+            "e2e_seconds": time.perf_counter() - started,
+            "engine_seconds": log.timing.get("e2e_seconds"),
+        }
+        cfg = self.config_dict(request, abc_sampling, semantic_sampling)
+        identity = adapter.identity(
+            {"request": request.to_dict(), "config": cfg, "weights": self.weights}
+        )
+        return GgufSong(
+            audio=audio,
+            plan=plan,
+            tokens=tokens,
+            latents=latents,
+            config=cfg,
+            weights=self.weights,
+            timing=timing,
+            request_identity=identity,
+            truncated={"abc": log.truncated["abc"], "semantic": log.truncated["semantic"]},
+            child_tail=list(log.lines),
+        )
+
+    def plan(self, request, *, abc_sampling, cancelled=None):
+        from . import adapter
+
+        tokenizer = adapter.text_tokenizer(self.model_dir)
+        if request.cot == "off":
+            return adapter.symbolic_plan(
+                request, None, [], adapter.token_prefixes(request, tokenizer), {}, False
+            )
+        if request.abc is not None:
+            ids = tokenizer.encode(request.abc)
+            return adapter.symbolic_plan(
+                request,
+                request.abc,
+                ids,
+                adapter.token_prefixes(request, tokenizer, ids),
+                {"seconds": 0.0, "output_tokens": 0, "external_prefix_tokens": len(ids)},
+                False,
+            )
+        payload = build_request(
+            request, abc_sampling=abc_sampling, semantic_sampling=abc_sampling, steps=self.ode_steps
+        )
+        with tempfile.TemporaryDirectory(prefix="yue2cpp-") as tmp:
+            work = Path(tmp)
+            (work / "request.json").write_text(
+                json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+            )
+            argv = [
+                str(binary("yue-plan")),
+                "--model",
+                str(self.backbone),
+                "--request",
+                str(work / "request.json"),
+                "--out",
+                str(work / "score.abc"),
+                *self._common_flags(),
+            ]
+            log = run_child(argv, cancelled=cancelled)
+            score = (work / "score.abc").read_text(encoding="utf-8")
+        ids = tokenizer.encode(score)
+        timing = log.timing.get("abc", {"seconds": 0.0, "output_tokens": len(ids)})
+        return adapter.symbolic_plan(
+            request,
+            score,
+            ids,
+            adapter.token_prefixes(request, tokenizer, ids),
+            timing,
+            log.truncated["abc"],
+        )
+
+    def decode(self, latents, *, full=False, vae=None, on_progress=None):
+        """``[T,64]`` latents → ``[N,2]`` float audio through ``neural-codec --decode``."""
+        if vae is not None:
+            raise RuntimeError(
+                "the GGUF engine decodes with its own VAE GGUF; VAE overrides need the torch backend"
+            )
+        with tempfile.TemporaryDirectory(prefix="yue2cpp-") as tmp:
+            work = Path(tmp)
+            np.ascontiguousarray(np.asarray(latents, dtype=np.float32)).tofile(work / "latent.vae")
+            argv = [
+                str(binary("neural-codec")),
+                "--vae",
+                str(self.vae),
+                "--decode",
+                "-i",
+                str(work / "latent.vae"),
+                "-o",
+                str(work / "audio.wav"),
+                "--format",
+                "wav32",
+            ]
+            if not full and self.vae_core_frames:
+                argv += ["--vae-core", str(self.vae_core_frames)]
+            if full:
+                argv += ["--vae-core", str(max(1, int(np.asarray(latents).shape[0])))]
+            run_child(argv)
+            audio = _read_wav32(work / "audio.wav")
+        if on_progress is not None:
+            on_progress(1, 1)
+        return audio
+
+    def close(self) -> None:
+        return None
+
+
+def _read_wav32(path: Path) -> np.ndarray:
+    import soundfile as sf
+
+    audio, rate = sf.read(path, dtype="float32", always_2d=True)
+    if rate != SAMPLE_RATE:
+        raise RuntimeError(f"unexpected sample rate {rate} from yue2.cpp")
+    return np.clip(audio, -1.0, 1.0)  # upstream clamps its decoder output the same way
+
+
+@dataclass
+class GgufSong:
+    """The ``SongResult`` shape ``runtime.run_generation`` consumes."""
+
+    audio: np.ndarray
+    plan: Any  # upstream's SymbolicPlan (adapter.symbolic_plan)
+    tokens: list[int]
+    latents: np.ndarray
+    config: dict
+    weights: dict
+    timing: dict
+    request_identity: str
+    truncated: dict
+    child_tail: list[str]
+    sample_rate: int = SAMPLE_RATE
+
+    @property
+    def abc(self):
+        return self.plan.abc
+
+    def save_artifacts(self, directory):
+        import soundfile as sf
+
+        from . import adapter
+
+        directory = Path(directory)
+        directory.mkdir(parents=True, exist_ok=True)
+        self.plan.save(directory)
+        sf.write(directory / "audio.flac", self.audio, self.sample_rate, subtype="PCM_24")
+        np.save(directory / "semantic.npy", np.asarray(self.tokens, dtype=np.int32))
+        np.save(directory / "latent.npy", self.latents.astype(np.float32))
+        _write_json(directory / "request.json", self.plan.request.to_dict())
+        _write_json(directory / "config.json", self.config)
+        result = {
+            "status": "complete",
+            "identity": self.request_identity,
+            "engine": self.config.get("engine"),
+            "truncated": self.truncated,
+            "sample_rate": self.sample_rate,
+            "audio_seconds": len(self.audio) / self.sample_rate,
+            "weights": self.weights,
+            "timing": self.timing,
+            "artifacts": adapter.collect_hashes(directory),
+        }
+        _write_json(directory / "result.json", result)
+        return result
+
+
+def _write_json(path: Path, value) -> None:
+    path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def local_env(pipe: GgufPipeline) -> dict:
+    """The ``local_env.json`` sidecar fields for a GGUF run."""
+    return {
+        "engine": "yue2.cpp",
+        "engine_pin": YUE2CPP_PIN,
+        "quantization": pipe.quant,
+        "backbone_gguf": pipe.backbone.name,
+        "platform": platform.platform(),
+    }
+
+
+# ── installing the binaries / preparing the models from the command line ─────
+# `python -m yue2_groove.gguf_engine install` fetches this platform's yue2cpp-<pin>-<platform>
+# asset from the app's GitHub release into <repo>/bin/yue2cpp (what the launcher's install
+# step calls); `prepare` converts + quantizes the GGUF files ahead of the first generation;
+# `check` prints what would be used.
+
+RELEASES = "https://github.com/deadjoe/yue2_groove/releases"
+
+
+def platform_asset() -> str:
+    """The release asset for this machine, or a RuntimeError naming why there is none."""
+    system, machine = platform.system(), platform.machine().lower()
+    if system == "Darwin" and machine in ("arm64", "aarch64"):
+        return f"yue2cpp-{YUE2CPP_PIN}-macos-arm64-metal.tar.gz"
+    if system == "Linux" and machine in ("x86_64", "amd64"):
+        return f"yue2cpp-{YUE2CPP_PIN}-linux-x64.tar.gz"
+    if system == "Windows" and machine in ("amd64", "x86_64"):
+        return f"yue2cpp-{YUE2CPP_PIN}-windows-x64.zip"
+    raise RuntimeError(f"no prebuilt yue2.cpp for {system}/{machine}; build it from {YUE2CPP_REPO}")
+
+
+def app_release_tag() -> str:
+    try:
+        from importlib.metadata import version
+
+        return "v" + version("yue2-groove")
+    except Exception:  # noqa: BLE001 — not installed as a distribution
+        return "latest"
+
+
+def install_binaries(dest: Path | None = None, *, tag: str | None = None, say=None) -> Path:
+    """Download and unpack this platform's binaries; returns the directory."""
+    import io
+    import stat
+    import tarfile
+    import urllib.request
+    import zipfile
+
+    say = say or (lambda _m: None)
+    dest = Path(dest or (repo_root() / "bin" / "yue2cpp"))
+    asset = platform_asset()
+    tag = tag or app_release_tag()
+    url = (
+        f"{RELEASES}/latest/download/{asset}"
+        if tag == "latest"
+        else f"{RELEASES}/download/{tag}/{asset}"
+    )
+    say(f"downloading {url}")
+    with urllib.request.urlopen(url, timeout=60) as response:
+        data = response.read()
+    dest.mkdir(parents=True, exist_ok=True)
+    if asset.endswith(".zip"):
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            archive.extractall(dest)
+    else:
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
+            archive.extractall(dest, filter="data")
+    if os.name != "nt":
+        for name in (*BINARIES, "yue-server", "yue-transcribe", "mp3-codec"):
+            path = dest / name
+            if path.is_file():
+                path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    version_file = dest / "VERSION"
+    say(version_file.read_text().strip() if version_file.is_file() else f"unpacked into {dest}")
+    return dest
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="python -m yue2_groove.gguf_engine", description="GGUF engine (yue2.cpp) helpers"
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+    inst = sub.add_parser("install", help="download this platform's yue2.cpp binaries")
+    inst.add_argument("--dest", default=None, help="target directory (default <repo>/bin/yue2cpp)")
+    inst.add_argument(
+        "--tag", default=None, help="app release tag (default: this version; or latest)"
+    )
+    prep = sub.add_parser("prepare", help="convert + quantize the GGUF files from the checkpoints")
+    prep.add_argument("--model", default=config.default_model())
+    prep.add_argument("--vae", default=config.default_vae())
+    prep.add_argument("--quant", default=None, choices=list(QUANTS))
+    sub.add_parser("check", help="print what the engine would use")
+    args = parser.parse_args(argv)
+
+    say = lambda message: print(message, file=sys.stderr, flush=True)  # noqa: E731, T201
+    if args.command == "install":
+        install_binaries(Path(args.dest) if args.dest else None, tag=args.tag, say=say)
+        return 0
+    if args.command == "prepare":
+        from . import adapter
+
+        model_dir = Path(adapter.resolve_model(args.model))
+        vae_dir = Path(adapter.resolve_model(args.vae))
+        backbone, vae = prepare(model_dir, vae_dir, quant_label=args.quant, log=say)
+        say(f"ready: {backbone} ({backbone.stat().st_size / 1e9:.2f} GB), {vae}")
+        return 0
+    directory = binary_dir()
+    say(
+        f"binaries: {directory or 'not found'}"
+        + (f" ({INSTALL_HINT})" if directory is None else "")
+    )
+    say(f"gguf dir: {gguf_dir()}  quant: {quant()}  max_seq: {max_seq() or 'full context'}")
+    vram = cuda_total_vram_gib()
+    backend, note = auto_backend("cuda" if vram is not None else "other", vram)
+    say(f"auto backend: {backend}" + (f" — {note}" if note else ""))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

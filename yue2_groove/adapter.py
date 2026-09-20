@@ -20,6 +20,9 @@ import inspect
 import sys
 import threading
 from collections.abc import Callable
+from pathlib import Path
+
+from . import gguf_engine
 
 INSTALL_HINT = (
     "The `yue2` package is not installed in this environment. Install YuE2 first, e.g.\n"
@@ -108,6 +111,48 @@ def resolve_model(model, *, revision=None, local_files_only=False):
     return _resolve(model, revision=revision, local_files_only=local_files_only)
 
 
+def identity(value) -> str:
+    _require()
+    from yue2.storage import identity as _identity
+
+    return _identity(value)
+
+
+def collect_hashes(directory):
+    _require()
+    from yue2.storage import collect_hashes as _collect
+
+    return _collect(directory)
+
+
+# ── the text protocol, for engines that do not run upstream's pipeline ───────
+# The GGUF engine (yue2_groove.gguf_engine) samples in a child process but records its
+# runs in upstream's layout; these give it upstream's own tokenizer, prefix rule and plan
+# object so a GGUF run's prefix.npy / abc_tokens.npy / plan.json are what upstream writes.
+
+
+def text_tokenizer(model_dir):
+    """Upstream's frozen BPE (``qwen.tiktoken`` in the checkpoint directory)."""
+    _require()
+    from yue2.tokenization_yue2 import YuE2TextTokenizer
+
+    return YuE2TextTokenizer(Path(model_dir) / "qwen.tiktoken")
+
+
+def token_prefixes(request, tokenizer, abc_ids=None):
+    _require()
+    from yue2.protocol import token_prefixes as _prefixes
+
+    return _prefixes(request, tokenizer, abc_ids)
+
+
+def symbolic_plan(request, abc, abc_ids, prefix, timing, truncated):
+    _require()
+    from yue2.pipeline import SymbolicPlan
+
+    return SymbolicPlan(request, abc, list(abc_ids), list(prefix), dict(timing), bool(truncated))
+
+
 # ── pipeline lifecycle ───────────────────────────────────────────────────────
 
 
@@ -159,6 +204,8 @@ def load_pipeline(
 
 
 def model_dtype(pipe) -> str:
+    if isinstance(pipe, gguf_engine.GgufPipeline):
+        return pipe.dtype_label
     model = getattr(pipe, "_model", None)
     if model is None:
         return "unloaded"
@@ -232,6 +279,15 @@ def generate(
     on_progress: StageProgress | None = None,
 ):
     """Full song generation; ``on_progress(stage, done, total)`` with stage nar/vae."""
+    if isinstance(pipe, gguf_engine.GgufPipeline):
+        return pipe.generate(
+            request,
+            abc_sampling=abc_sampling,
+            semantic_sampling=semantic_sampling,
+            cancelled=cancelled,
+            on_token=on_token,
+            on_progress=on_progress,
+        )
     kwargs = {
         "style": request.style,
         "lyrics": request.lyrics,
@@ -252,11 +308,15 @@ def generate(
 
 
 def plan(pipe, request, *, abc_sampling, cancelled=None):
+    if isinstance(pipe, gguf_engine.GgufPipeline):
+        return pipe.plan(request, abc_sampling=abc_sampling, cancelled=cancelled)
     return pipe.plan(request=request, abc_sampling=abc_sampling, cancelled=cancelled)
 
 
 def decode(pipe, latents, *, full=False, vae=None, on_progress=None):
     """Decode ``[T,64]`` latents; ``on_progress(done, total)`` counts VAE chunks."""
+    if isinstance(pipe, gguf_engine.GgufPipeline):
+        return pipe.decode(latents, full=full, vae=vae, on_progress=on_progress)
     try:
         native = "on_progress" in inspect.signature(type(pipe).decode).parameters
     except (TypeError, ValueError):

@@ -32,6 +32,19 @@ clear configuration error and the rest of the UI keeps working.
 * ``YUE2_GROOVE_TRANSCRIPTIONS``    where transcription outputs are written (default:
                                     ``<runs>/transcriptions``)
 
+The GGUF engine (``yue2_groove.gguf_engine``: YuE2 through yue2.cpp, for cards under
+16 GB) is selected and located by:
+
+* ``YUE2_GROOVE_BACKEND``       ``auto`` (default: the VRAM rule) / ``torch`` / ``torch-eager`` /
+                                ``gguf``; the same as ``--backend``
+* ``YUE2_GROOVE_GGUF_VRAM_GIB`` the rule's threshold: a CUDA card below it gets ``gguf`` (16)
+* ``YUE2_GROOVE_YUE2CPP``       directory of the yue2.cpp binaries (default ``<repo>/bin/yue2cpp``,
+                                then PATH)
+* ``YUE2_GROOVE_GGUF``          directory of the GGUF files (default ``<repo>/models/gguf``, or
+                                ``$YUE2_GROOVE_MODELS/gguf``); prepared there on first use
+* ``YUE2_GROOVE_GGUF_QUANT``    ``Q8_0`` (default) / ``Q6_K`` / ``Q5_K_M`` / ``BF16``
+* ``YUE2_GROOVE_GGUF_MAX_SEQ``  optional KV-cache cap (``--max-seq``) for 8 GB cards
+
 The repository-root ``.env`` (see README) is also read by the app itself via
 :func:`load_env`, before the CLI defaults are resolved — so a direct
 ``python -m yue2_groove`` gets the same settings as ``scripts/serve.sh``, including

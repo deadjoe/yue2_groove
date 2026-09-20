@@ -136,7 +136,7 @@ TIPS = {
     "MODEL REVISION": "Pin a git revision of the model repository (optional).",
     "VAE REVISION": "Pin a revision of the VAE repository (optional).",
     "OFFLINE": "Never touch the network; use only the local Hugging Face cache.",
-    "BACKEND": "torch uses CUDA graphs when available and eager elsewhere; vLLM is a CUDA-only fast path.",
+    "BACKEND": "torch uses CUDA graphs when available and eager elsewhere; vLLM is a CUDA-only fast path; gguf runs yue2.cpp (Q8_0 GGUF) — fits 12 GB cards, a different take for the same seed.",
     "QUANTIZATION": "fp8 shrinks the AR weights on CUDA sm89+; none everywhere else.",
     "OFFLOAD AR WEIGHTS": "Move AR weights to CPU during synthesis to save VRAM (single request only).",
     "MEMORY BUDGET": "CUDA-only memory cap in GiB; also selects VAE chunking (≤12 GiB → 512 frames).",
