@@ -492,6 +492,9 @@ def _run_converter(components: dict[str, str], out_dir: Path, say) -> None:
 
 
 def _run(argv: list[str], say) -> None:
+    """A preparation child (the converter, ``quantize``): its stderr goes to *say*; any early
+    exit — a raising *say*, a KeyboardInterrupt — stops and reaps the child before the
+    private directory it was writing into is removed."""
     proc = subprocess.Popen(
         argv,
         stdout=subprocess.DEVNULL,
@@ -500,16 +503,23 @@ def _run(argv: list[str], say) -> None:
         **config.SUBPROCESS_TEXT,
     )
     tail: list[str] = []
-    assert proc.stderr is not None
-    for raw in proc.stderr:
-        line = raw.rstrip()
-        if line:
-            tail = (tail + [line])[-20:]
-            say(line)
-    if proc.wait() != 0:
-        raise RuntimeError(
-            f"{Path(argv[0]).name} failed (exit {proc.returncode}):\n" + "\n".join(tail)
-        )
+    try:
+        assert proc.stderr is not None
+        for raw in proc.stderr:
+            line = raw.rstrip()
+            if line:
+                tail = (tail + [line])[-20:]
+                say(line)
+        code = proc.wait()
+    except BaseException:
+        _stop_child(proc)
+        raise
+    finally:
+        with contextlib.suppress(OSError):
+            if proc.stderr is not None:
+                proc.stderr.close()
+    if code != 0:
+        raise RuntimeError(f"{Path(argv[0]).name} failed (exit {code}):\n" + "\n".join(tail))
 
 
 # ── the request ──────────────────────────────────────────────────────────────

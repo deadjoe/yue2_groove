@@ -855,3 +855,43 @@ def test_resolve_backend_respects_an_explicit_device(monkeypatch):
     assert runtime.resolve_backend("auto", "cpu")[0] == "gguf"  # torch picked cpu on its own
     assert runtime.resolve_backend("auto", "cpu", device_explicit=True) == ("torch", "")
     assert runtime.resolve_backend("auto", "cuda", device_explicit=True)[0] == "gguf"
+
+
+def test_preparation_child_is_stopped_when_the_log_callback_raises(tmp_path, monkeypatch):
+    """The converter / quantize runner has the same lifecycle rule as run_child: a raising
+    log callback (or a Ctrl-C) must not leave the child writing into a directory that
+    prepare() is about to remove."""
+    import time
+
+    beat = tmp_path / "heartbeat"
+    slow = write_stub(
+        tmp_path,
+        "slow-quantize",
+        f"""
+        import sys, time
+        print("[Quantize] starting", file=sys.stderr, flush=True)
+        for i in range(200):
+            open({str(beat)!r}, "a").write("x"); time.sleep(0.1)
+    """,
+    )
+    patch_binaries(monkeypatch, {})
+
+    def say(line):
+        raise ValueError("log sink closed")
+
+    with pytest.raises(ValueError, match="log sink closed"):
+        gguf_engine._run([str(slow)], say)
+    size = beat.stat().st_size if beat.exists() else 0
+    time.sleep(0.6)
+    assert (beat.stat().st_size if beat.exists() else 0) == size  # no heartbeat after the stop
+    # and a clean failure still reports the child's last lines
+    bad = write_stub(
+        tmp_path,
+        "bad-quantize",
+        """
+        import sys
+        print("[Quantize] FATAL: not a GGUF", file=sys.stderr); sys.exit(2)
+    """,
+    )
+    with pytest.raises(RuntimeError, match=r"(?s)exit 2.*not a GGUF"):
+        gguf_engine._run([str(bad)], lambda line: None)
