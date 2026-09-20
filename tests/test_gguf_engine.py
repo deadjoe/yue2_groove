@@ -984,3 +984,23 @@ def test_generate_under_a_cap_sends_the_trimmed_budget(tmp_path, monkeypatch, mo
         pipe, request, abc_sampling=sampling(), semantic_sampling=sampling(max_tokens=9000)
     )
     assert song.config["semantic_budget_cap"] is None
+
+
+def test_cli_subcommands_parse_and_dispatch(tmp_path, monkeypatch, capsys):
+    """`python -m yue2_groove.gguf_engine install|prepare|check`: the argparse wiring itself
+    (1.0.0 shipped an `install` whose --force flag was read but never declared)."""
+    calls = {}
+    monkeypatch.setattr(
+        gguf_engine,
+        "install_binaries",
+        lambda dest=None, **kw: calls.update(dest=dest, **kw) or tmp_path,
+    )
+    assert gguf_engine.main(["install", "--tag", "latest", "--force", "--dest", str(tmp_path)]) == 0
+    assert calls["tag"] == "latest" and calls["force"] is True and calls["dest"] == tmp_path
+    assert gguf_engine.main(["install"]) == 0 and calls["force"] is False and calls["tag"] is None
+    monkeypatch.setattr(gguf_engine, "binary_dir", lambda: None)
+    monkeypatch.setattr(gguf_engine, "cuda_total_vram_gib", lambda: None)
+    assert gguf_engine.main(["check"]) == 0
+    assert "binaries: not found" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        gguf_engine.main(["nonsense"])

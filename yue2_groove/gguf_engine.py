@@ -1450,6 +1450,9 @@ def main(argv: list[str] | None = None) -> int:
     inst.add_argument(
         "--tag", default=None, help="app release tag (default: this version; or latest)"
     )
+    inst.add_argument(
+        "--force", action="store_true", help="replace an install that is already at the pin"
+    )
     prep = sub.add_parser("prepare", help="convert + quantize the GGUF files from the checkpoints")
     prep.add_argument("--model", default=config.default_model())
     prep.add_argument("--vae", default=config.default_vae())
