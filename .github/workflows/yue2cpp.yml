@@ -7,7 +7,7 @@
 #   workflow_dispatch  → build, upload as workflow artifacts; with `release_tag`, also attach
 #   push touching this file (a pin bump, on any branch) → build, workflow artifacts only
 #
-# Keep `YUE2CPP_REF` equal to `gguf_engine.YUE2CPP_PIN`; tests/test_gguf_engine.py does not
+# Keep `YUE2CPP_SHORT` equal to `gguf_engine.YUE2CPP_PIN` (and `YUE2CPP_REF` its full SHA); tests/test_gguf_engine.py does not
 # check that (it cannot see this file) — the release ritual does.
 name: yue2.cpp binaries
 
@@ -25,7 +25,8 @@ on:
 
 env:
   YUE2CPP_REPO: ServeurpersoCom/yue2.cpp
-  YUE2CPP_REF: e8b39f7
+  YUE2CPP_REF: e8b39f70be19f201122d550915810212f2e8fc03  # full SHA: actions/checkout treats a short one as a branch name
+  YUE2CPP_SHORT: e8b39f7
   VULKAN_SDK_VERSION: 1.4.309.0
 
 permissions:
@@ -48,7 +49,7 @@ jobs:
       - uses: hendrikmuhs/ccache-action@v1.2
         with:
           create-symlink: true
-          key: yue2cpp-linux-${{ env.YUE2CPP_REF }}
+          key: yue2cpp-linux-${{ env.YUE2CPP_SHORT }}
       - uses: Jimver/cuda-toolkit@v0.2.30
         with:
           cuda: "12.8.1"
@@ -82,12 +83,12 @@ jobs:
             [ -L "$lib" ] || patchelf --set-rpath '$ORIGIN' "$lib" || true
           done
           cp LICENSE dist/LICENSE.yue2cpp
-          echo "yue2.cpp ${YUE2CPP_REF} linux-x64 cuda12.8 vulkan cpu" > dist/VERSION
-          tar -C dist -czf "yue2cpp-${YUE2CPP_REF}-linux-x64.tar.gz" .
+          echo "yue2.cpp ${YUE2CPP_SHORT} linux-x64 cuda12.8 vulkan cpu" > dist/VERSION
+          tar -C dist -czf "yue2cpp-${YUE2CPP_SHORT}-linux-x64.tar.gz" .
       - uses: actions/upload-artifact@v4
         with:
-          name: yue2cpp-${{ env.YUE2CPP_REF }}-linux-x64
-          path: yue2cpp-${{ env.YUE2CPP_REF }}-linux-x64.tar.gz
+          name: yue2cpp-${{ env.YUE2CPP_SHORT }}-linux-x64
+          path: yue2cpp-${{ env.YUE2CPP_SHORT }}-linux-x64.tar.gz
       - name: Attach to release
         if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
         env:
@@ -95,7 +96,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           gh release upload "${{ github.event.release.tag_name || inputs.release_tag }}" \
-            "yue2cpp-${YUE2CPP_REF}-linux-x64.tar.gz" --clobber
+            "yue2cpp-${YUE2CPP_SHORT}-linux-x64.tar.gz" --clobber
 
   macos:
     name: macos-arm64 (Metal)
@@ -109,7 +110,7 @@ jobs:
       - uses: hendrikmuhs/ccache-action@v1.2
         with:
           create-symlink: true
-          key: yue2cpp-macos-${{ env.YUE2CPP_REF }}
+          key: yue2cpp-macos-${{ env.YUE2CPP_SHORT }}
       - name: Configure and build
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DGGML_BLAS=ON
@@ -126,12 +127,12 @@ jobs:
           cp -P libggml*.dylib ../dist/
           cd ..
           cp LICENSE dist/LICENSE.yue2cpp
-          echo "yue2.cpp ${YUE2CPP_REF} macos-arm64 metal" > dist/VERSION
-          tar -C dist -czf "yue2cpp-${YUE2CPP_REF}-macos-arm64-metal.tar.gz" .
+          echo "yue2.cpp ${YUE2CPP_SHORT} macos-arm64 metal" > dist/VERSION
+          tar -C dist -czf "yue2cpp-${YUE2CPP_SHORT}-macos-arm64-metal.tar.gz" .
       - uses: actions/upload-artifact@v4
         with:
-          name: yue2cpp-${{ env.YUE2CPP_REF }}-macos-arm64-metal
-          path: yue2cpp-${{ env.YUE2CPP_REF }}-macos-arm64-metal.tar.gz
+          name: yue2cpp-${{ env.YUE2CPP_SHORT }}-macos-arm64-metal
+          path: yue2cpp-${{ env.YUE2CPP_SHORT }}-macos-arm64-metal.tar.gz
       - name: Attach to release
         if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
         env:
@@ -139,7 +140,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           gh release upload "${{ github.event.release.tag_name || inputs.release_tag }}" \
-            "yue2cpp-${YUE2CPP_REF}-macos-arm64-metal.tar.gz" --clobber
+            "yue2cpp-${YUE2CPP_SHORT}-macos-arm64-metal.tar.gz" --clobber
 
   windows:
     name: windows-x64 (CUDA + Vulkan + CPU)
@@ -175,12 +176,12 @@ jobs:
             Copy-Item (Join-Path $cuda "bin\$dll") dist\
           }
           Copy-Item LICENSE dist\LICENSE.yue2cpp
-          "yue2.cpp $env:YUE2CPP_REF windows-x64 cuda12.8 vulkan cpu" | Out-File -Encoding ascii dist\VERSION
-          Compress-Archive -Path dist\* -DestinationPath "yue2cpp-$env:YUE2CPP_REF-windows-x64.zip"
+          "yue2.cpp $env:YUE2CPP_SHORT windows-x64 cuda12.8 vulkan cpu" | Out-File -Encoding ascii dist\VERSION
+          Compress-Archive -Path dist\* -DestinationPath "yue2cpp-$env:YUE2CPP_SHORT-windows-x64.zip"
       - uses: actions/upload-artifact@v4
         with:
-          name: yue2cpp-${{ env.YUE2CPP_REF }}-windows-x64
-          path: yue2cpp-${{ env.YUE2CPP_REF }}-windows-x64.zip
+          name: yue2cpp-${{ env.YUE2CPP_SHORT }}-windows-x64
+          path: yue2cpp-${{ env.YUE2CPP_SHORT }}-windows-x64.zip
       - name: Attach to release
         if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
         shell: pwsh
@@ -189,4 +190,4 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           $tag = "${{ github.event.release.tag_name || inputs.release_tag }}"
-          gh release upload $tag "yue2cpp-$env:YUE2CPP_REF-windows-x64.zip" --clobber
+          gh release upload $tag "yue2cpp-$env:YUE2CPP_SHORT-windows-x64.zip" --clobber
