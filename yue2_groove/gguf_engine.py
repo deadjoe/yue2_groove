@@ -44,10 +44,12 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -167,7 +169,16 @@ def auto_backend(device: str, total_vram_gib: float | None, *, installed: bool |
     """
     installed = available() if installed is None else installed
     threshold = vram_threshold_gib()
-    if device != "cuda" or total_vram_gib is None:
+    if total_vram_gib is None:
+        return "torch", ""
+    if device != "cuda":
+        # an NVIDIA card torch cannot see (a CPU-only torch build, e.g. PyPI's Windows wheel):
+        # the reference engine would run on the CPU for hours; yue2.cpp drives the card itself
+        if device == "cpu" and installed:
+            return "gguf", (
+                f"auto: NVIDIA card ({total_vram_gib:.0f} GiB) present but torch has no CUDA "
+                f"→ GGUF {quant()} engine on the GPU"
+            )
         return "torch", ""
     if total_vram_gib >= threshold:
         return "torch", ""
@@ -182,7 +193,36 @@ def auto_backend(device: str, total_vram_gib: float | None, *, installed: bool |
     )
 
 
+def nvidia_total_vram_gib() -> float | None:
+    """Total memory of the first NVIDIA GPU from ``nvidia-smi``, or None without one.
+
+    Asked first because ``torch.cuda.get_device_properties`` initialises a CUDA context —
+    a few hundred MB of the very VRAM this rule is about, held by a process that, with the
+    GGUF engine, never needs one.  Works with a CPU-only torch as well (the PyPI Windows
+    wheel), where the card is invisible to torch but usable by yue2.cpp.
+    """
+    smi = shutil.which("nvidia-smi")
+    if not smi:
+        return None
+    try:
+        out = subprocess.run(
+            [smi, "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True,
+            timeout=15,
+            check=False,
+            **config.SUBPROCESS_TEXT,
+        )
+        first = out.stdout.strip().splitlines()[0].strip() if out.returncode == 0 else ""
+        return float(first) / 1024 if first else None  # MiB → GiB
+    except Exception:  # noqa: BLE001 — a broken driver is the same as no card for this rule
+        return None
+
+
 def cuda_total_vram_gib() -> float | None:
+    """Total VRAM in GiB: ``nvidia-smi`` first (no CUDA context), then torch."""
+    vram = nvidia_total_vram_gib()
+    if vram is not None:
+        return vram
     try:
         import torch
 
@@ -248,6 +288,11 @@ def prepare(
     vae = out_dir / VAE_NAME
     native = out_dir / backbone_name("BF16")
 
+    # every file is produced under .partial/ and moved into place only when complete, so an
+    # interrupted conversion can never leave a truncated .gguf that looks finished
+    partial = out_dir / ".partial"
+    shutil.rmtree(partial, ignore_errors=True)
+    partial.mkdir()
     need_native = not native.is_file() and not backbone.is_file()
     if need_native or not vae.is_file():
         components = {}
@@ -255,16 +300,20 @@ def prepare(
             components["backbone"] = str(Path(model_dir).resolve())
         if not vae.is_file():
             components["vae"] = str(Path(vae_dir).resolve())
-        say(f"Converting checkpoints to GGUF ({', '.join(components)}) — one-time, a few minutes…")
-        _run_converter(components, out_dir, say)
+        say(f"Converting checkpoints to GGUF ({', '.join(components)}) — one-time, under a minute…")
+        _run_converter(components, partial, say)
+        for produced in partial.glob("*.gguf"):
+            os.replace(produced, out_dir / produced.name)
     if not backbone.is_file():
         if quant_label == "BF16":
             raise RuntimeError(f"conversion did not produce {native}")
         say(f"Quantizing to {quant_label} — one-time…")
-        _run([str(binary("quantize")), str(native), str(backbone), quant_label], say)
+        _run([str(binary("quantize")), str(native), str(partial / backbone.name), quant_label], say)
+        os.replace(partial / backbone.name, backbone)
         # the 7.2 GB BF16 intermediate is not needed at run time; re-converting takes seconds
         with contextlib.suppress(OSError):
             native.unlink()
+    shutil.rmtree(partial, ignore_errors=True)
     for path in (backbone, vae):
         if not path.is_file():
             raise RuntimeError(f"GGUF preparation did not produce {path}")
@@ -326,6 +375,17 @@ def _sampling_dict(sampling) -> dict:
         "min_tokens": int(sampling.min_tokens),
         "max_tokens": int(sampling.max_tokens),
     }
+
+
+_SEMANTIC_DEFAULTS = SimpleNamespace(  # the checkpoint preset; only a placeholder for yue-plan
+    temperature=1.0,
+    top_p=0.95,
+    top_k=100,
+    repetition_penalty=1.2,
+    penalty_window=50,
+    min_tokens=200,
+    max_tokens=9000,
+)
 
 
 def build_request(request, *, abc_sampling, semantic_sampling, steps: int, semantic_tokens=None):
@@ -508,6 +568,50 @@ def run_child(
     return log
 
 
+# ── paths the child sees ─────────────────────────────────────────────────────
+# yue2.cpp opens files with fopen / CreateFileA: on Windows that is the ANSI code page, so a
+# path with characters outside it (a user name in another script, an emoji) cannot be opened.
+# Two measures: the working files live next to the GGUF files (one root to keep ASCII), and
+# on Windows a non-ASCII path is handed over as its 8.3 short name when the volume has one.
+
+
+def child_path(path: Path) -> str:
+    text = str(path)
+    if os.name != "nt" or text.isascii():
+        return text
+    try:
+        import ctypes
+
+        # the deepest existing ancestor gets shortened; an output file that does not exist
+        # yet keeps its (ASCII) name under it
+        existing, rest = Path(text), []
+        while not existing.exists() and existing.parent != existing:
+            rest.insert(0, existing.name)
+            existing = existing.parent
+        buffer = ctypes.create_unicode_buffer(1024)
+        length = ctypes.windll.kernel32.GetShortPathNameW(str(existing), buffer, 1024)  # type: ignore[attr-defined]
+        short = str(Path(buffer.value).joinpath(*rest)) if length else text
+        if short.isascii():
+            return short
+    except Exception:  # noqa: BLE001, S110 — best effort; the error below names the path
+        pass
+    raise RuntimeError(
+        f"yue2.cpp cannot open a path with non-ASCII characters on Windows: {text}\n"
+        "Move the app (or set YUE2_GROOVE_GGUF) to a folder whose path is plain ASCII."
+    )
+
+
+@contextlib.contextmanager
+def _work_directory(root: Path):
+    """A throwaway directory under *root* (next to the GGUF files) for one child run."""
+    root.mkdir(parents=True, exist_ok=True)
+    work = Path(tempfile.mkdtemp(prefix="work-", dir=str(root)))
+    try:
+        yield work
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 # ── the pipeline object the app holds ────────────────────────────────────────
 
 
@@ -547,6 +651,8 @@ class GgufPipeline:
         binary("yue-synth")  # fail early, with the install hint
         quant_label = quant_label or quant()
         backbone, vae = prepare(model_dir, vae_dir, quant_label=quant_label, log=log)
+        if log is not None and not backbone.with_name(backbone.name + ".sha256").is_file():
+            log("Hashing the GGUF files (first time only)…")
         weights = {
             "mot": {
                 "files": {
@@ -569,6 +675,9 @@ class GgufPipeline:
             max_seq=max_seq(),
             weights=weights,
         )
+
+    def _workdir(self):
+        return _work_directory(self.backbone.parent / ".work")
 
     # the attributes the tabs read off the PyTorch pipeline
     @property
@@ -644,27 +753,26 @@ class GgufPipeline:
             steps=self.ode_steps,
         )
         started = time.perf_counter()
-        with tempfile.TemporaryDirectory(prefix="yue2cpp-") as tmp:
-            work = Path(tmp)
+        with self._workdir() as work:
             (work / "request.json").write_text(
                 json.dumps(payload, ensure_ascii=False), encoding="utf-8"
             )
             argv = [
                 str(binary("yue-synth")),
                 "--model",
-                str(self.backbone),
+                child_path(self.backbone),
                 "--vae",
-                str(self.vae),
+                child_path(self.vae),
                 "--request",
-                str(work / "request.json"),
+                child_path(work / "request.json"),
                 "--out",
-                str(work / "audio.wav"),
+                child_path(work / "audio.wav"),
                 "--tokens",
-                str(work / "tokens.csv"),
+                child_path(work / "tokens.csv"),
                 "--latent",
-                str(work / "latent.vae"),
+                child_path(work / "latent.vae"),
                 "--score",
-                str(work / "score.abc"),
+                child_path(work / "score.abc"),
                 *self._synth_flags(),
             ]
             log = run_child(argv, cancelled=cancelled, on_token=on_token, on_progress=on_progress)
@@ -684,6 +792,8 @@ class GgufPipeline:
             score = None
         elif request.abc is not None:
             score = request.abc  # the exact text the prefix was built from
+        else:
+            score = score or ""  # the model wrote nothing: an empty plan, still a plan
         tokenizer = adapter.text_tokenizer(self.model_dir)
         abc_ids = tokenizer.encode(score) if score is not None else []
         prefix = adapter.token_prefixes(request, tokenizer, abc_ids if score is not None else None)
@@ -740,21 +850,23 @@ class GgufPipeline:
                 False,
             )
         payload = build_request(
-            request, abc_sampling=abc_sampling, semantic_sampling=abc_sampling, steps=self.ode_steps
+            request,
+            abc_sampling=abc_sampling,
+            semantic_sampling=_SEMANTIC_DEFAULTS,  # yue-plan never reaches the semantic stage
+            steps=self.ode_steps,
         )
-        with tempfile.TemporaryDirectory(prefix="yue2cpp-") as tmp:
-            work = Path(tmp)
+        with self._workdir() as work:
             (work / "request.json").write_text(
                 json.dumps(payload, ensure_ascii=False), encoding="utf-8"
             )
             argv = [
                 str(binary("yue-plan")),
                 "--model",
-                str(self.backbone),
+                child_path(self.backbone),
                 "--request",
-                str(work / "request.json"),
+                child_path(work / "request.json"),
                 "--out",
-                str(work / "score.abc"),
+                child_path(work / "score.abc"),
                 *self._common_flags(),
             ]
             log = run_child(argv, cancelled=cancelled)
@@ -776,18 +888,17 @@ class GgufPipeline:
             raise RuntimeError(
                 "the GGUF engine decodes with its own VAE GGUF; VAE overrides need the torch backend"
             )
-        with tempfile.TemporaryDirectory(prefix="yue2cpp-") as tmp:
-            work = Path(tmp)
+        with self._workdir() as work:
             np.ascontiguousarray(np.asarray(latents, dtype=np.float32)).tofile(work / "latent.vae")
             argv = [
                 str(binary("neural-codec")),
                 "--vae",
-                str(self.vae),
+                child_path(self.vae),
                 "--decode",
                 "-i",
-                str(work / "latent.vae"),
+                child_path(work / "latent.vae"),
                 "-o",
-                str(work / "audio.wav"),
+                child_path(work / "audio.wav"),
                 "--format",
                 "wav32",
             ]
@@ -924,15 +1035,26 @@ def install_binaries(dest: Path | None = None, *, tag: str | None = None, say=No
         else f"{RELEASES}/download/{tag}/{asset}"
     )
     say(f"downloading {url}")
-    with urllib.request.urlopen(url, timeout=60) as response:
-        data = response.read()
+    try:
+        with urllib.request.urlopen(url, timeout=60) as response:
+            data = response.read()
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(
+            f"{url}: HTTP {exc.code}. Releases before the GGUF engine carry no binaries — "
+            "try `--tag latest`, or a release that lists yue2cpp-* assets."
+        ) from exc
+    if (dest / "VERSION").is_file():  # ours from an earlier install: no stale libraries left behind
+        shutil.rmtree(dest, ignore_errors=True)
     dest.mkdir(parents=True, exist_ok=True)
     if asset.endswith(".zip"):
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
             archive.extractall(dest)
     else:
         with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
-            archive.extractall(dest, filter="data")
+            try:
+                archive.extractall(dest, filter="data")
+            except TypeError:  # Python < 3.12 (3.10 / 3.11 without the backport)
+                archive.extractall(dest)
     if os.name != "nt":
         for name in (*BINARIES, "yue-server", "yue-transcribe", "mp3-codec"):
             path = dest / name

@@ -67,11 +67,13 @@ Three pieces, all optional — without them the app is exactly what it was:
 
 ## 3. Selection
 
-- `--backend auto` (the default; also `YUE2_GROOVE_BACKEND`): a **CUDA card with less than 16 GiB**
-  and the binaries installed gets the GGUF engine; everything else keeps the PyTorch engine. The
-  threshold is `YUE2_GROOVE_GGUF_VRAM_GIB`; 16 is where LINUX_CUDA.md measured that the reference
-  configuration runs everything the app can produce. A small card without binaries stays on PyTorch
-  and says so in the log and STATUS.
+- `--backend auto` (the default; also `YUE2_GROOVE_BACKEND`, and `scripts/serve.sh start --backend …`):
+  a **CUDA card with less than 16 GiB** and the binaries installed gets the GGUF engine; everything
+  else keeps the PyTorch engine. The threshold is `YUE2_GROOVE_GGUF_VRAM_GIB`; 16 is where
+  LINUX_CUDA.md measured that the reference configuration runs everything the app can produce. A
+  small card without binaries stays on PyTorch and says so in the log and STATUS. The card is read
+  with `nvidia-smi` (no CUDA context in the app's process), so an NVIDIA card next to a **CPU-only
+  torch** (PyPI's Windows wheel) also gets the GGUF engine instead of hours on the CPU.
 - Apple Silicon is never switched automatically (the reference path is what the app is developed on),
   but BACKEND → **gguf** in the settings rail works there too and is much faster for the AR stage.
 - The rail's DTYPE / QUANTIZATION / OFFLOAD AR / MEMORY BUDGET do not apply to this engine; ODE STEPS
@@ -111,3 +113,7 @@ comparison page accept a GGUF run like any other. 06 DECODE decodes with yue2.cp
 
 Each yue-synth process on macOS compiles the Metal shader library (~20 s) before it starts; CUDA
 loads in a second or two from the page cache.
+
+**Windows paths.** yue2.cpp opens files through the ANSI code page. The engine keeps its working
+files next to the GGUF files and hands non-ASCII paths over as 8.3 short names, but the safe setup
+is an app folder (and `YUE2_GROOVE_GGUF`) whose path is plain ASCII — which Pinokio's is.

@@ -562,3 +562,77 @@ def test_install_unpacks_this_platforms_asset(tmp_path, monkeypatch):
     assert said[-1].startswith("yue2.cpp test")
     gguf_engine.install_binaries(tmp_path / "bin2", tag="latest", say=said.append)
     assert seen["url"] == f"{gguf_engine.RELEASES}/latest/download/{asset}"
+
+
+def test_auto_backend_uses_the_gpu_torch_cannot_see(monkeypatch):
+    """A CPU-only torch (PyPI's Windows wheel) next to an NVIDIA card: the reference engine
+    would crawl on the CPU; yue2.cpp drives the card itself — but only when installed."""
+    monkeypatch.delenv("YUE2_GROOVE_GGUF_VRAM_GIB", raising=False)
+    backend, note = gguf_engine.auto_backend("cpu", 12.0, installed=True)
+    assert backend == "gguf" and "torch has no CUDA" in note
+    assert gguf_engine.auto_backend("cpu", 24.0, installed=True)[0] == "gguf"  # any size
+    assert gguf_engine.auto_backend("cpu", 12.0, installed=False) == ("torch", "")
+    assert gguf_engine.auto_backend("mps", 12.0, installed=True) == ("torch", "")
+
+
+def test_vram_probe_prefers_nvidia_smi_and_never_a_cuda_context(monkeypatch):
+    calls = []
+
+    class Done:
+        returncode = 0
+        stdout = "12288\n"  # MiB, one line per GPU
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return Done()
+
+    monkeypatch.setattr(gguf_engine.shutil, "which", lambda name: "/usr/bin/nvidia-smi")
+    monkeypatch.setattr(gguf_engine.subprocess, "run", fake_run)
+    assert gguf_engine.cuda_total_vram_gib() == pytest.approx(12.0)
+    assert calls and calls[0][0] == "/usr/bin/nvidia-smi"
+    # no nvidia-smi and no CUDA torch: None, and torch was the only fallback consulted
+    monkeypatch.setattr(gguf_engine.shutil, "which", lambda name: None)
+    import torch
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    assert gguf_engine.cuda_total_vram_gib() is None
+
+
+def test_child_path_is_the_plain_string_off_windows(tmp_path):
+    if os.name == "nt":
+        pytest.skip("POSIX behaviour")
+    p = tmp_path / "谱面" / "audio.wav"
+    assert gguf_engine.child_path(p) == str(p)
+
+
+def test_prepare_moves_only_complete_files_into_place(tmp_path, monkeypatch):
+    """Conversion and quantization write under .partial/ and are moved in whole; the BF16
+    intermediate is dropped after a successful quantize; existing files are kept."""
+    produced = []
+
+    def fake_converter(components, out_dir, say):
+        for name in components:
+            target = out_dir / ("YuE2-3B-BF16.gguf" if name == "backbone" else "YuE2-Vae-F32.gguf")
+            target.write_bytes(b"x" * 10)
+            produced.append((name, out_dir.name))
+
+    def fake_run(argv, say):
+        Path(argv[2]).write_bytes(b"q" * 5)  # quantize <in> <out> <type>
+        produced.append(("quantize", Path(argv[2]).parent.name))
+
+    monkeypatch.setattr(gguf_engine, "_run_converter", fake_converter)
+    monkeypatch.setattr(gguf_engine, "_run", fake_run)
+    monkeypatch.setattr(gguf_engine, "binary", lambda name: Path("/stub") / name)
+    out = tmp_path / "gguf"
+    backbone, vae = gguf_engine.prepare(tmp_path / "m", tmp_path / "v", out, quant_label="Q8_0")
+    assert backbone == out / "YuE2-3B-Q8_0.gguf" and vae == out / "YuE2-Vae-F32.gguf"
+    assert backbone.read_bytes() == b"q" * 5 and vae.is_file()
+    assert not (out / "YuE2-3B-BF16.gguf").exists() and not (out / ".partial").exists()
+    assert [d for _, d in produced] == [".partial", ".partial", ".partial"]
+    # second call: nothing to do
+    produced.clear()
+    gguf_engine.prepare(tmp_path / "m", tmp_path / "v", out, quant_label="Q8_0")
+    assert produced == []
+    # a different quant needs the intermediate again, but not the VAE
+    gguf_engine.prepare(tmp_path / "m", tmp_path / "v", out, quant_label="Q6_K")
+    assert [n for n, _ in produced] == ["backbone", "quantize"]
