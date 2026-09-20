@@ -518,3 +518,47 @@ def test_sha256_cache_sidecar(tmp_path):
     big.write_bytes(b"abd" * 1000)
     os.utime(big, (1, 1))  # a changed file invalidates the cache (size same, mtime differs)
     assert gguf_engine.sha256_file(big) != digest
+
+
+def test_install_unpacks_this_platforms_asset(tmp_path, monkeypatch):
+    """`python -m yue2_groove.gguf_engine install`: the release asset lands in bin/yue2cpp,
+    executable, with its VERSION line reported — the download itself is stubbed."""
+    import io
+    import tarfile
+    import zipfile
+
+    asset = gguf_engine.platform_asset()  # this machine's name, e.g. …-macos-arm64-metal.tar.gz
+    payload = io.BytesIO()
+    if asset.endswith(".zip"):
+        with zipfile.ZipFile(payload, "w") as archive:
+            archive.writestr("yue-synth.exe", b"MZ")
+            archive.writestr("VERSION", "yue2.cpp test windows-x64\n")
+    else:
+        with tarfile.open(fileobj=payload, mode="w:gz") as archive:
+            for name, data in (("yue-synth", b"#!/bin/sh\n"), ("VERSION", b"yue2.cpp test\n")):
+                info = tarfile.TarInfo(name)
+                info.size = len(data)
+                archive.addfile(info, io.BytesIO(data))
+    seen = {}
+
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return None
+
+    def urlopen(url, timeout=0):
+        seen["url"] = url
+        return Response(payload.getvalue())
+
+    monkeypatch.setattr(gguf_engine.urllib.request, "urlopen", urlopen)
+    said = []
+    dest = gguf_engine.install_binaries(tmp_path / "bin", tag="v9.9.9", say=said.append)
+    assert seen["url"] == f"{gguf_engine.RELEASES}/download/v9.9.9/{asset}"
+    assert dest == tmp_path / "bin" and gguf_engine._binary(dest, "yue-synth") is not None
+    if os.name != "nt":
+        assert os.access(dest / "yue-synth", os.X_OK)
+    assert said[-1].startswith("yue2.cpp test")
+    gguf_engine.install_binaries(tmp_path / "bin2", tag="latest", say=said.append)
+    assert seen["url"] == f"{gguf_engine.RELEASES}/latest/download/{asset}"

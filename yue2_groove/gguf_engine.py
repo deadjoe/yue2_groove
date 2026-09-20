@@ -44,6 +44,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -911,7 +912,6 @@ def install_binaries(dest: Path | None = None, *, tag: str | None = None, say=No
     import io
     import stat
     import tarfile
-    import urllib.request
     import zipfile
 
     say = say or (lambda _m: None)

@@ -25,6 +25,9 @@ on:
 
 env:
   YUE2CPP_REPO: ServeurpersoCom/yue2.cpp
+  # Turing (PTX, JIT at first run) through Blackwell consumer (sm_120, CUDA 12.8); set explicitly
+  # because ggml's own default list asked nvcc 12.8 for compute_121a, which it does not know
+  CUDA_ARCHS: "75-virtual;80-real;86-real;89-real;90-real;120-real"
   YUE2CPP_REF: e8b39f70be19f201122d550915810212f2e8fc03  # full SHA: actions/checkout treats a short one as a branch name
   YUE2CPP_SHORT: e8b39f7
   VULKAN_SDK_VERSION: 1.4.309.0
@@ -63,7 +66,7 @@ jobs:
           export PATH=/usr/local/cuda/bin:$PATH
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
             -DGGML_CPU_ALL_VARIANTS=ON -DGGML_CUDA=ON -DGGML_VULKAN=ON -DGGML_BACKEND_DL=ON \
-            -DGGML_BLAS=ON
+            -DGGML_BLAS=ON -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHS}"
           cmake --build build --config Release -j "$(nproc)"
       - name: Package
         run: |
@@ -159,11 +162,18 @@ jobs:
         with:
           version: ${{ env.VULKAN_SDK_VERSION }}
           cache: true
+      # Ninja + the MSVC environment: nvcc drives cl.exe directly, so the build does not need
+      # the CUDA Visual Studio integration (which the toolkit action does not install)
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Ninja
+        run: choco install ninja -y --no-progress
       - name: Configure and build
         shell: pwsh
         run: |
-          cmake -S . -B build -DGGML_CPU_ALL_VARIANTS=ON -DGGML_CUDA=ON -DGGML_VULKAN=ON -DGGML_BACKEND_DL=ON
-          cmake --build build --config Release -j $env:NUMBER_OF_PROCESSORS -- /v:minimal
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            -DGGML_CPU_ALL_VARIANTS=ON -DGGML_CUDA=ON -DGGML_VULKAN=ON -DGGML_BACKEND_DL=ON `
+            -DCMAKE_CUDA_ARCHITECTURES="$env:CUDA_ARCHS"
+          cmake --build build --config Release -j $env:NUMBER_OF_PROCESSORS
       - name: Package
         shell: pwsh
         run: |
