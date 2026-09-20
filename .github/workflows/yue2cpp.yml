@@ -147,7 +147,9 @@ jobs:
 
   windows:
     name: windows-x64 (CUDA + Vulkan + CPU)
-    runs-on: windows-latest
+    # windows-latest carries Visual Studio 2026 (MSVC 19.5x), which nvcc 12.8 refuses as a host
+    # compiler ("only 2017 to 2022 are supported"); the 2022 image has the MSVC nvcc accepts
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
         with:
