@@ -585,7 +585,8 @@ def test_auto_backend_uses_the_gpu_torch_cannot_see(monkeypatch):
     backend, note = gguf_engine.auto_backend("cpu", 12.0, installed=True)
     assert backend == "gguf" and "torch has no CUDA" in note
     assert gguf_engine.auto_backend("cpu", 24.0, installed=True)[0] == "gguf"  # any size
-    assert gguf_engine.auto_backend("cpu", 12.0, installed=False) == ("torch", "")
+    backend, note = gguf_engine.auto_backend("cpu", 12.0, installed=False)
+    assert backend == "torch" and "torch has no CUDA" in note and "Install the GGUF engine" in note
     assert gguf_engine.auto_backend("mps", 12.0, installed=True) == ("torch", "")
 
 

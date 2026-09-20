@@ -216,6 +216,12 @@ def auto_backend(device: str, total_vram_gib: float | None, *, installed: bool |
                 f"auto: NVIDIA card ({card_gb} GB) present but torch has no CUDA "
                 f"→ GGUF {quant()} engine on the GPU"
             )
+        if device == "cpu":
+            return "torch", (
+                f"NVIDIA card ({card_gb} GB) present but torch has no CUDA, so generation runs "
+                "on the CPU (hours per song). Install the GGUF engine binaries to use the card "
+                "(see docs/GGUF_ENGINE.md), or a CUDA build of torch."
+            )
         return "torch", ""
     if card_gb >= threshold:
         return "torch", ""
