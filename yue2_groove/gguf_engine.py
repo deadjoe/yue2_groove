@@ -31,6 +31,7 @@ variant; ``YUE2_GROOVE_GGUF_MAX_SEQ`` caps the KV cache for 8 GB cards.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import hashlib
 import importlib.util
 import json
@@ -169,8 +170,12 @@ def quant() -> str:
     return value if value in QUANTS else DEFAULT_QUANT
 
 
+SMALL_CARD_GB = 8  # cards up to this size get the context cap by default
+SMALL_CARD_MAX_SEQ = 12288  # 2 KV sets ≈ 2.7 GB instead of 5.4: ~5.5 GB peak, fits 8 GB
+
+
 def max_seq() -> int | None:
-    """Optional KV-cache cap (``--max-seq``) for cards the full 24 576 context does not fit."""
+    """``YUE2_GROOVE_GGUF_MAX_SEQ``: an explicit KV-cache cap (``--max-seq``), or None."""
     raw = (os.environ.get("YUE2_GROOVE_GGUF_MAX_SEQ") or "").strip()
     if not raw:
         return None
@@ -179,6 +184,50 @@ def max_seq() -> int | None:
     except ValueError:
         return None
     return value if 0 < value < CONTEXT else None
+
+
+def effective_max_seq(card_gb: int | None) -> tuple[int | None, str]:
+    """``(max_seq, reason)``: the environment's cap when set, else the small-card default.
+
+    Measured on a 16 GB card (docs/GGUF_ENGINE.md): the full 24 576 context peaks at 8.2 GB, of
+    which two KV sets are 5.4 GB — an 8 GB card cannot hold that, 12 288 brings it to ~5.5 GB.
+    """
+    explicit = max_seq()
+    if explicit is not None:
+        return explicit, f"max_seq={explicit} (YUE2_GROOVE_GGUF_MAX_SEQ)"
+    if card_gb is not None and card_gb <= SMALL_CARD_GB:
+        return (
+            SMALL_CARD_MAX_SEQ,
+            f"max_seq={SMALL_CARD_MAX_SEQ} ({card_gb} GB card: context capped)",
+        )
+    return None, ""
+
+
+def semantic_budget(
+    request, tokenizer, abc_sampling, semantic_sampling, cap: int
+) -> tuple[int, int]:
+    """``(prefix_tokens, max_tokens)`` that fit *cap*: yue2.cpp refuses a prefix plus semantic
+    budget that its KV cache cannot hold, so the budget is derived from the cap up front.
+
+    With an external score the prefix is exact; with a model-written one it is the worst
+    case (the ABC stage's own ``max_tokens``), so a full-length request stays valid whatever
+    the model writes.  The ABC stage itself always fits: its prefix is a few hundred tokens.
+    """
+    from . import adapter
+
+    if request.cot == "off" or request.abc is not None:
+        abc_ids = tokenizer.encode(request.abc) if request.abc is not None else None
+        prefix_tokens = len(adapter.token_prefixes(request, tokenizer, abc_ids))
+    else:
+        base = len(adapter.token_prefixes(request, tokenizer))  # EOD + text + ABC_START
+        prefix_tokens = base + int(abc_sampling.max_tokens) + 2  # + score + ABC_END, MUSIC_START
+    budget = cap - prefix_tokens - 1  # MUSIC_END
+    if budget < 250:  # ten seconds of audio: below that the request is not worth running
+        raise RuntimeError(
+            f"the prompt ({prefix_tokens} tokens) leaves no room for a song under max_seq={cap}: "
+            "shorten the lyrics or the ABC budget, or raise YUE2_GROOVE_GGUF_MAX_SEQ"
+        )
+    return prefix_tokens, min(int(semantic_sampling.max_tokens), budget)
 
 
 def vram_threshold_gib() -> float:
@@ -820,12 +869,14 @@ class GgufPipeline:
     ode_steps: int = 32
     vae_core_frames: int | None = None
     max_seq: int | None = None
+    max_seq_reason: str = ""
     device: str = "gguf"  # replaced by the child's backend name (MTL0 / CUDA0 / …) after a run
     weights: dict = field(default_factory=dict)
     version: str = ""  # what the binary reports; compare with YUE2CPP_PIN
     binary_sha256: str = ""
     ready_made: bool = False  # external GGUF files: the local checkpoints are not their source
     _plan_ids: tuple = ("retokenized", None)  # set per generate(); read by config_dict()
+    _budget_note: dict | None = None  # set per generate() when max_seq capped the semantic budget
 
     engine = "yue2.cpp"
 
@@ -842,6 +893,10 @@ class GgufPipeline:
     ) -> GgufPipeline:
         synth = binary("yue-synth")  # fail early, with the install hint
         version = engine_version(synth)
+        vram = cuda_total_vram_gib()
+        cap, reason = effective_max_seq(round(vram) if vram is not None else None)
+        if reason and log is not None:
+            log(reason)
         if version and not version.startswith(YUE2CPP_PIN) and log is not None:
             log(f"note: installed yue2.cpp is {version}, the app was written against {YUE2CPP_PIN}")
         quant_label = quant_label or quant()
@@ -881,7 +936,8 @@ class GgufPipeline:
             quant=quant_label,
             ode_steps=int(ode_steps),
             vae_core_frames=vae_core_frames,
-            max_seq=max_seq(),
+            max_seq=cap,
+            max_seq_reason=reason,
             weights=weights,
             version=version,
             binary_sha256=sha256_file(synth, cache=False),
@@ -936,6 +992,8 @@ class GgufPipeline:
             "device": self.device,
             "memory_budget_gib": None,
             "max_seq": self.max_seq,
+            "max_seq_reason": self.max_seq_reason or None,
+            "semantic_budget_cap": self._budget_note,
             "offload_ar": False,
             "engine": {
                 "name": "yue2.cpp",
@@ -974,6 +1032,23 @@ class GgufPipeline:
     ) -> GgufSong:
         from . import adapter  # tokenizer + plan objects come through the one yue2 door
 
+        tokenizer = adapter.text_tokenizer(self.model_dir)
+        self._budget_note = None
+        if self.max_seq:
+            prefix_tokens, capped = semantic_budget(
+                request, tokenizer, abc_sampling, semantic_sampling, self.max_seq
+            )
+            if capped < int(semantic_sampling.max_tokens):
+                semantic_sampling = dataclasses.replace(
+                    semantic_sampling,
+                    max_tokens=capped,
+                    min_tokens=min(int(semantic_sampling.min_tokens), capped),
+                )
+                self._budget_note = {
+                    "max_seq": self.max_seq,
+                    "prefix_tokens_assumed": prefix_tokens,
+                    "semantic_max_tokens": capped,
+                }
         payload = build_request(
             request,
             abc_sampling=abc_sampling,
@@ -1027,7 +1102,6 @@ class GgufPipeline:
             score = request.abc  # the exact text the prefix was built from
         else:
             score = score or ""  # the model wrote nothing: an empty plan, still a plan
-        tokenizer = adapter.text_tokenizer(self.model_dir)
         abc_ids = tokenizer.encode(score) if score is not None else []
         prefix = adapter.token_prefixes(request, tokenizer, abc_ids if score is not None else None)
         ids_match = None
@@ -1299,8 +1373,22 @@ def app_release_tag() -> str:
         return "latest"
 
 
-def install_binaries(dest: Path | None = None, *, tag: str | None = None, say=None) -> Path:
-    """Download and unpack this platform's binaries; returns the directory."""
+def installed_version(directory: Path) -> str:
+    """The commit named in an install's VERSION file (``yue2.cpp <commit> <platform> …``), or ``""``."""
+    try:
+        words = (directory / "VERSION").read_text(encoding="utf-8").split()
+        return words[1] if len(words) > 1 and words[0] == "yue2.cpp" else ""
+    except OSError:
+        return ""
+
+
+def install_binaries(
+    dest: Path | None = None, *, tag: str | None = None, say=None, force: bool = False
+) -> Path:
+    """Download and unpack this platform's binaries; returns the directory.
+
+    Idempotent: an install already at ``YUE2CPP_PIN`` is kept (the launcher runs this on every
+    update — no 700 MB download for nothing); ``force`` replaces it anyway."""
     import io
     import stat
     import tarfile
@@ -1308,6 +1396,9 @@ def install_binaries(dest: Path | None = None, *, tag: str | None = None, say=No
 
     say = say or (lambda _m: None)
     dest = Path(dest or (repo_root() / "bin" / "yue2cpp"))
+    if not force and installed_version(dest) == YUE2CPP_PIN and _binary(dest, "yue-synth"):
+        say(f"already installed: yue2.cpp {YUE2CPP_PIN} in {dest}")
+        return dest
     asset = platform_asset()
     tag = tag or app_release_tag()
     url = (
@@ -1368,7 +1459,9 @@ def main(argv: list[str] | None = None) -> int:
 
     say = lambda message: print(message, file=sys.stderr, flush=True)  # noqa: E731, T201
     if args.command == "install":
-        install_binaries(Path(args.dest) if args.dest else None, tag=args.tag, say=say)
+        install_binaries(
+            Path(args.dest) if args.dest else None, tag=args.tag, say=say, force=args.force
+        )
         return 0
     if args.command == "prepare":
         from . import adapter

@@ -100,9 +100,14 @@ one line in the log and STATUS saying the engine would fit better; nothing else 
 - Apple Silicon is never switched automatically (the reference path is what the app is developed on),
   but BACKEND → **gguf** in the settings rail works there too and is much faster for the AR stage.
 - The rail's DTYPE / QUANTIZATION / OFFLOAD AR / MEMORY BUDGET do not apply to this engine; ODE STEPS
-  and VAE CORE FRAMES do. `YUE2_GROOVE_GGUF_MAX_SEQ` caps the KV cache (yue2.cpp `--max-seq`) for
-  8 GB cards — the song must then fit that context, the same "shorter songs" story as
-  [LOW_VRAM.md](LOW_VRAM.md) tells for 12 GB.
+  and VAE CORE FRAMES do.
+- **8 GB cards** get a context cap by default: `max_seq 12288` (two KV sets ≈ 2.7 GB instead of
+  5.4 → about 5.5 GB peak instead of 8.2). yue2.cpp refuses a prompt plus semantic budget its cache
+  cannot hold, so the engine trims the semantic `max_tokens` up front — from the exact prefix for an
+  external score, from the worst case (the ABC budget) for a model-written one: a full-length
+  request with default lyrics keeps ~4.9 minutes. STATUS shows the cap, `config.json` records it
+  (`max_seq`, `semantic_budget_cap`). `YUE2_GROOVE_GGUF_MAX_SEQ` sets the cap on any card. Not yet
+  measured on a physical 8 GB card.
 
 - DEVICE does not apply either: yue2.cpp picks the best backend it finds (Metal / CUDA / Vulkan /
   CPU). An explicit `--device cpu` or `mps` does keep BACKEND=auto on the PyTorch engine — the

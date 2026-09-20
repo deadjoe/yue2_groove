@@ -43,7 +43,8 @@ The GGUF engine (``yue2_groove.gguf_engine``: YuE2 through yue2.cpp, for cards u
 * ``YUE2_GROOVE_GGUF``          directory of the GGUF files (default ``<repo>/models/gguf``, or
                                 ``$YUE2_GROOVE_MODELS/gguf``); prepared there on first use
 * ``YUE2_GROOVE_GGUF_QUANT``    ``Q8_0`` (default) / ``Q6_K`` / ``Q5_K_M`` / ``BF16``
-* ``YUE2_GROOVE_GGUF_MAX_SEQ``  optional KV-cache cap (``--max-seq``) for 8 GB cards
+* ``YUE2_GROOVE_GGUF_MAX_SEQ``  KV-cache cap (``--max-seq``); cards of 8 GB or less get 12288 by
+                                default, the semantic budget is trimmed to fit
 * ``YUE2_GROOVE_GGUF_EXACT_IDS`` ``1`` records the score ids the engine sampled (from its debug
                                 dump) instead of re-tokenizing the score text
 

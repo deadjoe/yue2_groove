@@ -897,3 +897,90 @@ def test_preparation_child_is_stopped_when_the_log_callback_raises(tmp_path, mon
     )
     with pytest.raises(RuntimeError, match=r"(?s)exit 2.*not a GGUF"):
         gguf_engine._run([str(bad)], lambda line: None)
+
+
+def test_install_skips_an_install_already_at_the_pin(tmp_path, monkeypatch):
+    """The launcher runs install on every update: no download when the pin is already there."""
+    dest = tmp_path / "bin"
+    dest.mkdir()
+    (dest / "VERSION").write_text(f"yue2.cpp {gguf_engine.YUE2CPP_PIN} macos-arm64 metal\n")
+    (dest / "yue-synth").write_bytes(b"#!/bin/sh\n")
+
+    def urlopen(url, timeout=0):
+        pytest.fail("downloaded although already installed")
+
+    monkeypatch.setattr(gguf_engine.urllib.request, "urlopen", urlopen)
+    said = []
+    assert gguf_engine.install_binaries(dest, say=said.append) == dest
+    assert said and said[-1].startswith("already installed")
+    assert gguf_engine.installed_version(dest) == gguf_engine.YUE2CPP_PIN
+    (dest / "VERSION").write_text("yue2.cpp 0000000 macos-arm64 metal\n")  # an older pin: downloads
+    with pytest.raises(BaseException, match="downloaded although"):
+        gguf_engine.install_binaries(dest, say=said.append)
+
+
+def test_small_cards_get_the_context_cap_by_default(monkeypatch):
+    monkeypatch.delenv("YUE2_GROOVE_GGUF_MAX_SEQ", raising=False)
+    assert gguf_engine.effective_max_seq(8) == (12288, "max_seq=12288 (8 GB card: context capped)")
+    assert gguf_engine.effective_max_seq(6)[0] == 12288
+    assert gguf_engine.effective_max_seq(12) == (None, "")
+    assert gguf_engine.effective_max_seq(None) == (None, "")  # no NVIDIA card (Apple Silicon)
+    monkeypatch.setenv("YUE2_GROOVE_GGUF_MAX_SEQ", "9000")
+    assert gguf_engine.effective_max_seq(24)[0] == 9000  # explicit wins, whatever the card
+    assert gguf_engine.effective_max_seq(8)[0] == 9000
+
+
+def test_semantic_budget_is_derived_from_the_cap(model_dir):
+    """yue2.cpp refuses prefix + budget beyond its cache: the budget is trimmed up front, from
+    the exact prefix for an external score and the worst case for a model-written one."""
+    tokenizer = adapter.text_tokenizer(model_dir)
+    abc_s, sem_s = sampling(), sampling(max_tokens=9000, min_tokens=200)
+    request = adapter.song_request(style="pop", lyrics="[Verse]\nla la la", cot="full", seed=1)
+    prefix, budget = gguf_engine.semantic_budget(request, tokenizer, abc_s, sem_s, 12288)
+    base = len(adapter.token_prefixes(request, tokenizer))
+    assert prefix == base + 4096 + 2 and budget == 12288 - prefix - 1 and budget < 9000
+    external = adapter.song_request(
+        style="pop", lyrics="la", cot="melody", seed=1, abc="X:1\nK:C\n|C D E F|\n"
+    )
+    prefix, budget = gguf_engine.semantic_budget(external, tokenizer, abc_s, sem_s, 12288)
+    ids = tokenizer.encode(external.abc)
+    assert prefix == len(adapter.token_prefixes(external, tokenizer, ids)) and budget == 9000
+    with pytest.raises(RuntimeError, match="leaves no room"):
+        gguf_engine.semantic_budget(request, tokenizer, abc_s, sem_s, 4200)
+
+
+def test_generate_under_a_cap_sends_the_trimmed_budget(tmp_path, monkeypatch, model_dir):
+    seen = {}
+    stub = SYNTH_STUB.replace(
+        "frames = 50",
+        "frames = 50\n    print('[test] semantic max_tokens=%d min_tokens=%d' % (request['semantic_sampling']['max_tokens'], request['semantic_sampling']['min_tokens']), file=sys.stderr)",
+    )
+    patch_binaries(monkeypatch, {"yue-synth": write_stub(tmp_path, "yue-synth", stub)})
+    pipe = make_pipe(tmp_path, model_dir)
+    pipe.max_seq = 6000
+    request = adapter.song_request(style="pop", lyrics="[Verse]\nla la la", cot="full", seed=1)
+    real_parse = gguf_engine.parse_line
+
+    def spy(line, log, **kw):
+        if line.startswith("[test]"):
+            seen["line"] = line
+        return real_parse(line, log, **kw)
+
+    monkeypatch.setattr(gguf_engine, "parse_line", spy)
+    song = adapter.generate(
+        pipe,
+        request,
+        abc_sampling=sampling(),
+        semantic_sampling=sampling(max_tokens=9000, min_tokens=200),
+    )
+    cap = song.config["semantic_budget_cap"]
+    assert (
+        cap["max_seq"] == 6000
+        and cap["semantic_max_tokens"] == 6000 - cap["prefix_tokens_assumed"] - 1
+    )
+    assert seen["line"] == f"[test] semantic max_tokens={cap['semantic_max_tokens']} min_tokens=200"
+    pipe.max_seq = None
+    song = adapter.generate(
+        pipe, request, abc_sampling=sampling(), semantic_sampling=sampling(max_tokens=9000)
+    )
+    assert song.config["semantic_budget_cap"] is None

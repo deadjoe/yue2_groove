@@ -305,7 +305,7 @@ def _load_gguf(settings: RuntimeSettings, vae_path: str, vae_name: str, key, pro
     note = (
         f"Loaded: engine=yue2.cpp ({pipe.quant} GGUF, {pipe.backbone.name}) backend=gguf "
         f"vae={vae_name} ode_steps={settings.ode_steps} cores={settings.cores or 'auto'}"
-        + (f" max_seq={pipe.max_seq}" if pipe.max_seq else "")
+        + (f" {pipe.max_seq_reason}" if pipe.max_seq else "")
         + " — not the reference configuration: a different take for the same seed"
     )
     return _PIPE, note
