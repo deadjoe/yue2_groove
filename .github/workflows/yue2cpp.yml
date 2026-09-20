@@ -90,6 +90,15 @@ jobs:
           cp LICENSE dist/LICENSE.yue2cpp
           echo "yue2.cpp ${YUE2CPP_SHORT} linux-x64 cuda12.8 vulkan cpu" > dist/VERSION
           tar -C dist -czf "yue2cpp-${YUE2CPP_SHORT}-linux-x64.tar.gz" .
+      - name: Contents and smoke test
+        # the runner has no GPU: the CUDA / Vulkan backends fail to load and the CPU one
+        # answers, which is exactly the "libraries resolve, binary starts" check we want
+        run: |
+          ls -la dist
+          (cd dist && sha256sum * | grep -v '^.*  LICENSE' ) || true
+          sha256sum "yue2cpp-${YUE2CPP_SHORT}-linux-x64.tar.gz"
+          out=$(dist/yue-synth 2>&1 || true); echo "$out" | head -5; echo "$out" | grep -q Usage
+          out=$(dist/quantize 2>&1 || true); echo "$out" | head -3; echo "$out" | grep -qi usage
       - uses: actions/upload-artifact@v4
         with:
           name: yue2cpp-${{ env.YUE2CPP_SHORT }}-linux-x64
@@ -134,6 +143,12 @@ jobs:
           cp LICENSE dist/LICENSE.yue2cpp
           echo "yue2.cpp ${YUE2CPP_SHORT} macos-arm64 metal" > dist/VERSION
           tar -C dist -czf "yue2cpp-${YUE2CPP_SHORT}-macos-arm64-metal.tar.gz" .
+      - name: Contents and smoke test
+        run: |
+          ls -la dist
+          shasum -a 256 "yue2cpp-${YUE2CPP_SHORT}-macos-arm64-metal.tar.gz"
+          out=$(dist/yue-synth 2>&1 || true); echo "$out" | head -5; echo "$out" | grep -q Usage
+          out=$(dist/quantize 2>&1 || true); echo "$out" | head -3; echo "$out" | grep -qi usage
       - uses: actions/upload-artifact@v4
         with:
           name: yue2cpp-${{ env.YUE2CPP_SHORT }}-macos-arm64-metal
@@ -201,6 +216,15 @@ jobs:
           Copy-Item LICENSE dist\LICENSE.yue2cpp
           "yue2.cpp $env:YUE2CPP_SHORT windows-x64 cuda12.8 vulkan cpu" | Out-File -Encoding ascii dist\VERSION
           Compress-Archive -Path dist\* -DestinationPath "yue2cpp-$env:YUE2CPP_SHORT-windows-x64.zip"
+      - name: Contents and smoke test
+        shell: pwsh
+        run: |
+          Get-ChildItem dist | Format-Table Name, Length
+          Get-FileHash "yue2cpp-$env:YUE2CPP_SHORT-windows-x64.zip" -Algorithm SHA256 | Format-List
+          $out = & dist\yue-synth.exe 2>&1 | Out-String; $out.Substring(0, [Math]::Min(400, $out.Length))
+          if ($out -notmatch "Usage") { throw "yue-synth did not print its usage" }
+          $out = & dist\quantize.exe 2>&1 | Out-String
+          if ($out -notmatch "(?i)usage") { throw "quantize did not print its usage" }
       - uses: actions/upload-artifact@v4
         with:
           name: yue2cpp-${{ env.YUE2CPP_SHORT }}-windows-x64
