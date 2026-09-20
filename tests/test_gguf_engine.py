@@ -605,34 +605,150 @@ def test_child_path_is_the_plain_string_off_windows(tmp_path):
     assert gguf_engine.child_path(p) == str(p)
 
 
-def test_prepare_moves_only_complete_files_into_place(tmp_path, monkeypatch):
-    """Conversion and quantization write under .partial/ and are moved in whole; the BF16
-    intermediate is dropped after a successful quantize; existing files are kept."""
+def checkpoint(directory: Path, digest: str) -> Path:
+    """A stand-in checkpoint: the manifest yue2's releases ship, naming the weight hash."""
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "weights_manifest.json").write_text(
+        json.dumps({"files": {"model.safetensors": {"sha256": digest, "bytes": 1}}})
+    )
+    return directory
+
+
+def test_prepare_names_files_after_the_checkpoints_and_moves_only_complete_ones(
+    tmp_path, monkeypatch
+):
+    """GGUF files carry the source weight hash (a new model / revision / VAE never reuses an
+    old conversion); conversion and quantization write under a private .partial-* directory
+    and are moved in whole; the BF16 intermediate is dropped; existing files are kept."""
     produced = []
 
     def fake_converter(components, out_dir, say):
         for name in components:
             target = out_dir / ("YuE2-3B-BF16.gguf" if name == "backbone" else "YuE2-Vae-F32.gguf")
             target.write_bytes(b"x" * 10)
-            produced.append((name, out_dir.name))
+            produced.append((name, out_dir.name[: len(".partial-")]))
 
     def fake_run(argv, say):
         Path(argv[2]).write_bytes(b"q" * 5)  # quantize <in> <out> <type>
-        produced.append(("quantize", Path(argv[2]).parent.name))
+        produced.append(("quantize", Path(argv[2]).parent.name[: len(".partial-")]))
 
     monkeypatch.setattr(gguf_engine, "_run_converter", fake_converter)
     monkeypatch.setattr(gguf_engine, "_run", fake_run)
-    monkeypatch.setattr(gguf_engine, "binary", lambda name: Path("/stub") / name)
+    monkeypatch.setattr(gguf_engine, "binary", lambda name: tmp_path / name)
+    monkeypatch.delenv("YUE2_GROOVE_GGUF", raising=False)
+    m = checkpoint(tmp_path / "m", "a" * 64)
+    v = checkpoint(tmp_path / "v", "b" * 64)
     out = tmp_path / "gguf"
-    backbone, vae = gguf_engine.prepare(tmp_path / "m", tmp_path / "v", out, quant_label="Q8_0")
-    assert backbone == out / "YuE2-3B-Q8_0.gguf" and vae == out / "YuE2-Vae-F32.gguf"
+    backbone, vae = gguf_engine.prepare(m, v, out, quant_label="Q8_0")
+    assert backbone == out / f"YuE2-3B-Q8_0-{'a' * 12}.gguf"
+    assert vae == out / f"YuE2-Vae-F32-{'b' * 12}.gguf"
     assert backbone.read_bytes() == b"q" * 5 and vae.is_file()
-    assert not (out / "YuE2-3B-BF16.gguf").exists() and not (out / ".partial").exists()
-    assert [d for _, d in produced] == [".partial", ".partial", ".partial"]
+    assert not list(out.glob("*BF16*")) and not list(out.glob(".partial-*"))
+    assert [d for _, d in produced] == [".partial-"] * 3
     # second call: nothing to do
     produced.clear()
-    gguf_engine.prepare(tmp_path / "m", tmp_path / "v", out, quant_label="Q8_0")
+    gguf_engine.prepare(m, v, out, quant_label="Q8_0")
     assert produced == []
     # a different quant needs the intermediate again, but not the VAE
-    gguf_engine.prepare(tmp_path / "m", tmp_path / "v", out, quant_label="Q6_K")
+    gguf_engine.prepare(m, v, out, quant_label="Q6_K")
     assert [n for n, _ in produced] == ["backbone", "quantize"]
+    # a different model converts afresh instead of reusing the old file
+    produced.clear()
+    m2 = checkpoint(tmp_path / "m2", "c" * 64)
+    backbone2, _ = gguf_engine.prepare(m2, v, out, quant_label="Q8_0")
+    assert backbone2 == out / f"YuE2-3B-Q8_0-{'c' * 12}.gguf" and backbone.is_file()
+    assert [n for n, _ in produced] == ["backbone", "quantize"]
+
+
+def test_prepare_uses_ready_made_files_only_in_an_explicit_gguf_dir(tmp_path, monkeypatch):
+    out = tmp_path / "ready"
+    out.mkdir()
+    (out / "YuE2-3B-Q8_0.gguf").write_bytes(b"r")
+    (out / "YuE2-Vae-F32.gguf").write_bytes(b"r")
+    monkeypatch.setattr(gguf_engine, "_run_converter", lambda *a: pytest.fail("converted"))
+    monkeypatch.delenv("YUE2_GROOVE_GGUF", raising=False)
+    with pytest.raises(RuntimeError, match="no safetensors"):  # not explicit: identity needed
+        gguf_engine.prepare(tmp_path / "nope", tmp_path / "nope", out, quant_label="Q8_0")
+    monkeypatch.setenv("YUE2_GROOVE_GGUF", str(out))
+    backbone, vae = gguf_engine.prepare(
+        tmp_path / "nope", tmp_path / "nope", out, quant_label="Q8_0"
+    )
+    assert backbone.name == "YuE2-3B-Q8_0.gguf" and vae.name == "YuE2-Vae-F32.gguf"
+
+
+def test_source_identity_reads_the_manifest_or_hashes_the_weights(tmp_path):
+    assert gguf_engine.source_identity(checkpoint(tmp_path / "m", "d" * 64)) == "d" * 64
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / "model.safetensors").write_bytes(b"weights")
+    digest = gguf_engine.source_identity(raw)
+    assert len(digest) == 64 and digest == gguf_engine.source_identity(raw)
+    assert not (raw / "model.safetensors.sha256").exists()  # never litters a checkpoint dir
+
+
+def test_stale_partial_directories_are_swept_but_live_ones_kept(tmp_path):
+    old = tmp_path / ".partial-old"
+    old.mkdir()
+    os.utime(old, (1, 1))
+    live = tmp_path / ".partial-live"
+    live.mkdir()
+    gguf_engine._sweep_stale_partials(tmp_path)
+    assert not old.exists() and live.exists()
+
+
+def test_engine_version_is_read_from_the_usage_banner(tmp_path, monkeypatch):
+    stub = write_stub(
+        tmp_path,
+        "yue-synth",
+        """
+        import sys
+        print("yue2.cpp deadbee (2026-09-18)", file=sys.stderr)
+        print("Usage: yue-synth --model <gguf> ...", file=sys.stderr)
+        sys.exit(1)
+    """,
+    )
+    real_run = gguf_engine.subprocess.run
+    monkeypatch.setattr(
+        gguf_engine.subprocess, "run", lambda argv, **kw: real_run([sys.executable, *argv], **kw)
+    )
+    assert gguf_engine.engine_version(stub) == "deadbee (2026-09-18)"
+    assert gguf_engine.engine_version(tmp_path / "missing") == ""
+
+
+def test_exact_ids_come_from_the_engines_dump(tmp_path, monkeypatch, model_dir):
+    """With YUE2_GROOVE_GGUF_EXACT_IDS the prefix is what yue2.cpp fed the semantic stage,
+    read from its dump, not a re-tokenization of the score text."""
+    dump_stub = (
+        SYNTH_STUB
+        + """
+    import os
+    d = args.get("--dump")
+    if d:
+        os.makedirs(d, exist_ok=True)
+        tokenizer_ids = [151643, 1, 2, 3, 151847, 40, 41, 42, 151848, 151851] + [151853 + t for t in tokens] + [151852]
+        arr = np.asarray(tokenizer_ids, dtype=np.float32)
+        with open(os.path.join(d, "ar_ids.bin"), "wb") as f:
+            f.write(struct.pack("i", 1) + struct.pack("i", len(arr)) + arr.tobytes())
+    """
+    )
+    patch_binaries(monkeypatch, {"yue-synth": write_stub(tmp_path, "yue-synth", dump_stub)})
+    monkeypatch.setenv("YUE2_GROOVE_GGUF_EXACT_IDS", "1")
+    pipe = make_pipe(tmp_path, model_dir)
+    request = adapter.song_request(style="pop", lyrics="la", cot="full", seed=3)
+    song = adapter.generate(pipe, request, abc_sampling=sampling(), semantic_sampling=sampling())
+    assert song.plan.abc_ids == [40, 41, 42]  # the engine's ids, not encode(score)
+    assert song.plan.prefix[:5] == [151643, 1, 2, 3, 151847] and song.plan.prefix[-1] == 151851
+    assert song.config["plan_ids_provenance"] == "engine"
+    monkeypatch.delenv("YUE2_GROOVE_GGUF_EXACT_IDS")
+    song = adapter.generate(pipe, request, abc_sampling=sampling(), semantic_sampling=sampling())
+    assert song.config["plan_ids_provenance"] == "retokenized"
+    tokenizer = adapter.text_tokenizer(model_dir)
+    assert song.plan.abc_ids == tokenizer.encode(song.abc)
+
+
+def test_resolve_backend_respects_an_explicit_device(monkeypatch):
+    monkeypatch.setattr(gguf_engine, "cuda_total_vram_gib", lambda: 12.0)
+    monkeypatch.setattr(gguf_engine, "available", lambda: True)
+    assert runtime.resolve_backend("auto", "cpu")[0] == "gguf"  # torch picked cpu on its own
+    assert runtime.resolve_backend("auto", "cpu", device_explicit=True) == ("torch", "")
+    assert runtime.resolve_backend("auto", "cuda", device_explicit=True)[0] == "gguf"

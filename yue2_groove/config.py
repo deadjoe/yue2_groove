@@ -44,6 +44,8 @@ The GGUF engine (``yue2_groove.gguf_engine``: YuE2 through yue2.cpp, for cards u
                                 ``$YUE2_GROOVE_MODELS/gguf``); prepared there on first use
 * ``YUE2_GROOVE_GGUF_QUANT``    ``Q8_0`` (default) / ``Q6_K`` / ``Q5_K_M`` / ``BF16``
 * ``YUE2_GROOVE_GGUF_MAX_SEQ``  optional KV-cache cap (``--max-seq``) for 8 GB cards
+* ``YUE2_GROOVE_GGUF_EXACT_IDS`` ``1`` records the score ids the engine sampled (from its debug
+                                dump) instead of re-tokenizing the score text
 
 The repository-root ``.env`` (see README) is also read by the app itself via
 :func:`load_env`, before the CLI defaults are resolved — so a direct

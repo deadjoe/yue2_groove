@@ -102,7 +102,9 @@ def main():
     dtype = args.dtype
     if dtype == "auto":
         dtype = "bfloat16" if device in ("cuda", "mps") else "float32"
-    backend, backend_note = runtime.resolve_backend(args.backend, device)
+    backend, backend_note = runtime.resolve_backend(
+        args.backend, device, device_explicit=args.device != "auto"
+    )
     if backend_note:
         log.info("backend: %s", backend_note)
     view_mode, tab = song_view.resolve_view(args.view, args.tab, os.environ.get("YUE2_GROOVE_VIEW"))

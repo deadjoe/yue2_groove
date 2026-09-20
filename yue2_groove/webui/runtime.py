@@ -58,11 +58,16 @@ BACKEND_CHOICES = (
 BACKEND_MODES = ["auto", *BACKEND_CHOICES]  # what --backend / YUE2_GROOVE_BACKEND accept
 
 
-def resolve_backend(mode: str, device: str) -> tuple[str, str]:
-    """The concrete BACKEND for a launch: ``auto`` applies the VRAM rule (``(backend, note)``)."""
+def resolve_backend(mode: str, device: str, *, device_explicit: bool = False) -> tuple[str, str]:
+    """The concrete BACKEND for a launch: ``auto`` applies the VRAM rule (``(backend, note)``).
+
+    An explicit ``--device cpu`` / ``mps`` is respected: the rule that routes a GPU torch cannot
+    see to the GGUF engine only applies when the device itself was chosen automatically."""
     mode = (mode or "auto").strip().lower()
     if mode != "auto":
         return (mode if mode in BACKEND_CHOICES else "torch"), ""
+    if device_explicit and device != "cuda":
+        return "torch", ""
     return gguf_engine.auto_backend(device, gguf_engine.cuda_total_vram_gib())
 
 
@@ -226,15 +231,14 @@ def load_pipeline(settings: RuntimeSettings, progress=None):
             f"Model ready: device={device} dtype={settings.dtype} "
             f"backend={backend}{fallback} vae={vae_name}"
         )
+    if backend == "gguf":  # DTYPE / QUANTIZATION / OFFLOAD / BUDGET do not apply: no checks on them
+        return _load_gguf(settings, vae_path, vae_name, key, progress)
     if backend == "vllm" and device != "cuda":
         raise gr.Error(
             "vLLM backend requires NVIDIA CUDA; use torch here (MPS falls back to eager)"
         )
     if settings.quantization == "fp8" and device != "cuda":
         raise gr.Error("FP8 quantization requires NVIDIA CUDA (sm89+)")
-
-    if backend == "gguf":
-        return _load_gguf(settings, vae_path, vae_name, key, progress)
 
     unload_pipeline()
     if progress is not None:

@@ -119,6 +119,41 @@ def available() -> bool:
     return binary_dir() is not None
 
 
+_VERSION_LINE = re.compile(r"yue2\.cpp (\S+) \((\d{4}-\d\d-\d\d)\)")
+
+
+def engine_version(path: Path | None = None) -> str:
+    """What the installed ``yue-synth`` says it is (``e8b39f7 (2026-09-18)``), or ``""``.
+
+    The binaries print their commit on the usage banner; the run records this next to the
+    pin the app was written against, so an archive never claims a version it did not run.
+    """
+    try:
+        out = subprocess.run(
+            [str(path or binary("yue-synth"))],
+            capture_output=True,
+            timeout=30,
+            check=False,
+            **config.SUBPROCESS_TEXT,
+        )
+    except Exception:  # noqa: BLE001 — unrunnable binary: the generate path reports it properly
+        return ""
+    m = _VERSION_LINE.search((out.stdout or "") + (out.stderr or ""))
+    return f"{m.group(1)} ({m.group(2)})" if m else ""
+
+
+def exact_ids_wanted() -> bool:
+    """``YUE2_GROOVE_GGUF_EXACT_IDS=1``: read the AR ids the engine actually used (yue2.cpp's
+    ``--dump``, several hundred MB of scratch per song) instead of re-tokenizing the score.
+    Off by default: in 28 of 28 archived model-written scores the two were identical."""
+    return (os.environ.get("YUE2_GROOVE_GGUF_EXACT_IDS") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
 def gguf_dir() -> Path:
     explicit = (os.environ.get("YUE2_GROOVE_GGUF") or "").strip()
     if explicit:
@@ -265,6 +300,44 @@ def sha256_file(path: Path, *, cache: bool = True) -> str:
 # ── preparing the GGUF files ─────────────────────────────────────────────────
 
 
+def source_identity(checkpoint_dir: Path) -> str:
+    """SHA-256 of the checkpoint's ``model.safetensors`` — from ``weights_manifest.json`` when
+    the checkpoint ships one (every m-a-p release does), else hashed once.  It names the GGUF
+    files, so a different model, revision or VAE can never be served an older conversion."""
+    checkpoint_dir = Path(checkpoint_dir)
+    manifest = checkpoint_dir / "weights_manifest.json"
+    if manifest.is_file():
+        with contextlib.suppress(OSError, ValueError, KeyError, TypeError):
+            files = json.loads(manifest.read_text(encoding="utf-8"))["files"]
+            digest = files["model.safetensors"]["sha256"]
+            if isinstance(digest, str) and len(digest) == 64:
+                return digest
+    weights = sorted(checkpoint_dir.glob("*.safetensors"))
+    if not weights:
+        raise RuntimeError(f"no safetensors weights in {checkpoint_dir}")
+    h = hashlib.sha256()
+    for path in weights:
+        h.update(sha256_file(path, cache=False).encode())
+    return h.hexdigest()
+
+
+def gguf_names(quant_label: str, model_identity: str, vae_identity: str) -> tuple[str, str]:
+    """``YuE2-3B-<quant>-<id12>.gguf`` and ``YuE2-Vae-F32-<id12>.gguf``."""
+    return (
+        f"YuE2-3B-{quant_label}-{model_identity[:12]}.gguf",
+        f"YuE2-Vae-F32-{vae_identity[:12]}.gguf",
+    )
+
+
+def ready_made(out_dir: Path, quant_label: str) -> tuple[Path, Path] | None:
+    """Plain-named files a user placed in an explicitly configured ``YUE2_GROOVE_GGUF``
+    (downloaded from the published repository): used as they are, provenance untied."""
+    if not (os.environ.get("YUE2_GROOVE_GGUF") or "").strip():
+        return None
+    backbone, vae = out_dir / backbone_name(quant_label), out_dir / VAE_NAME
+    return (backbone, vae) if backbone.is_file() and vae.is_file() else None
+
+
 def prepare(
     model_dir: Path,
     vae_dir: Path,
@@ -273,51 +346,86 @@ def prepare(
     quant_label: str | None = None,
     log: Callable[[str], None] | None = None,
 ) -> tuple[Path, Path]:
-    """Make sure ``<out>/YuE2-3B-<quant>.gguf`` and ``<out>/YuE2-Vae-F32.gguf`` exist.
+    """Make sure the GGUF files for *these* checkpoints exist; returns ``(backbone, vae)``.
 
-    Converts the checkpoint directories with yue2.cpp's converter (a byte-identical vendored
-    copy driven in a child interpreter) and quantizes with the release's ``quantize``; the
-    BF16 intermediate is removed afterwards (a quant other than BF16 needs about 4.3 GB of
-    disk in total).  Idempotent: existing files are kept.  Returns ``(backbone, vae)``.
+    Files are named after the checkpoints' weight hashes (:func:`source_identity`), so a
+    change of model, revision or VAE converts afresh instead of silently reusing an older
+    file.  Conversion runs yue2.cpp's converter (a byte-identical vendored copy, driven in a
+    child interpreter) and quantizes with the release's ``quantize``; the BF16 intermediate is
+    removed afterwards (a quant other than BF16 needs about 4.3 GB of disk in total).
+    Idempotent: existing files are kept.  Every file is produced under a private
+    ``.partial-*`` directory and moved into place only when complete, so an interrupted or
+    concurrent preparation can never leave a truncated .gguf that looks finished.
     """
     out_dir = Path(out_dir or gguf_dir())
     quant_label = quant_label or quant()
     say = log or (lambda _msg: None)
     out_dir.mkdir(parents=True, exist_ok=True)
-    backbone = out_dir / backbone_name(quant_label)
-    vae = out_dir / VAE_NAME
-    native = out_dir / backbone_name("BF16")
+    found = ready_made(out_dir, quant_label)
+    if found is not None:
+        say(f"using ready-made GGUF files in {out_dir}")
+        return found
+    model_id, vae_id = source_identity(model_dir), source_identity(vae_dir)
+    backbone_file, vae_file = gguf_names(quant_label, model_id, vae_id)
+    backbone, vae = out_dir / backbone_file, out_dir / vae_file
+    native = out_dir / gguf_names("BF16", model_id, vae_id)[0]
+    if backbone.is_file() and vae.is_file():
+        return backbone, vae
 
-    # every file is produced under .partial/ and moved into place only when complete, so an
-    # interrupted conversion can never leave a truncated .gguf that looks finished
-    partial = out_dir / ".partial"
-    shutil.rmtree(partial, ignore_errors=True)
-    partial.mkdir()
-    need_native = not native.is_file() and not backbone.is_file()
-    if need_native or not vae.is_file():
-        components = {}
-        if need_native:
-            components["backbone"] = str(Path(model_dir).resolve())
-        if not vae.is_file():
-            components["vae"] = str(Path(vae_dir).resolve())
-        say(f"Converting checkpoints to GGUF ({', '.join(components)}) — one-time, under a minute…")
-        _run_converter(components, partial, say)
-        for produced in partial.glob("*.gguf"):
-            os.replace(produced, out_dir / produced.name)
-    if not backbone.is_file():
-        if quant_label == "BF16":
-            raise RuntimeError(f"conversion did not produce {native}")
-        say(f"Quantizing to {quant_label} — one-time…")
-        _run([str(binary("quantize")), str(native), str(partial / backbone.name), quant_label], say)
-        os.replace(partial / backbone.name, backbone)
-        # the 7.2 GB BF16 intermediate is not needed at run time; re-converting takes seconds
-        with contextlib.suppress(OSError):
-            native.unlink()
-    shutil.rmtree(partial, ignore_errors=True)
+    _sweep_stale_partials(out_dir)
+    partial = Path(tempfile.mkdtemp(prefix=".partial-", dir=str(out_dir)))
+    try:
+        need_native = not native.is_file() and not backbone.is_file()
+        if need_native or not vae.is_file():
+            components = {}
+            if need_native:
+                components["backbone"] = str(Path(model_dir).resolve())
+            if not vae.is_file():
+                components["vae"] = str(Path(vae_dir).resolve())
+            say(
+                f"Converting checkpoints to GGUF ({', '.join(components)}) — one-time, under a minute…"
+            )
+            _run_converter(components, partial, say)
+            # the converter writes fixed names; they take the identity suffix on the way out
+            for produced, target in (
+                (partial / backbone_name("BF16"), native),
+                (partial / VAE_NAME, vae),
+            ):
+                if produced.is_file():
+                    os.replace(produced, target)
+        if not backbone.is_file():
+            if quant_label == "BF16":
+                raise RuntimeError(f"conversion did not produce {native}")
+            say(f"Quantizing to {quant_label} — one-time…")
+            staged = partial / backbone.name
+            _run(
+                [
+                    child_path(binary("quantize")),
+                    child_path(native),
+                    child_path(staged),
+                    quant_label,
+                ],
+                say,
+            )
+            os.replace(staged, backbone)
+            # the 7.2 GB BF16 intermediate is not needed at run time; re-converting takes seconds
+            with contextlib.suppress(OSError):
+                native.unlink()
+    finally:
+        shutil.rmtree(partial, ignore_errors=True)
     for path in (backbone, vae):
         if not path.is_file():
             raise RuntimeError(f"GGUF preparation did not produce {path}")
     return backbone, vae
+
+
+def _sweep_stale_partials(out_dir: Path, older_than_seconds: float = 86400) -> None:
+    """Leftovers of a preparation that died more than a day ago (a live one is never touched)."""
+    now = time.time()
+    for stale in out_dir.glob(".partial-*"):
+        with contextlib.suppress(OSError):
+            if now - stale.stat().st_mtime > older_than_seconds:
+                shutil.rmtree(stale, ignore_errors=True)
 
 
 def _run_converter(components: dict[str, str], out_dir: Path, say) -> None:
@@ -634,6 +742,8 @@ class GgufPipeline:
     max_seq: int | None = None
     device: str = "gguf"  # replaced by the child's backend name (MTL0 / CUDA0 / …) after a run
     weights: dict = field(default_factory=dict)
+    version: str = ""  # what the binary reports; compare with YUE2CPP_PIN
+    binary_sha256: str = ""
 
     engine = "yue2.cpp"
 
@@ -648,7 +758,10 @@ class GgufPipeline:
         quant_label: str | None = None,
         log: Callable[[str], None] | None = None,
     ) -> GgufPipeline:
-        binary("yue-synth")  # fail early, with the install hint
+        synth = binary("yue-synth")  # fail early, with the install hint
+        version = engine_version(synth)
+        if version and not version.startswith(YUE2CPP_PIN) and log is not None:
+            log(f"note: installed yue2.cpp is {version}, the app was written against {YUE2CPP_PIN}")
         quant_label = quant_label or quant()
         backbone, vae = prepare(model_dir, vae_dir, quant_label=quant_label, log=log)
         if log is not None and not backbone.with_name(backbone.name + ".sha256").is_file():
@@ -660,9 +773,13 @@ class GgufPipeline:
                         "sha256": sha256_file(backbone),
                         "bytes": backbone.stat().st_size,
                     }
-                }
+                },
+                "source": {"model.safetensors": source_identity(model_dir)},
             },
-            "vae": {"files": {vae.name: {"sha256": sha256_file(vae), "bytes": vae.stat().st_size}}},
+            "vae": {
+                "files": {vae.name: {"sha256": sha256_file(vae), "bytes": vae.stat().st_size}},
+                "source": {"model.safetensors": source_identity(vae_dir)},
+            },
         }
         return cls(
             backbone=backbone,
@@ -674,6 +791,8 @@ class GgufPipeline:
             vae_core_frames=vae_core_frames,
             max_seq=max_seq(),
             weights=weights,
+            version=version,
+            binary_sha256=sha256_file(synth, cache=False),
         )
 
     def _workdir(self):
@@ -728,9 +847,12 @@ class GgufPipeline:
             "engine": {
                 "name": "yue2.cpp",
                 "pin": YUE2CPP_PIN,
+                "version": self.version or None,  # what the binary itself reported
+                "binary_sha256": self.binary_sha256 or None,
                 "backbone_gguf": self.backbone.name,
                 "vae_gguf": self.vae.name,
             },
+            "plan_ids_provenance": "engine" if exact_ids_wanted() else "retokenized",
             "decoder_release": self._decoder_release(),
             "validation_status": "unvalidated",
         }
@@ -785,6 +907,9 @@ class GgufPipeline:
                 child_path(work / "score.abc"),
                 *self._synth_flags(),
             ]
+            exact = exact_ids_wanted()
+            if exact:
+                argv += ["--dump", child_path(work / "dump")]
             log = run_child(argv, cancelled=cancelled, on_token=on_token, on_progress=on_progress)
             if log.backend:
                 self.device = log.backend
@@ -798,6 +923,9 @@ class GgufPipeline:
                 if (work / "score.abc").is_file()
                 else None
             )
+            engine_ids = (
+                _engine_ar_ids(work / "dump" / "ar_ids.bin", len(tokens)) if exact else None
+            )
         if request.cot == "off":
             score = None
         elif request.abc is not None:
@@ -807,6 +935,15 @@ class GgufPipeline:
         tokenizer = adapter.text_tokenizer(self.model_dir)
         abc_ids = tokenizer.encode(score) if score is not None else []
         prefix = adapter.token_prefixes(request, tokenizer, abc_ids if score is not None else None)
+        if engine_ids is not None:
+            # the ids the engine actually sampled and fed to the semantic stage win over the
+            # re-tokenization of their text (identical in every archived run, but this is the truth)
+            engine_prefix, engine_abc = engine_ids
+            if engine_prefix != prefix:
+                log.lines.append(
+                    "[app] engine prefix differs from the re-tokenized score: keeping the engine's"
+                )
+                prefix, abc_ids = engine_prefix, engine_abc
         plan_timing = (
             {"seconds": 0.0, "output_tokens": 0, "external_prefix_tokens": len(abc_ids)}
             if request.abc is not None
@@ -924,6 +1061,26 @@ class GgufPipeline:
 
     def close(self) -> None:
         return None
+
+
+def _engine_ar_ids(dump: Path, n_codes: int) -> tuple[list[int], list[int]] | None:
+    """``(prefix, abc_ids)`` from yue2.cpp's ``ar_ids.bin`` (prefix + codes + MUSIC_END)."""
+    import struct
+
+    from . import adapter
+
+    if not dump.is_file():
+        return None
+    raw = np.fromfile(dump, dtype=np.float32)
+    ndim = struct.unpack("i", struct.pack("f", raw[0]))[0]
+    ids = [int(v) for v in raw[1 + ndim :]]
+    prefix = ids[: len(ids) - n_codes - 1]
+    abc_start, abc_end = adapter.abc_markers()
+    if abc_start in prefix and abc_end in prefix:
+        abc_ids = prefix[prefix.index(abc_start) + 1 : prefix.index(abc_end)]
+    else:
+        abc_ids = []
+    return prefix, abc_ids
 
 
 def _read_wav32(path: Path) -> np.ndarray:
@@ -1078,6 +1235,7 @@ def install_binaries(dest: Path | None = None, *, tag: str | None = None, say=No
 def main(argv: list[str] | None = None) -> int:
     import argparse
 
+    config.load_env()  # the same .env the app reads: YUE2_GROOVE_YUE2CPP / _GGUF / _MODELS …
     parser = argparse.ArgumentParser(
         prog="python -m yue2_groove.gguf_engine", description="GGUF engine (yue2.cpp) helpers"
     )

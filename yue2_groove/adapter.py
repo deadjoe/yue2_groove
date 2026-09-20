@@ -146,6 +146,14 @@ def token_prefixes(request, tokenizer, abc_ids=None):
     return _prefixes(request, tokenizer, abc_ids)
 
 
+def abc_markers() -> tuple[int, int]:
+    """``(ABC_START, ABC_END)``: the special ids that bracket the score in a prefix."""
+    _require()
+    from yue2.protocol import ABC_END, ABC_START
+
+    return int(ABC_START), int(ABC_END)
+
+
 def symbolic_plan(request, abc, abc_ids, prefix, timing, truncated):
     _require()
     from yue2.pipeline import SymbolicPlan
