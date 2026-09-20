@@ -146,12 +146,18 @@ def token_prefixes(request, tokenizer, abc_ids=None):
     return _prefixes(request, tokenizer, abc_ids)
 
 
-def abc_markers() -> tuple[int, int]:
-    """``(ABC_START, ABC_END)``: the special ids that bracket the score in a prefix."""
+def protocol_ids() -> dict[str, int]:
+    """The special ids a prefix / semantic sequence is made of, by upstream's names."""
     _require()
-    from yue2.protocol import ABC_END, ABC_START
+    from yue2.protocol import ABC_END, ABC_START, CODEC_OFFSET, MUSIC_END, MUSIC_START
 
-    return int(ABC_START), int(ABC_END)
+    return {
+        "ABC_START": int(ABC_START),
+        "ABC_END": int(ABC_END),
+        "MUSIC_START": int(MUSIC_START),
+        "MUSIC_END": int(MUSIC_END),
+        "CODEC_OFFSET": int(CODEC_OFFSET),
+    }
 
 
 def symbolic_plan(request, abc, abc_ids, prefix, timing, truncated):

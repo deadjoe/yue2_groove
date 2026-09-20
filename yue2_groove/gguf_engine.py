@@ -300,25 +300,68 @@ def sha256_file(path: Path, *, cache: bool = True) -> str:
 # ── preparing the GGUF files ─────────────────────────────────────────────────
 
 
-def source_identity(checkpoint_dir: Path) -> str:
-    """SHA-256 of the checkpoint's ``model.safetensors`` — from ``weights_manifest.json`` when
-    the checkpoint ships one (every m-a-p release does), else hashed once.  It names the GGUF
-    files, so a different model, revision or VAE can never be served an older conversion."""
+def _hash_cache_path(out_dir: Path) -> Path:
+    return out_dir / ".hashes.json"
+
+
+def cached_sha256(path: Path, out_dir: Path) -> str:
+    """SHA-256 of *path*, remembered in ``<out_dir>/.hashes.json`` by size + mtime — the
+    7 GB checkpoint is hashed once, and nothing is ever written into the checkpoint directory."""
+    path = Path(path)
+    stat = path.stat()
+    key = f"{path.resolve()}|{stat.st_size}|{stat.st_mtime_ns}"
+    cache_file = _hash_cache_path(out_dir)
+    cache: dict = {}
+    with contextlib.suppress(OSError, ValueError):
+        cache = json.loads(cache_file.read_text(encoding="utf-8"))
+    digest = cache.get(key)
+    if isinstance(digest, str) and len(digest) == 64:
+        return digest
+    digest = sha256_file(path, cache=False)
+    cache[key] = digest
+    with contextlib.suppress(OSError):
+        out_dir.mkdir(parents=True, exist_ok=True)
+        cache_file.write_text(json.dumps(cache, indent=1), encoding="utf-8")
+    return digest
+
+
+def converter_version() -> str:
+    """SHA-256 of the vendored converter: a converter change is a conversion-input change."""
+    return sha256_file(config.PACKAGE_DIR / "vendor" / "yue2cpp_convert.py", cache=False)
+
+
+def checkpoint_identity(checkpoint_dir: Path, out_dir: Path) -> dict:
+    """Everything the conversion reads from a checkpoint, by actual content.
+
+    ``files``: every ``*.safetensors`` hashed (verified against ``weights_manifest.json`` when
+    the checkpoint ships one — a mismatch is an integrity failure, not a cache miss);
+    ``config.json`` and ``qwen.tiktoken`` (both embedded in the GGUF); and the converter
+    itself.  ``identity`` folds them into one digest that names the GGUF file.
+    """
     checkpoint_dir = Path(checkpoint_dir)
-    manifest = checkpoint_dir / "weights_manifest.json"
-    if manifest.is_file():
-        with contextlib.suppress(OSError, ValueError, KeyError, TypeError):
-            files = json.loads(manifest.read_text(encoding="utf-8"))["files"]
-            digest = files["model.safetensors"]["sha256"]
-            if isinstance(digest, str) and len(digest) == 64:
-                return digest
     weights = sorted(checkpoint_dir.glob("*.safetensors"))
     if not weights:
         raise RuntimeError(f"no safetensors weights in {checkpoint_dir}")
-    h = hashlib.sha256()
-    for path in weights:
-        h.update(sha256_file(path, cache=False).encode())
-    return h.hexdigest()
+    files = {w.name: cached_sha256(w, out_dir) for w in weights}
+    manifest = checkpoint_dir / "weights_manifest.json"
+    if manifest.is_file():
+        with contextlib.suppress(OSError, ValueError, TypeError):
+            expected = json.loads(manifest.read_text(encoding="utf-8")).get("files") or {}
+            for name, digest in files.items():
+                wanted = (expected.get(name) or {}).get("sha256")
+                if wanted and wanted != digest:
+                    raise RuntimeError(
+                        f"weight integrity failed: {checkpoint_dir / name} does not match "
+                        f"weights_manifest.json ({digest[:12]} vs {wanted[:12]})"
+                    )
+    extras = {}
+    for name in ("config.json", "qwen.tiktoken"):
+        path = checkpoint_dir / name
+        if path.is_file():
+            extras[name] = sha256_file(path, cache=False)
+    record = {"files": files, **extras, "converter": converter_version()}
+    identity = hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()
+    return {"identity": identity, **record}
 
 
 def gguf_names(quant_label: str, model_identity: str, vae_identity: str) -> tuple[str, str]:
@@ -338,6 +381,15 @@ def ready_made(out_dir: Path, quant_label: str) -> tuple[Path, Path] | None:
     return (backbone, vae) if backbone.is_file() and vae.is_file() else None
 
 
+@dataclass
+class Prepared:
+    backbone: Path
+    vae: Path
+    provenance: str  # "converted" | "ready-made"
+    model: dict | None = None  # checkpoint_identity() records when converted
+    vae_source: dict | None = None
+
+
 def prepare(
     model_dir: Path,
     vae_dir: Path,
@@ -345,17 +397,17 @@ def prepare(
     *,
     quant_label: str | None = None,
     log: Callable[[str], None] | None = None,
-) -> tuple[Path, Path]:
-    """Make sure the GGUF files for *these* checkpoints exist; returns ``(backbone, vae)``.
+) -> Prepared:
+    """Make sure the GGUF files for *these* checkpoints exist.
 
-    Files are named after the checkpoints' weight hashes (:func:`source_identity`), so a
-    change of model, revision or VAE converts afresh instead of silently reusing an older
-    file.  Conversion runs yue2.cpp's converter (a byte-identical vendored copy, driven in a
-    child interpreter) and quantizes with the release's ``quantize``; the BF16 intermediate is
-    removed afterwards (a quant other than BF16 needs about 4.3 GB of disk in total).
-    Idempotent: existing files are kept.  Every file is produced under a private
-    ``.partial-*`` directory and moved into place only when complete, so an interrupted or
-    concurrent preparation can never leave a truncated .gguf that looks finished.
+    Files are named after :func:`checkpoint_identity` (weights, config, tokenizer, converter),
+    so a change of model, revision, VAE or converter converts afresh instead of silently
+    reusing an older file.  The whole conversion — yue2.cpp's converter (a byte-identical
+    vendored copy, driven in a child interpreter) and the release's ``quantize`` — works in
+    a private ``.partial-*`` directory, including the 7.2 GB BF16 intermediate; only the
+    finished file is moved into place.  So a concurrent preparation can neither clobber
+    another nor delete a file another process is using, and an interrupted one never leaves
+    a truncated .gguf that looks finished.  Idempotent: existing files are kept.
     """
     out_dir = Path(out_dir or gguf_dir())
     quant_label = quant_label or quant()
@@ -363,60 +415,50 @@ def prepare(
     out_dir.mkdir(parents=True, exist_ok=True)
     found = ready_made(out_dir, quant_label)
     if found is not None:
-        say(f"using ready-made GGUF files in {out_dir}")
-        return found
-    model_id, vae_id = source_identity(model_dir), source_identity(vae_dir)
-    backbone_file, vae_file = gguf_names(quant_label, model_id, vae_id)
+        say(f"using ready-made GGUF files in {out_dir} (external: source not verified)")
+        return Prepared(found[0], found[1], "ready-made")
+    model = checkpoint_identity(model_dir, out_dir)
+    vae_source = checkpoint_identity(vae_dir, out_dir)
+    backbone_file, vae_file = gguf_names(quant_label, model["identity"], vae_source["identity"])
     backbone, vae = out_dir / backbone_file, out_dir / vae_file
-    native = out_dir / gguf_names("BF16", model_id, vae_id)[0]
     if backbone.is_file() and vae.is_file():
-        return backbone, vae
+        return Prepared(backbone, vae, "converted", model, vae_source)
 
     _sweep_stale_partials(out_dir)
     partial = Path(tempfile.mkdtemp(prefix=".partial-", dir=str(out_dir)))
     try:
-        need_native = not native.is_file() and not backbone.is_file()
-        if need_native or not vae.is_file():
-            components = {}
-            if need_native:
-                components["backbone"] = str(Path(model_dir).resolve())
-            if not vae.is_file():
-                components["vae"] = str(Path(vae_dir).resolve())
-            say(
-                f"Converting checkpoints to GGUF ({', '.join(components)}) — one-time, under a minute…"
-            )
-            _run_converter(components, partial, say)
-            # the converter writes fixed names; they take the identity suffix on the way out
-            for produced, target in (
-                (partial / backbone_name("BF16"), native),
-                (partial / VAE_NAME, vae),
-            ):
-                if produced.is_file():
-                    os.replace(produced, target)
+        components = {}
         if not backbone.is_file():
+            components["backbone"] = str(Path(model_dir).resolve())
+        if not vae.is_file():
+            components["vae"] = str(Path(vae_dir).resolve())
+        say(f"Converting checkpoints to GGUF ({', '.join(components)}) — one-time, under a minute…")
+        _run_converter(components, partial, say)
+        if "vae" in components:
+            os.replace(partial / VAE_NAME, vae)
+        if "backbone" in components:
+            native = partial / backbone_name("BF16")
             if quant_label == "BF16":
-                raise RuntimeError(f"conversion did not produce {native}")
-            say(f"Quantizing to {quant_label} — one-time…")
-            staged = partial / backbone.name
-            _run(
-                [
-                    child_path(binary("quantize")),
-                    child_path(native),
-                    child_path(staged),
-                    quant_label,
-                ],
-                say,
-            )
-            os.replace(staged, backbone)
-            # the 7.2 GB BF16 intermediate is not needed at run time; re-converting takes seconds
-            with contextlib.suppress(OSError):
-                native.unlink()
+                os.replace(native, backbone)
+            else:
+                say(f"Quantizing to {quant_label} — one-time…")
+                staged = partial / backbone.name
+                _run(
+                    [
+                        child_path(binary("quantize")),
+                        child_path(native),
+                        child_path(staged),
+                        quant_label,
+                    ],
+                    say,
+                )
+                os.replace(staged, backbone)
     finally:
-        shutil.rmtree(partial, ignore_errors=True)
+        shutil.rmtree(partial, ignore_errors=True)  # takes the BF16 intermediate with it
     for path in (backbone, vae):
         if not path.is_file():
             raise RuntimeError(f"GGUF preparation did not produce {path}")
-    return backbone, vae
+    return Prepared(backbone, vae, "converted", model, vae_source)
 
 
 def _sweep_stale_partials(out_dir: Path, older_than_seconds: float = 86400) -> None:
@@ -652,28 +694,48 @@ def run_child(
         lines.put(None)
 
     threading.Thread(target=pump, daemon=True).start()
-    while True:
-        try:
-            line = lines.get(timeout=0.5)
-        except queue.Empty:
-            line = ""
-        else:
-            if line is None:
-                break
-        if line:
-            parse_line(line, log, on_token=on_token, on_progress=on_progress)
-        if cancelled is not None and cancelled() and proc.poll() is None:
-            proc.terminate()
+    try:
+        while True:
             try:
-                proc.wait(10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-            raise InterruptedError("yue2.cpp stopped")
-    code = proc.wait()
+                line = lines.get(timeout=0.5)
+            except queue.Empty:
+                line = ""
+            else:
+                if line is None:
+                    break
+            if line:
+                parse_line(line, log, on_token=on_token, on_progress=on_progress)
+            if cancelled is not None and cancelled() and proc.poll() is None:
+                raise InterruptedError("yue2.cpp stopped")
+        code = proc.wait()
+    except BaseException:
+        # whatever left the loop early — a cancel, a callback that raised, a KeyboardInterrupt —
+        # the child must not outlive it (the next generation would compete with it for VRAM)
+        _stop_child(proc)
+        raise
+    finally:
+        with contextlib.suppress(OSError):
+            if proc.stderr is not None:
+                proc.stderr.close()
     if code != 0:
         detail = log.fatal or "\n".join(log.lines[-8:])
         raise RuntimeError(f"{Path(argv[0]).name} failed (exit {code}): {detail}")
     return log
+
+
+def _stop_child(proc: subprocess.Popen) -> None:
+    """Terminate, then kill, and always reap: a stopped child is never left as a zombie."""
+    if proc.poll() is not None:
+        return
+    with contextlib.suppress(OSError):
+        proc.terminate()
+    try:
+        proc.wait(10)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(OSError):
+            proc.kill()
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(10)
 
 
 # ── paths the child sees ─────────────────────────────────────────────────────
@@ -744,6 +806,8 @@ class GgufPipeline:
     weights: dict = field(default_factory=dict)
     version: str = ""  # what the binary reports; compare with YUE2CPP_PIN
     binary_sha256: str = ""
+    ready_made: bool = False  # external GGUF files: the local checkpoints are not their source
+    _plan_ids: tuple = ("retokenized", None)  # set per generate(); read by config_dict()
 
     engine = "yue2.cpp"
 
@@ -763,9 +827,15 @@ class GgufPipeline:
         if version and not version.startswith(YUE2CPP_PIN) and log is not None:
             log(f"note: installed yue2.cpp is {version}, the app was written against {YUE2CPP_PIN}")
         quant_label = quant_label or quant()
-        backbone, vae = prepare(model_dir, vae_dir, quant_label=quant_label, log=log)
+        if log is not None and not _hash_cache_path(gguf_dir()).is_file():
+            log("Hashing the checkpoints (first time only)…")
+        prepared = prepare(model_dir, vae_dir, quant_label=quant_label, log=log)
+        backbone, vae = prepared.backbone, prepared.vae
         if log is not None and not backbone.with_name(backbone.name + ".sha256").is_file():
             log("Hashing the GGUF files (first time only)…")
+        # what the GGUF files came from — only what was actually verified: the checkpoints'
+        # hashed content for a conversion, an honest "unknown" for ready-made files
+        external = {"provenance": "ready-made: external GGUF files, source not verified"}
         weights = {
             "mot": {
                 "files": {
@@ -774,11 +844,15 @@ class GgufPipeline:
                         "bytes": backbone.stat().st_size,
                     }
                 },
-                "source": {"model.safetensors": source_identity(model_dir)},
+                "source": {"provenance": "converted", **prepared.model}
+                if prepared.model
+                else external,
             },
             "vae": {
                 "files": {vae.name: {"sha256": sha256_file(vae), "bytes": vae.stat().st_size}},
-                "source": {"model.safetensors": source_identity(vae_dir)},
+                "source": {"provenance": "converted", **prepared.vae_source}
+                if prepared.vae_source
+                else external,
             },
         }
         return cls(
@@ -793,6 +867,7 @@ class GgufPipeline:
             weights=weights,
             version=version,
             binary_sha256=sha256_file(synth, cache=False),
+            ready_made=prepared.provenance == "ready-made",
         )
 
     def _workdir(self):
@@ -852,13 +927,16 @@ class GgufPipeline:
                 "backbone_gguf": self.backbone.name,
                 "vae_gguf": self.vae.name,
             },
-            "plan_ids_provenance": "engine" if exact_ids_wanted() else "retokenized",
+            "plan_ids_provenance": self._plan_ids[0],  # what this run actually recorded
+            "plan_ids_match_retokenized": self._plan_ids[1],
             "decoder_release": self._decoder_release(),
             "validation_status": "unvalidated",
         }
 
     def _decoder_release(self):
         """``release_variant`` of the VAE checkpoint, as upstream records it (the listening page shows it)."""
+        if self.ready_made:
+            return None  # the local checkpoint is not what the external VAE GGUF came from
         try:
             return json.loads((self.vae_dir / "config.json").read_text(encoding="utf-8")).get(
                 "release_variant"
@@ -909,6 +987,7 @@ class GgufPipeline:
             ]
             exact = exact_ids_wanted()
             if exact:
+                (work / "dump").mkdir()  # yue2.cpp writes into it but does not create it
                 argv += ["--dump", child_path(work / "dump")]
             log = run_child(argv, cancelled=cancelled, on_token=on_token, on_progress=on_progress)
             if log.backend:
@@ -923,9 +1002,7 @@ class GgufPipeline:
                 if (work / "score.abc").is_file()
                 else None
             )
-            engine_ids = (
-                _engine_ar_ids(work / "dump" / "ar_ids.bin", len(tokens)) if exact else None
-            )
+            engine_ids = _engine_ar_ids(work / "dump" / "ar_ids.bin", tokens) if exact else None
         if request.cot == "off":
             score = None
         elif request.abc is not None:
@@ -935,15 +1012,15 @@ class GgufPipeline:
         tokenizer = adapter.text_tokenizer(self.model_dir)
         abc_ids = tokenizer.encode(score) if score is not None else []
         prefix = adapter.token_prefixes(request, tokenizer, abc_ids if score is not None else None)
+        ids_match = None
         if engine_ids is not None:
             # the ids the engine actually sampled and fed to the semantic stage win over the
             # re-tokenization of their text (identical in every archived run, but this is the truth)
             engine_prefix, engine_abc = engine_ids
-            if engine_prefix != prefix:
-                log.lines.append(
-                    "[app] engine prefix differs from the re-tokenized score: keeping the engine's"
-                )
+            ids_match = engine_prefix == prefix
+            if not ids_match:
                 prefix, abc_ids = engine_prefix, engine_abc
+        self._plan_ids = ("engine", ids_match) if engine_ids is not None else ("retokenized", None)
         plan_timing = (
             {"seconds": 0.0, "output_tokens": 0, "external_prefix_tokens": len(abc_ids)}
             if request.abc is not None
@@ -1063,21 +1140,40 @@ class GgufPipeline:
         return None
 
 
-def _engine_ar_ids(dump: Path, n_codes: int) -> tuple[list[int], list[int]] | None:
-    """``(prefix, abc_ids)`` from yue2.cpp's ``ar_ids.bin`` (prefix + codes + MUSIC_END)."""
+def _engine_ar_ids(dump: Path, tokens: list[int]) -> tuple[list[int], list[int]]:
+    """``(prefix, abc_ids)`` from yue2.cpp's ``ar_ids.bin``.
+
+    The engine dumps the sequence the *first acoustic chunk* attends to: the prefix, that
+    chunk's codes (all of them for a one-chunk song, a leading slice otherwise) and
+    ``MUSIC_END``.  Parsed by the protocol's markers and checked against the returned
+    semantic stream; exact ids were asked for, so anything short of them is an error.
+    """
     import struct
 
     from . import adapter
 
     if not dump.is_file():
-        return None
+        raise RuntimeError(
+            "YUE2_GROOVE_GGUF_EXACT_IDS is set but yue2.cpp wrote no ar_ids.bin (see the log above)"
+        )
     raw = np.fromfile(dump, dtype=np.float32)
     ndim = struct.unpack("i", struct.pack("f", raw[0]))[0]
     ids = [int(v) for v in raw[1 + ndim :]]
-    prefix = ids[: len(ids) - n_codes - 1]
-    abc_start, abc_end = adapter.abc_markers()
-    if abc_start in prefix and abc_end in prefix:
-        abc_ids = prefix[prefix.index(abc_start) + 1 : prefix.index(abc_end)]
+    p = adapter.protocol_ids()
+    if p["MUSIC_START"] not in ids or not ids or ids[-1] != p["MUSIC_END"]:
+        raise RuntimeError(
+            "yue2.cpp's ar_ids.bin does not follow the prefix / codes / MUSIC_END layout"
+        )
+    cut = ids.index(p["MUSIC_START"]) + 1
+    prefix, chunk = ids[:cut], ids[cut:-1]
+    codes = [c - p["CODEC_OFFSET"] for c in chunk]
+    if not chunk or codes != tokens[: len(codes)]:
+        raise RuntimeError(
+            "yue2.cpp's ar_ids.bin codes do not match the semantic stream it returned "
+            f"({len(codes)} dumped, {len(tokens)} returned)"
+        )
+    if p["ABC_START"] in prefix and p["ABC_END"] in prefix:
+        abc_ids = prefix[prefix.index(p["ABC_START"]) + 1 : prefix.index(p["ABC_END"])]
     else:
         abc_ids = []
     return prefix, abc_ids
@@ -1261,8 +1357,11 @@ def main(argv: list[str] | None = None) -> int:
 
         model_dir = Path(adapter.resolve_model(args.model))
         vae_dir = Path(adapter.resolve_model(args.vae))
-        backbone, vae = prepare(model_dir, vae_dir, quant_label=args.quant, log=say)
-        say(f"ready: {backbone} ({backbone.stat().st_size / 1e9:.2f} GB), {vae}")
+        prepared = prepare(model_dir, vae_dir, quant_label=args.quant, log=say)
+        backbone = prepared.backbone
+        say(
+            f"ready ({prepared.provenance}): {backbone} ({backbone.stat().st_size / 1e9:.2f} GB), {prepared.vae}"
+        )
         return 0
     directory = binary_dir()
     say(

@@ -62,11 +62,15 @@ Three pieces, all optional — without them the app is exactly what it was:
    release's `quantize`. Ahead of time: `python -m yue2_groove.gguf_engine prepare`. The result is
    **tensor-for-tensor identical to the published `Serveurperso/YuE2-GGUF` Q8_0** (627/627 tensors),
    so provenance stays with the weights you verified. The VAE is never quantized (F32). The files are
-   named after the checkpoints' weight hashes (`YuE2-3B-Q8_0-1d55c42c1a98.gguf`,
-   `YuE2-Vae-F32-807ce9d5149f.gguf`), so a different MODEL, MODEL REVISION or VAE is converted
-   afresh, never served an older file. Plain-named files (`YuE2-3B-Q8_0.gguf`, `YuE2-Vae-F32.gguf`)
-   downloaded from the published repository are used as they are only from an explicitly set
-   `YUE2_GROOVE_GGUF`; their provenance is then whatever that repository's is.
+   named after everything the conversion reads — the weights (hashed once, remembered in
+   `.hashes.json`, and checked against `weights_manifest.json`: a mismatch is an integrity error),
+   `config.json`, `qwen.tiktoken` and the converter itself — so a different MODEL, MODEL REVISION,
+   VAE, config or converter is converted afresh, never served an older file. The 7.2 GB BF16
+   intermediate lives in a private `.partial-*` directory for the duration of one preparation and
+   is never shared, so two preparations cannot disturb each other. Plain-named files
+   (`YuE2-3B-Q8_0.gguf`, `YuE2-Vae-F32.gguf`) downloaded from the published repository are used as
+   they are only from an explicitly set `YUE2_GROOVE_GGUF`; runs then record their source as
+   *external, not verified* rather than pretending the local checkpoint produced them.
 
 `python -m yue2_groove.gguf_engine check` prints what would be used and what BACKEND=auto decides.
 
@@ -104,7 +108,10 @@ score *text* it returns (`config.json: "plan_ids_provenance": "retokenized"`). I
 model-written score (28 of 28, CUDA and MPS) the two are identical — the model writes canonical
 tokenizations — and an external score is re-tokenized by upstream itself. For an exact record set
 `YUE2_GROOVE_GGUF_EXACT_IDS=1`: the engine's own ids are read from its debug dump (a few hundred MB
-of scratch per song, deleted afterwards) and win when they differ (`"engine"`).
+of scratch per song, deleted afterwards), parsed at the protocol's markers (the dump holds the first
+acoustic chunk, which is the whole song unless `max_seq` splits it) and checked against the returned
+semantic stream; the run then records `"engine"` and whether they matched the re-tokenization. If
+the exact ids were asked for and cannot be obtained, the run fails rather than recording a guess.
 
 ## 4. What it is not
 

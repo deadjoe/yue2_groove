@@ -216,8 +216,8 @@ def test_run_child_cancel_terminates_the_child(tmp_path, monkeypatch):
 
 
 SYNTH_STUB = """
-    # a fake yue-synth: honours --out/--tokens/--latent/--score, prints a plausible log
-    import json, struct, sys, wave
+    # a fake yue-synth: honours --out/--tokens/--latent/--score/--dump, prints a plausible log
+    import json, os, struct, sys, wave
     import numpy as np
     args = dict(zip(sys.argv[1::2], sys.argv[2::2]))
     request = json.load(open(args["--request"]))
@@ -232,6 +232,19 @@ SYNTH_STUB = """
         w.writeframes((np.clip(audio, -1, 1) * 2**31).astype("<i4").tobytes())
     tokens = list(range(1, frames + 1))
     open(args["--tokens"], "w").write(",".join(map(str, tokens)) + "\\n")
+    d = args.get("--dump")
+    if d and os.environ.get("YUE2_TEST_NO_DUMP") != "1":
+        # like yue2.cpp: open files inside the directory, never create it; the dump holds the
+        # first acoustic chunk only (prefix + a leading slice of the codes + MUSIC_END)
+        chunk = int(os.environ.get("YUE2_TEST_CHUNK") or frames)
+        ids = [151643, 1, 2, 3, 151847, 40, 41, 42, 151848, 151851]
+        ids += [151853 + t for t in tokens[:chunk]] + [151852]
+        arr = np.asarray(ids, dtype=np.float32)
+        try:
+            with open(os.path.join(d, "ar_ids.bin"), "wb") as f:
+                f.write(struct.pack("i", 1) + struct.pack("i", len(arr)) + arr.tobytes())
+        except OSError:
+            print("[Debug] Cannot write %s/ar_ids.bin" % d, file=sys.stderr)
     np.zeros((frames, 64), dtype=np.float32).tofile(args["--latent"])
     if not request.get("abc"):
         open(args["--score"], "w").write("X:1\\nT:stub\\nM:4/4\\nL:1/8\\nK:C\\n|C D E F|\\n")
@@ -605,21 +618,29 @@ def test_child_path_is_the_plain_string_off_windows(tmp_path):
     assert gguf_engine.child_path(p) == str(p)
 
 
-def checkpoint(directory: Path, digest: str) -> Path:
-    """A stand-in checkpoint: the manifest yue2's releases ship, naming the weight hash."""
+def checkpoint(directory: Path, weights: bytes, *, manifest: bool = True, config_text="{}") -> Path:
+    """A stand-in checkpoint: weights, config.json and (optionally) the manifest yue2's releases
+    ship, naming the weight hash — which the identity verifies rather than trusts."""
+    import hashlib
+
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / "weights_manifest.json").write_text(
-        json.dumps({"files": {"model.safetensors": {"sha256": digest, "bytes": 1}}})
-    )
+    (directory / "model.safetensors").write_bytes(weights)
+    (directory / "config.json").write_text(config_text)
+    if manifest:
+        digest = hashlib.sha256(weights).hexdigest()
+        (directory / "weights_manifest.json").write_text(
+            json.dumps({"files": {"model.safetensors": {"sha256": digest, "bytes": len(weights)}}})
+        )
     return directory
 
 
-def test_prepare_names_files_after_the_checkpoints_and_moves_only_complete_ones(
+def test_prepare_names_files_after_verified_content_and_keeps_the_intermediate_private(
     tmp_path, monkeypatch
 ):
-    """GGUF files carry the source weight hash (a new model / revision / VAE never reuses an
-    old conversion); conversion and quantization write under a private .partial-* directory
-    and are moved in whole; the BF16 intermediate is dropped; existing files are kept."""
+    """GGUF files carry the checkpoints' content identity (a new model / revision / VAE / config /
+    tokenizer / converter never reuses an old conversion); conversion and quantization work in a
+    private .partial-* directory — the BF16 intermediate included — and only finished files are
+    moved out; existing files are kept."""
     produced = []
 
     def fake_converter(components, out_dir, say):
@@ -629,6 +650,7 @@ def test_prepare_names_files_after_the_checkpoints_and_moves_only_complete_ones(
             produced.append((name, out_dir.name[: len(".partial-")]))
 
     def fake_run(argv, say):
+        assert Path(argv[1]).parent.name.startswith(".partial-")  # quantize reads the private BF16
         Path(argv[2]).write_bytes(b"q" * 5)  # quantize <in> <out> <type>
         produced.append(("quantize", Path(argv[2]).parent.name[: len(".partial-")]))
 
@@ -636,28 +658,55 @@ def test_prepare_names_files_after_the_checkpoints_and_moves_only_complete_ones(
     monkeypatch.setattr(gguf_engine, "_run", fake_run)
     monkeypatch.setattr(gguf_engine, "binary", lambda name: tmp_path / name)
     monkeypatch.delenv("YUE2_GROOVE_GGUF", raising=False)
-    m = checkpoint(tmp_path / "m", "a" * 64)
-    v = checkpoint(tmp_path / "v", "b" * 64)
+    m = checkpoint(tmp_path / "m", b"model-a")
+    v = checkpoint(tmp_path / "v", b"vae-b")
     out = tmp_path / "gguf"
-    backbone, vae = gguf_engine.prepare(m, v, out, quant_label="Q8_0")
-    assert backbone == out / f"YuE2-3B-Q8_0-{'a' * 12}.gguf"
-    assert vae == out / f"YuE2-Vae-F32-{'b' * 12}.gguf"
-    assert backbone.read_bytes() == b"q" * 5 and vae.is_file()
+    first = gguf_engine.prepare(m, v, out, quant_label="Q8_0")
+    assert first.provenance == "converted" and first.model and first.vae_source
+    assert first.backbone.name.startswith("YuE2-3B-Q8_0-")
+    assert first.vae.name.startswith("YuE2-Vae-F32-")
+    assert first.backbone.read_bytes() == b"q" * 5 and first.vae.is_file()
     assert not list(out.glob("*BF16*")) and not list(out.glob(".partial-*"))
     assert [d for _, d in produced] == [".partial-"] * 3
     # second call: nothing to do
     produced.clear()
-    gguf_engine.prepare(m, v, out, quant_label="Q8_0")
-    assert produced == []
-    # a different quant needs the intermediate again, but not the VAE
+    again = gguf_engine.prepare(m, v, out, quant_label="Q8_0")
+    assert produced == [] and again.backbone == first.backbone
+    # a different quant converts its own private BF16 again, never the VAE
     gguf_engine.prepare(m, v, out, quant_label="Q6_K")
     assert [n for n, _ in produced] == ["backbone", "quantize"]
-    # a different model converts afresh instead of reusing the old file
-    produced.clear()
-    m2 = checkpoint(tmp_path / "m2", "c" * 64)
-    backbone2, _ = gguf_engine.prepare(m2, v, out, quant_label="Q8_0")
-    assert backbone2 == out / f"YuE2-3B-Q8_0-{'c' * 12}.gguf" and backbone.is_file()
-    assert [n for n, _ in produced] == ["backbone", "quantize"]
+    # a different model, or only a different config.json, converts afresh
+    for other in (
+        checkpoint(tmp_path / "m2", b"model-c"),
+        checkpoint(tmp_path / "m3", b"model-a", config_text='{"changed": 1}'),
+    ):
+        produced.clear()
+        again = gguf_engine.prepare(other, v, out, quant_label="Q8_0")
+        assert again.backbone != first.backbone and first.backbone.is_file()
+        assert [n for n, _ in produced] == ["backbone", "quantize"]
+
+
+def test_checkpoint_identity_verifies_the_manifest_and_covers_the_conversion_inputs(tmp_path):
+    import hashlib
+
+    out = tmp_path / "gguf"
+    m = checkpoint(tmp_path / "m", b"weights")
+    ident = gguf_engine.checkpoint_identity(m, out)
+    assert ident["files"]["model.safetensors"] == hashlib.sha256(b"weights").hexdigest()
+    assert ident["config.json"] and ident["converter"] and len(ident["identity"]) == 64
+    assert not list(m.glob("*.sha256"))  # never litters the checkpoint directory
+    assert (out / ".hashes.json").is_file()  # the 7 GB hash is remembered here instead
+    # changed weights under an old manifest: an integrity failure, not a cache miss
+    (m / "model.safetensors").write_bytes(b"tampered")
+    with pytest.raises(RuntimeError, match="weight integrity failed"):
+        gguf_engine.checkpoint_identity(m, out)
+    # no manifest at all: hashed and accepted
+    raw = checkpoint(tmp_path / "raw", b"other", manifest=False)
+    assert gguf_engine.checkpoint_identity(raw, out)["files"]["model.safetensors"] == (
+        hashlib.sha256(b"other").hexdigest()
+    )
+    with pytest.raises(RuntimeError, match="no safetensors"):
+        gguf_engine.checkpoint_identity(tmp_path / "nope", out)
 
 
 def test_prepare_uses_ready_made_files_only_in_an_explicit_gguf_dir(tmp_path, monkeypatch):
@@ -670,20 +719,31 @@ def test_prepare_uses_ready_made_files_only_in_an_explicit_gguf_dir(tmp_path, mo
     with pytest.raises(RuntimeError, match="no safetensors"):  # not explicit: identity needed
         gguf_engine.prepare(tmp_path / "nope", tmp_path / "nope", out, quant_label="Q8_0")
     monkeypatch.setenv("YUE2_GROOVE_GGUF", str(out))
-    backbone, vae = gguf_engine.prepare(
-        tmp_path / "nope", tmp_path / "nope", out, quant_label="Q8_0"
+    prepared = gguf_engine.prepare(tmp_path / "nope", tmp_path / "nope", out, quant_label="Q8_0")
+    assert prepared.provenance == "ready-made" and prepared.model is None
+    assert prepared.backbone.name == "YuE2-3B-Q8_0.gguf"
+
+
+def test_ready_made_files_are_recorded_as_external_not_as_the_local_checkpoint(
+    tmp_path, monkeypatch, model_dir
+):
+    out = tmp_path / "ready"
+    out.mkdir()
+    (out / "YuE2-3B-Q8_0.gguf").write_bytes(b"r")
+    (out / "YuE2-Vae-F32.gguf").write_bytes(b"r")
+    monkeypatch.setenv("YUE2_GROOVE_GGUF", str(out))
+    monkeypatch.setattr(gguf_engine, "binary", lambda name: tmp_path / name)
+    monkeypatch.setattr(gguf_engine, "engine_version", lambda path=None: "")
+    (tmp_path / "yue-synth").write_bytes(b"")
+    pipe = gguf_engine.GgufPipeline.open(
+        model_dir=model_dir, vae_dir=model_dir, ode_steps=32, vae_core_frames=None
     )
-    assert backbone.name == "YuE2-3B-Q8_0.gguf" and vae.name == "YuE2-Vae-F32.gguf"
-
-
-def test_source_identity_reads_the_manifest_or_hashes_the_weights(tmp_path):
-    assert gguf_engine.source_identity(checkpoint(tmp_path / "m", "d" * 64)) == "d" * 64
-    raw = tmp_path / "raw"
-    raw.mkdir()
-    (raw / "model.safetensors").write_bytes(b"weights")
-    digest = gguf_engine.source_identity(raw)
-    assert len(digest) == 64 and digest == gguf_engine.source_identity(raw)
-    assert not (raw / "model.safetensors.sha256").exists()  # never litters a checkpoint dir
+    assert pipe.ready_made
+    for key in ("mot", "vae"):
+        assert pipe.weights[key]["source"]["provenance"].startswith("ready-made")
+        assert "files" not in pipe.weights[key]["source"]
+    request = adapter.song_request(style="pop", lyrics="la", cot="full", seed=1)
+    assert pipe.config_dict(request, sampling(), sampling())["decoder_release"] is None
 
 
 def test_stale_partial_directories_are_swept_but_live_ones_kept(tmp_path):
@@ -717,21 +777,9 @@ def test_engine_version_is_read_from_the_usage_banner(tmp_path, monkeypatch):
 
 def test_exact_ids_come_from_the_engines_dump(tmp_path, monkeypatch, model_dir):
     """With YUE2_GROOVE_GGUF_EXACT_IDS the prefix is what yue2.cpp fed the semantic stage,
-    read from its dump, not a re-tokenization of the score text."""
-    dump_stub = (
-        SYNTH_STUB
-        + """
-    import os
-    d = args.get("--dump")
-    if d:
-        os.makedirs(d, exist_ok=True)
-        tokenizer_ids = [151643, 1, 2, 3, 151847, 40, 41, 42, 151848, 151851] + [151853 + t for t in tokens] + [151852]
-        arr = np.asarray(tokenizer_ids, dtype=np.float32)
-        with open(os.path.join(d, "ar_ids.bin"), "wb") as f:
-            f.write(struct.pack("i", 1) + struct.pack("i", len(arr)) + arr.tobytes())
-    """
-    )
-    patch_binaries(monkeypatch, {"yue-synth": write_stub(tmp_path, "yue-synth", dump_stub)})
+    read from its dump (which the app must create the directory for), not a re-tokenization
+    of the score text; the archive says which one it got."""
+    patch_binaries(monkeypatch, {"yue-synth": write_stub(tmp_path, "yue-synth", SYNTH_STUB)})
     monkeypatch.setenv("YUE2_GROOVE_GGUF_EXACT_IDS", "1")
     pipe = make_pipe(tmp_path, model_dir)
     request = adapter.song_request(style="pop", lyrics="la", cot="full", seed=3)
@@ -739,11 +787,66 @@ def test_exact_ids_come_from_the_engines_dump(tmp_path, monkeypatch, model_dir):
     assert song.plan.abc_ids == [40, 41, 42]  # the engine's ids, not encode(score)
     assert song.plan.prefix[:5] == [151643, 1, 2, 3, 151847] and song.plan.prefix[-1] == 151851
     assert song.config["plan_ids_provenance"] == "engine"
+    assert song.config["plan_ids_match_retokenized"] is False  # the stub's ids are made up
+    # a song the engine rendered in several acoustic chunks: the dump holds the first chunk's
+    # codes only, and the prefix is still cut at the protocol's marker
+    monkeypatch.setenv("YUE2_TEST_CHUNK", "20")
+    song = adapter.generate(pipe, request, abc_sampling=sampling(), semantic_sampling=sampling())
+    assert song.plan.prefix[-1] == 151851 and len(song.tokens) == 50
+    monkeypatch.delenv("YUE2_TEST_CHUNK")
+    # exact ids asked for but not delivered: an error, never a silent re-tokenization
+    monkeypatch.setenv("YUE2_TEST_NO_DUMP", "1")
+    with pytest.raises(RuntimeError, match=r"wrote no ar_ids\.bin"):
+        adapter.generate(pipe, request, abc_sampling=sampling(), semantic_sampling=sampling())
+    monkeypatch.delenv("YUE2_TEST_NO_DUMP")
     monkeypatch.delenv("YUE2_GROOVE_GGUF_EXACT_IDS")
     song = adapter.generate(pipe, request, abc_sampling=sampling(), semantic_sampling=sampling())
     assert song.config["plan_ids_provenance"] == "retokenized"
+    assert song.config["plan_ids_match_retokenized"] is None
     tokenizer = adapter.text_tokenizer(model_dir)
     assert song.plan.abc_ids == tokenizer.encode(song.abc)
+
+
+def test_engine_ar_ids_rejects_a_dump_that_disagrees_with_the_stream(tmp_path):
+    import struct
+
+    dump = tmp_path / "ar_ids.bin"
+    ids = [151643, 5, 151851, 151853 + 7, 151853 + 8, 151852]
+    arr = np.asarray(ids, dtype=np.float32)
+    dump.write_bytes(struct.pack("i", 1) + struct.pack("i", len(arr)) + arr.tobytes())
+    assert gguf_engine._engine_ar_ids(dump, [7, 8, 9]) == ([151643, 5, 151851], [])
+    with pytest.raises(RuntimeError, match="do not match the semantic stream"):
+        gguf_engine._engine_ar_ids(dump, [1, 2, 3])
+    with pytest.raises(RuntimeError, match=r"wrote no ar_ids\.bin"):
+        gguf_engine._engine_ar_ids(tmp_path / "missing.bin", [7, 8])
+
+
+def test_run_child_stops_the_child_when_a_callback_raises(tmp_path, monkeypatch):
+    """A progress callback that raises must not leave yue2.cpp running (the next generation
+    would compete with it for VRAM): the child is terminated and reaped on every exit path."""
+    import time
+
+    beat = tmp_path / "heartbeat"
+    slow = write_stub(
+        tmp_path,
+        "slow",
+        f"""
+        import sys, time
+        print("[NAR] Step 1/32, 10 ms", file=sys.stderr, flush=True)
+        for i in range(200):
+            open({str(beat)!r}, "a").write("x"); time.sleep(0.1)
+    """,
+    )
+    patch_binaries(monkeypatch, {})
+
+    def on_progress(stage, done, total):
+        raise ValueError("the UI went away")
+
+    with pytest.raises(ValueError, match="the UI went away"):
+        gguf_engine.run_child([str(slow)], on_progress=on_progress)
+    size = beat.stat().st_size if beat.exists() else 0
+    time.sleep(0.6)
+    assert (beat.stat().st_size if beat.exists() else 0) == size  # no heartbeat after the stop
 
 
 def test_resolve_backend_respects_an_explicit_device(monkeypatch):
