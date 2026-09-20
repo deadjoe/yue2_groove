@@ -29,6 +29,7 @@ every bundled and inline script (`tests/test_static_assets.py`).
 | `workflow.py` | what a work *is*: identity, stage, family, next actions | touch the UI |
 | `cover.py`, `edit_flow.py` | the COVER and EDIT request logic | import gradio |
 | `sheetsage_adapter.py` | the SheetSage2 subprocess (start, progress, cancel, warm worker) | import transformers |
+| `gguf_engine.py` | the yue2.cpp subprocesses (request JSON, log → progress, cancel), GGUF preparation, the BACKEND=auto rule, `install` / `prepare` / `check` | import `yue2` (it reaches the tokenizer and plan objects through `adapter`) or torch at import time |
 | `sheetsage_driver.py` | the stdlib-only script run *inside* the SheetSage2 venv | import this package |
 | `webui/` | the Gradio app (below) | — |
 | `static/` | the bundled frontend: stylesheet + every client script | Python |

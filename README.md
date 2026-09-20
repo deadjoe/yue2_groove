@@ -19,7 +19,7 @@ Two views, one kernel. **SONG** (the default) is the producer-facing director: o
 - **03 // EDIT** — freeze baseline → edit score → check invariants → generate edited → compare
 - **04 // LIBRARY** — all works: play, rename, open in EDIT / COVER, durable run history
 - **05 // TOOLS** · **06 // DECODE** · **07 // BATCH** — utilities, re-decode, batch jobs
-- **Settings rail** — device, dtype, memory budget, ODE steps, models
+- **Settings rail** — device, dtype, backend (PyTorch or the optional GGUF engine), memory budget, ODE steps, models
 
 The UI is a thin layer over the `yue2` package: it never modifies upstream code, and the
 single file that imports `yue2` (`yue2_groove/adapter.py`) is covered by contract tests
@@ -61,6 +61,10 @@ that fail loudly when an upstream release changes something the UI depends on.
   Linux machine with an NVIDIA GPU of 24 GB (upstream's validated configuration). Measured on an
   L4: a 16 GB memory budget runs everything the app can produce, and 12 GB runs the unquantized
   model at CFG 1.0 or for shorter songs — see [docs/LINUX_CUDA.md](docs/LINUX_CUDA.md) §3.
+  Smaller cards: [docs/LOW_VRAM.md](docs/LOW_VRAM.md) (what to set) and the optional
+  [GGUF engine](docs/GGUF_ENGINE.md) (YuE2 through yue2.cpp with an 8-bit backbone; selected
+  automatically under 16 GB once its binaries are installed — a different take for the same
+  seed, not the reference configuration).
 - About 8 GB of disk for the model weights (`m-a-p/YuE2-3B` + `m-a-p/YuE2-Vae`), which
   download from Hugging Face on first use.
 - The model weights are licensed **CC BY-NC 4.0 (non-commercial)** by the YuE2 project.
@@ -340,6 +344,23 @@ and a retained `failure.json` when one mode fails while the others keep running.
 appears in 04 LIBRARY like any other work, and when at least two modes complete the UI also
 builds the same local listening bundle as 05 TOOLS with the link shown under the buttons.
 
+## GGUF engine (optional): cards under 16 GB and Windows
+
+`--backend gguf` (or BACKEND in the settings rail) runs the same model through
+[yue2.cpp](https://github.com/ServeurpersoCom/yue2.cpp) with a Q8_0 backbone: 3.8 GB of weights,
+its own FlashAttention on Windows, and a rendering that a blind ABX could not tell from the CUDA
+reference (6/12). It is a second, clearly labelled engine behind the same process boundary as
+SheetSage2 — a different take for the same seed, never mixed with reference runs. `--backend auto`
+(the default) picks it on a CUDA card under 16 GB when the binaries are installed:
+
+```bash
+.venv/bin/python -m yue2_groove.gguf_engine install     # this platform's binaries → bin/yue2cpp
+uv pip install --python .venv/bin/python -e ".[gguf]"    # the converter's gguf writer
+.venv/bin/python -m yue2_groove.gguf_engine prepare      # optional: build the GGUF files now (~10 s)
+```
+
+Measurements, selection rule, environment variables and limits: [docs/GGUF_ENGINE.md](docs/GGUF_ENGINE.md).
+
 ## Tips: creativity knobs and instrumental / vocals
 
 - **[Generation creativity knobs](docs/GENERATION_CREATIVITY_KNOBS.md)** — producer guide: three ideas (CFG / temperature+seed / plan mode), recipes, then a short glossary.
@@ -405,7 +426,9 @@ byte-identical copy (see NOTICE).  Conventions and module boundaries: `CONTRIBUT
 - `docs/COVER_EDIT.md` — 02 COVER / 03 EDIT manual, manual E2E checks C1/C2/E1/X.
 - `docs/GENERATION_CREATIVITY_KNOBS.md` — producer-facing GENERATE creativity guide (recipes + glossary).
 - `docs/EXCLUDE_INSTRUMENTAL_RESEARCH.md` — upstream research: no exclude API; instrumental workarounds.
+- `yue2_groove/gguf_engine.py` — the GGUF engine: yue2.cpp as a child process, upstream's run layout, the BACKEND=auto rule; `vendor/yue2cpp_convert.py` is yue2.cpp's converter (MIT, byte-identical).
 - `docs/LINUX_CUDA.md` — Linux + NVIDIA CUDA validation: measured VRAM budget and boundaries, ODE steps, FP8 cost.
+- `docs/LOW_VRAM.md` — quick reference for 12 / 16 GB cards and Windows hosts; `docs/GGUF_ENGINE.md` — the GGUF engine: measurements (Q8_0 vs the reference rendering, blind ABX), install, selection, limits.
 - `docs/CROSS_PLATFORM.md` — CUDA vs Apple MPS: why the same seed differs (sampler RNG device), what was ruled out, measured performance ratios.
 
 ## Credits and license

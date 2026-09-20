@@ -103,7 +103,9 @@ def _runtime_rail(defaults) -> SimpleNamespace:
             revision = gr.Textbox(label="MODEL REVISION", max_lines=1)
             vae_revision = gr.Textbox(label="VAE REVISION", max_lines=1)
         offline = gr.Checkbox(value=False, label="OFFLINE")
-        backend = gr.Dropdown(choices=runtime.BACKEND_CHOICES, value="torch", label="BACKEND")
+        backend = gr.Dropdown(
+            choices=runtime.BACKEND_CHOICES, value=defaults.get("backend", "torch"), label="BACKEND"
+        )
         quantization = gr.Dropdown(choices=["none", "fp8"], value="none", label="QUANTIZATION")
         offload_ar = gr.Checkbox(value=False, label="OFFLOAD AR WEIGHTS")
         budget = gr.Number(value=24, label="MEMORY BUDGET")
@@ -1167,7 +1169,7 @@ def build_ui(defaults: dict) -> gr.Blocks:
                 "",
                 "",
                 False,
-                "torch",
+                defaults.get("backend", "torch"),
                 "none",
                 False,
                 24,

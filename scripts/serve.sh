@@ -9,6 +9,7 @@
 #   bash scripts/serve.sh start [--port 7860] [--host 0.0.0.0] [--view song|studio]
 #                               [--tab 0..6]
 #                               [--device auto|mps|cuda|cpu] [--dtype auto|bfloat16|float32]
+#                               [--backend auto|torch|torch-eager|gguf]
 #                               [--model ID_OR_DIR] [--runs DIR]
 #                               [--auth user:password] [--sheetsage-python PATH]
 #                               [--no-preload] [-f]
@@ -76,6 +77,7 @@ while [ $# -gt 0 ]; do
     --tab)      TAB="$2"; shift 2 ;;
     --device)   EXTRA_ARGS+=("--device" "$2"); shift 2 ;;
     --dtype)    EXTRA_ARGS+=("--dtype" "$2"); shift 2 ;;
+    --backend)  EXTRA_ARGS+=("--backend" "$2"); shift 2 ;;
     --model)    EXTRA_ARGS+=("--model" "$2"); shift 2 ;;
     --runs)     RUN_DIR="$2"; shift 2 ;;
     --auth)     YUE2_GROOVE_AUTH="$2"; shift 2 ;;

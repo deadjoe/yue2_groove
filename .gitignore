@@ -22,3 +22,6 @@ models/
 
 # local scores you keep next to the runs
 scores/
+
+# yue2.cpp binaries for the GGUF engine (release assets; `python -m yue2_groove.gguf_engine install`)
+bin/

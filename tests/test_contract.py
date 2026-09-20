@@ -86,9 +86,40 @@ def test_protocol_objects_and_fields():
 
 
 def test_storage_helpers():
-    from yue2.storage import resolve_model
+    from yue2.storage import collect_hashes, identity, resolve_model
 
     assert {"model", "revision", "local_files_only"} <= params(resolve_model)
+    assert {"value"} <= params(identity) and {"directory"} <= params(collect_hashes)
+
+
+def test_text_protocol_the_gguf_engine_rebuilds_runs_from(tmp_path):
+    """The GGUF engine (yue2_groove.gguf_engine) samples in yue2.cpp but records its runs
+    with upstream's tokenizer, prefix rule and SymbolicPlan, through adapter.*."""
+    from yue2.pipeline import SymbolicPlan
+    from yue2.protocol import ABC_END, ABC_START, EOD, MUSIC_START, SongRequest, token_prefixes
+    from yue2.tokenization_yue2 import YuE2TextTokenizer
+
+    assert {"request", "tokenizer", "abc_ids"} <= params(token_prefixes)
+    assert {"merge_file"} <= params(YuE2TextTokenizer.__init__)
+    assert {"request", "abc", "abc_ids", "prefix", "timing", "truncated"} <= set(
+        SymbolicPlan.__dataclass_fields__
+    )
+    assert callable(getattr(SymbolicPlan, "save", None)) and callable(
+        getattr(SymbolicPlan, "load", None)
+    )
+
+    class Tok:  # a stand-in tokenizer: the rule under test is the prefix layout, not BPE
+        def encode(self, text):
+            return [ord(c) % 1000 for c in text]
+
+    request = SongRequest(style="pop", lyrics="[Verse]\nla", cot="full", seed=7, abc="X:1")
+    ids = Tok().encode("X:1")
+    prefix = token_prefixes(request, Tok(), ids)
+    assert prefix[0] == EOD and prefix[-3:] == [ids[-1], ABC_END, MUSIC_START]
+    assert ABC_START in prefix
+    plan = SymbolicPlan(request, "X:1", ids, prefix, {"seconds": 0.0}, False)
+    plan.save(tmp_path)
+    assert SymbolicPlan.load(tmp_path).prefix == prefix
 
 
 def test_saved_artifacts_are_what_the_library_reads(tmp_path):

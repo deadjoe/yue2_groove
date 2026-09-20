@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "yue2-groove"
-version = "0.9.1"
+version = "1.0.0"
 description = "YUE2 // GROOVE: an unofficial Gradio web UI for YuE2 song generation"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -32,6 +32,9 @@ dependencies = [
 
 [project.optional-dependencies]
 yue2 = ["yue2-infer @ git+https://github.com/multimodal-art-projection/YuE@yue2-v0.1.6"]
+# the GGUF engine converts the checkpoints with yue2.cpp's converter (vendored), which
+# needs the gguf writer; the binaries themselves come from the release assets
+gguf = ["gguf>=0.10"]
 test = ["pytest>=8", "ruff>=0.16,<0.17", "pyright>=1.1.400,<2"]
 
 [project.urls]

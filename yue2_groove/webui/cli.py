@@ -40,6 +40,13 @@ def main():
     parser.add_argument("--device", default="auto", choices=["auto", "mps", "cpu", "cuda"])
     parser.add_argument("--dtype", default="auto", choices=["auto", "float32", "bfloat16"])
     parser.add_argument(
+        "--backend",
+        default=os.environ.get("YUE2_GROOVE_BACKEND", "auto"),
+        choices=runtime.BACKEND_MODES,
+        help="Inference engine: torch (reference), torch-eager, gguf (yue2.cpp, for cards "
+        "under 16 GB) or auto — the VRAM rule (or set YUE2_GROOVE_BACKEND)",
+    )
+    parser.add_argument(
         "--model",
         default=config.default_model(),
         help="Hugging Face id or local directory of the 3B model",
@@ -95,12 +102,19 @@ def main():
     dtype = args.dtype
     if dtype == "auto":
         dtype = "bfloat16" if device in ("cuda", "mps") else "float32"
+    backend, backend_note = runtime.resolve_backend(
+        args.backend, device, device_explicit=args.device != "auto"
+    )
+    if backend_note:
+        log.info("backend: %s", backend_note)
     view_mode, tab = song_view.resolve_view(args.view, args.tab, os.environ.get("YUE2_GROOVE_VIEW"))
     runtime.RUNS.mkdir(parents=True, exist_ok=True)
     atexit.register(sheetsage_adapter.stop_worker)  # no resident SheetSage2 after exit
     defaults = {
         "device": device,
         "dtype": dtype,
+        "backend": backend,
+        "backend_note": backend_note,
         "model": args.model,
         "vae": args.vae,
         "tab": tab,
@@ -109,7 +123,8 @@ def main():
             "Model not loaded yet — it loads automatically on the first generation."
             if args.no_preload
             else "Model is preloading in the background…"
-        ),
+        )
+        + (f"\n{backend_note}" if backend_note else ""),
     }
     demo = layout.build_ui(defaults)
     demo.queue(default_concurrency_limit=1)
@@ -121,7 +136,7 @@ def main():
                     runtime.RuntimeSettings(
                         device,
                         dtype,
-                        "torch",
+                        backend,
                         "none",
                         False,
                         24,

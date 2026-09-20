@@ -13,6 +13,12 @@ upstream tag yue2-v0.1.6 (commit 9c6c4b3):
   - yue2_groove/vendor/listen.py      (from skills/yue2-music/scripts/listen.py)
   - yue2_groove/examples/melody.abc   (from examples/melody.abc)
 
+This product includes software from yue2.cpp (https://github.com/ServeurpersoCom/yue2.cpp),
+Copyright (c) 2023-2026 The yue2.cpp authors, MIT License:
+  - yue2_groove/vendor/yue2cpp_convert.py   (byte-identical copy of convert.py at commit e8b39f7)
+The yue2.cpp binaries the optional GGUF engine runs are built from that commit by
+.github/workflows/yue2cpp.yml and distributed as release assets with yue2.cpp's LICENSE inside.
+
 This product includes abcjs (https://github.com/paulrosen/abcjs),
 Copyright (c) 2009-2024 Paul Rosen and Gregory Dyke, MIT License;
 see yue2_groove/static/abcjs.LICENSE.

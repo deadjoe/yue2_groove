@@ -13,7 +13,9 @@ the Pinokio or native path.
 ## Requirements
 
 - NVIDIA GPU: 16 GB comfortably runs everything the app can produce; 12 GB runs the
-  unquantized model at CFG 1.0 or for shorter songs (`docs/LINUX_CUDA.md` §3).
+  unquantized model at CFG 1.0 or for shorter songs (`docs/LINUX_CUDA.md` §3). The image does not
+  yet carry the optional GGUF engine (`docs/GGUF_ENGINE.md`); on a card under 16 GB the app says so
+  in its log and keeps the reference engine.
 - A driver that supports CUDA 12.8 (R570 or newer on Linux; the matching WSL driver on Windows).
 - Docker with GPU support: NVIDIA Container Toolkit on Linux; Docker Desktop on Windows with
   WSL2 (GPU support is built in).
