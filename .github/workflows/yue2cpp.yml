@@ -221,10 +221,15 @@ jobs:
         run: |
           Get-ChildItem dist | Format-Table Name, Length
           Get-FileHash "yue2cpp-$env:YUE2CPP_SHORT-windows-x64.zip" -Algorithm SHA256 | Format-List
-          $out = & dist\yue-synth.exe 2>&1 | Out-String; $out.Substring(0, [Math]::Min(400, $out.Length))
+          # the binaries exit 1 after printing their usage; pwsh 7.4+ would stop the step on
+          # that exit code before the checks below run
+          $ErrorActionPreference = 'Continue'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $out = (& dist\yue-synth.exe 2>&1 | Out-String); $out.Substring(0, [Math]::Min(400, $out.Length))
           if ($out -notmatch "Usage") { throw "yue-synth did not print its usage" }
-          $out = & dist\quantize.exe 2>&1 | Out-String
+          $out = (& dist\quantize.exe 2>&1 | Out-String)
           if ($out -notmatch "(?i)usage") { throw "quantize did not print its usage" }
+          exit 0
       - uses: actions/upload-artifact@v4
         with:
           name: yue2cpp-${{ env.YUE2CPP_SHORT }}-windows-x64
