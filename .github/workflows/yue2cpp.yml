@@ -5,6 +5,7 @@
 #
 #   release published  → build all three, upload as release assets (yue2cpp-<pin>-<platform>)
 #   workflow_dispatch  → build, upload as workflow artifacts; with `release_tag`, also attach
+#   push touching this file (a pin bump, on any branch) → build, workflow artifacts only
 #
 # Keep `YUE2CPP_REF` equal to `gguf_engine.YUE2CPP_PIN`; tests/test_gguf_engine.py does not
 # check that (it cannot see this file) — the release ritual does.
@@ -13,6 +14,8 @@ name: yue2.cpp binaries
 on:
   release:
     types: [published]
+  push:
+    paths: [".github/workflows/yue2cpp.yml"]
   workflow_dispatch:
     inputs:
       release_tag:
@@ -86,7 +89,7 @@ jobs:
           name: yue2cpp-${{ env.YUE2CPP_REF }}-linux-x64
           path: yue2cpp-${{ env.YUE2CPP_REF }}-linux-x64.tar.gz
       - name: Attach to release
-        if: github.event_name == 'release' || inputs.release_tag != ''
+        if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -130,7 +133,7 @@ jobs:
           name: yue2cpp-${{ env.YUE2CPP_REF }}-macos-arm64-metal
           path: yue2cpp-${{ env.YUE2CPP_REF }}-macos-arm64-metal.tar.gz
       - name: Attach to release
-        if: github.event_name == 'release' || inputs.release_tag != ''
+        if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -179,7 +182,7 @@ jobs:
           name: yue2cpp-${{ env.YUE2CPP_REF }}-windows-x64
           path: yue2cpp-${{ env.YUE2CPP_REF }}-windows-x64.zip
       - name: Attach to release
-        if: github.event_name == 'release' || inputs.release_tag != ''
+        if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
