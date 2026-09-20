@@ -77,7 +77,9 @@ jobs:
           find build -name 'libggml*.so*' -exec cp -P {} dist/ \;
           # the CUDA runtime the cuda backend needs on a machine that has only the driver
           for lib in libcudart.so.12 libcublas.so.12 libcublasLt.so.12; do
-            cp "$(find /usr/local/cuda -name "$lib" | head -1)" dist/
+            found="$(find "${CUDA_PATH:-/usr/local/cuda}" /usr/local/cuda* -name "$lib" 2>/dev/null | head -1)"
+            [ -n "$found" ] || { echo "$lib not found under ${CUDA_PATH}"; exit 1; }
+            cp "$found" dist/
           done
           for bin in dist/yue-* dist/neural-codec dist/quantize dist/mp3-codec; do
             patchelf --set-rpath '$ORIGIN' "$bin"
