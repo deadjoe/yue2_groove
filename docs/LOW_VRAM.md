@@ -12,7 +12,7 @@ measured ([LINUX_CUDA.md](LINUX_CUDA.md)); Windows numbers are estimates (§4).
 | **16 GB** (RTX 4060 Ti 16G, 4070 Ti Super, 4080, 5060 Ti 16G, 5070 Ti, 5080, …) | Yes | Everything, including the longest song the app can make (6 min) at any CFG | Nothing |
 | **12 GB** (RTX 3060 12G, 4070, 4070 Super, 4070 Ti, 5070, …) — Linux or Docker | With limits | Songs of ~5 min at CFG 1.0 · songs ≤ 3 min at CFG 1.5 · longer at CFG 1.5: §3 | MEMORY BUDGET **12**, CFG SCALE **empty** |
 | **12 GB** — Windows | Borderline | Songs ≤ 3 min at CFG 1.0 to start · CFG 1.5: FP8 or Docker (§3) | MEMORY BUDGET **12**, CFG SCALE **empty**, max_tokens **4 500** |
-| **12 GB**, any OS, with the [GGUF engine](GGUF_ENGINE.md) installed | Yes | Full-length songs at any CFG, faster AR stage; a different take for the same seed | Nothing — BACKEND=auto picks it |
+| **12 GB**, any OS, with the [GGUF engine](GGUF_ENGINE.md) installed | Yes | Full-length songs at any CFG (measured peak 8.2 GB on a 16 GB card), faster AR stage; a different take for the same seed | Nothing — BACKEND=auto picks it |
 | **8–11 GB** (RTX 4060, 3070, 3080 10G, all RTX 20 series, …) | **No** on the reference engine | — | The [GGUF engine](GGUF_ENGINE.md) with `YUE2_GROOVE_GGUF_MAX_SEQ` (untested on real 8 GB cards), or a cloud GPU (RunPod, …) with the [Docker image](../deploy/docker/README.md); 16 GB there is enough |
 
 ## 2. Where to set it

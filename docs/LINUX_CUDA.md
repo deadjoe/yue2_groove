@@ -149,6 +149,10 @@ Applying the app's own budget arithmetic to card classes:
 
 **Notes for users**
 
+- Cards the reference configuration does not fit — 12 GB at CFG 1.5 full length, anything under —
+  have a second option since the GGUF engine ([GGUF_ENGINE.md](GGUF_ENGINE.md)): the same model
+  through yue2.cpp with an 8-bit backbone, measured at 8.2 GB peak for this song. Not the reference
+  configuration; a different take for the same seed.
 - The upstream "24 GB" guideline is conservative for this workload: the model itself is ~7.3 GB in BF16, and a ~5-minute song with the default 1 024-frame VAE window peaks at ~10.8 GiB.
 - Longer songs use more context tokens (protocol context is 24 576); this song used ~10 200 tokens. The 24 GB guideline likely covers maximal-length songs — treat 16 GB as the tested floor for typical songs, and expect heavy songs to need more.
 - `cfg_scale 1.5` means two CFG branches and roughly doubles the AR-stage memory and time versus `cfg_scale 1.0`. This is the main setting that pushes a run over a memory limit — and, as §3.6 shows, the cleanest way to fit 12 GB.

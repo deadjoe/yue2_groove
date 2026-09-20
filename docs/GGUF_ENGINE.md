@@ -1,7 +1,9 @@
 # The GGUF engine — YuE2 through yue2.cpp, for cards under 16 GB
 
-**Status:** measured on an M1 Max (Metal) against the CUDA reference run, 2026-09-20; not yet run on a
-physical 12 GB or 8 GB card. **Not the reference configuration** — see §4 before relying on it.
+**Status:** rendering measured on an M1 Max (Metal) against the CUDA reference run; full generations
+run through the app on the M1 Max and on an RTX A4000 16 GB (Linux, CUDA) with VRAM sampled
+(2026-09-20/21, experiment group `95-gguf-engine-branch`); not yet run on a physical 12 GB or 8 GB
+card, nor on Windows. **Not the reference configuration** — see §4 before relying on it.
 
 YUE2 // GROOVE's reference configuration is upstream's: the unmodified BF16 model in PyTorch, validated
 at 24 GB and measured down to a 12 GB budget ([LINUX_CUDA.md](LINUX_CUDA.md)). Below that, and on
@@ -33,15 +35,25 @@ song's quietest 15 s, 12 trials) scored **6/12 — chance**. Q6_K and below degr
 own note, "an audio code LM breaks below Q5", agrees. Q8_0 is therefore the only quant the app offers by
 default (`YUE2_GROOVE_GGUF_QUANT` can pick the others for experiments).
 
-Speed: the AR stage is bandwidth-bound and is where the 8-bit weights pay — 96.6 semantic tokens/s on
-the M1 Max against 11 tok/s for PyTorch/MPS on an M4 Pro and 39 tok/s for PyTorch/CUDA on an L4. The
-NAR stage is compute-bound and gains nothing (21 s per ODE step on the M1 Max in either precision).
-Memory (yue2.cpp's own figures): Q8_0 backbone pair ≈ 4.4 GB plus the KV cache (2.7 GB per set at the
-full context, two sets under CFG > 1); a 65 s song peaks at 5.8 GB, 3.8 GB with `--max-seq 8192`.
+Speed: the AR stage is bandwidth-bound and is where the 8-bit weights pay; the NAR stage is
+compute-bound and does not. The reference request (Something True, CFG 1.5, cot full), generated end
+to end through the app:
+
+| Host | Semantic | NAR | End to end | Reference (PyTorch, same request) |
+|---|---|---|---|---|
+| RTX A4000 16 GB, CUDA | 99.8 tok/s | 132 s | **229 s** for 272 s of audio | L4 24 GB: 39 tok/s, 69 s, 325 s |
+| M1 Max 64 GB, Metal | 69.8 tok/s | 613 s | **785 s** for 265 s of audio | M4 Pro: 11 tok/s, 793 s, 1 231 s |
+
+Memory: on the A4000, `nvidia-smi` sampled every second put the full-length CFG 1.5 song at a
+**peak of 8 239 MiB** at the full 24 576 context — 2.3 GiB under the PyTorch reference's
+10.5–10.8 GiB (LINUX_CUDA §3), so a 12 GB card keeps ~3.8 GB for the desktop. An 8 GB card needs
+`YUE2_GROOVE_GGUF_MAX_SEQ` (see §3); yue2.cpp's own figures: a 65 s song peaks at 5.8 GB at the full
+context, 3.8 GB with `--max-seq 8192`.
 
 ## 2. Install
 
-Three pieces, all optional — without them the app is exactly what it was:
+Three pieces, all optional — without them the app behaves as before (a CUDA card under 16 GB gets
+one line in the log and STATUS saying the engine would fit better; nothing else changes):
 
 1. **Binaries** — built by `.github/workflows/yue2cpp.yml` at the pinned yue2.cpp commit
    (`gguf_engine.YUE2CPP_PIN`) for macOS arm64 (Metal), Linux x64 (CUDA 12.8 + Vulkan + CPU) and
@@ -77,12 +89,14 @@ Three pieces, all optional — without them the app is exactly what it was:
 ## 3. Selection
 
 - `--backend auto` (the default; also `YUE2_GROOVE_BACKEND`, and `scripts/serve.sh start --backend …`):
-  a **CUDA card with less than 16 GiB** and the binaries installed gets the GGUF engine; everything
-  else keeps the PyTorch engine. The threshold is `YUE2_GROOVE_GGUF_VRAM_GIB`; 16 is where
+  a **CUDA card under 16 GB** (by marketed size: a "16 GB" card reports 15.99 GiB and counts as 16)
+  with the binaries installed gets the GGUF engine; everything else keeps the PyTorch engine. The
+  threshold is `YUE2_GROOVE_GGUF_VRAM_GIB`; 16 is where
   LINUX_CUDA.md measured that the reference configuration runs everything the app can produce. A
   small card without binaries stays on PyTorch and says so in the log and STATUS. The card is read
   with `nvidia-smi` (no CUDA context in the app's process), so an NVIDIA card next to a **CPU-only
-  torch** (PyPI's Windows wheel) also gets the GGUF engine instead of hours on the CPU.
+  torch** (PyPI's Windows wheel) also gets the GGUF engine instead of hours on the CPU — and without
+  the binaries, the log and STATUS say that installing them would use the card.
 - Apple Silicon is never switched automatically (the reference path is what the app is developed on),
   but BACKEND → **gguf** in the settings rail works there too and is much faster for the AR stage.
 - The rail's DTYPE / QUANTIZATION / OFFLOAD AR / MEMORY BUDGET do not apply to this engine; ODE STEPS
@@ -132,9 +146,9 @@ the exact ids were asked for and cannot be obtained, the run fails rather than r
 
 | Platform | Backend | Status |
 |---|---|---|
-| macOS, Apple Silicon | Metal | built and run here (M1 Max): install, prepare, generate, Library |
-| Linux, NVIDIA | CUDA (Vulkan and CPU in the same archive) | yue2.cpp's primary platform; built by the workflow, not yet run through the app |
-| Windows, NVIDIA / AMD | CUDA / Vulkan | built by the workflow; the CUDA runtime DLLs ship in the zip; not yet run through the app |
+| macOS, Apple Silicon | Metal | run through the app on an M1 Max with the CI package: install, prepare, GENERATE (`95/51`) |
+| Linux, NVIDIA | CUDA (Vulkan and CPU in the same archive) | run through the app on an RTX A4000 16 GB with the CI package: fresh host, prepare, GENERATE, COVER, Library (`95/61–63`); no physical 12 / 8 GB card yet |
+| Windows, NVIDIA / AMD | CUDA / Vulkan | built and smoke-tested by the workflow (starts, DLLs resolve, CUDA runtime in the zip); not yet run through the app |
 
 Each yue-synth process on macOS compiles the Metal shader library (~20 s) before it starts; CUDA
 loads in a second or two from the page cache.

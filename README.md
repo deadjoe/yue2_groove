@@ -19,7 +19,7 @@ Two views, one kernel. **SONG** (the default) is the producer-facing director: o
 - **03 // EDIT** — freeze baseline → edit score → check invariants → generate edited → compare
 - **04 // LIBRARY** — all works: play, rename, open in EDIT / COVER, durable run history
 - **05 // TOOLS** · **06 // DECODE** · **07 // BATCH** — utilities, re-decode, batch jobs
-- **Settings rail** — device, dtype, memory budget, ODE steps, models
+- **Settings rail** — device, dtype, backend (PyTorch or the optional GGUF engine), memory budget, ODE steps, models
 
 The UI is a thin layer over the `yue2` package: it never modifies upstream code, and the
 single file that imports `yue2` (`yue2_groove/adapter.py`) is covered by contract tests
