@@ -3,23 +3,26 @@
 One image, three uses: a desktop or server with an NVIDIA GPU (Linux, or Windows through
 Docker Desktop / WSL2), a RunPod pod, and the launcher that creates such pods. It is the
 environment `docs/LINUX_CUDA.md` validates — `torch 2.10.0+cu128`, `yue2-infer 0.1.6`, the
-SheetSage2 Cover environment — baked once. **Code only:** the YuE2, SheetSage2 and
-MERT-v2-FullSong weights are CC BY-NC 4.0 and are downloaded by you at first start into
-`/data` (mount it so that happens once).
+SheetSage2 Cover environment — plus the [GGUF engine](../docs/GGUF_ENGINE.md)'s yue2.cpp
+binaries (the release's own `linux-x64` asset), baked once. **Code only:** the YuE2, SheetSage2
+and MERT-v2-FullSong weights are CC BY-NC 4.0 and are downloaded by you at first start into
+`/data` (mount it so that happens once); the GGUF files are made there from them.
 
 Not for macOS: Docker Desktop cannot pass Metal/MPS into a Linux container — Mac users take
 the Pinokio or native path.
 
 ## Requirements
 
-- NVIDIA GPU: 16 GB comfortably runs everything the app can produce; 12 GB runs the
-  unquantized model at CFG 1.0 or for shorter songs (`docs/LINUX_CUDA.md` §3). The image does not
-  yet carry the optional GGUF engine (`docs/GGUF_ENGINE.md`); on a card under 16 GB the app says so
-  in its log and keeps the reference engine.
+- NVIDIA GPU: 16 GB comfortably runs everything the app can produce on the reference engine;
+  on a card under 16 GB the app switches to the GGUF engine by itself (BACKEND=auto,
+  `docs/GGUF_ENGINE.md` §3): 12 GB then runs full-length songs at any CFG, 8 GB gets a context cap
+  (songs up to ~4.9 min; a full song measured at 6.1 GB peak). `YUE2_GROOVE_BACKEND=torch` keeps
+  the reference engine on a small card (12 GB: CFG 1.0 or shorter songs, `docs/LINUX_CUDA.md` §3).
 - A driver that supports CUDA 12.8 (R570 or newer on Linux; the matching WSL driver on Windows).
 - Docker with GPU support: NVIDIA Container Toolkit on Linux; Docker Desktop on Windows with
   WSL2 (GPU support is built in).
-- ~25 GB of disk: the image (~15 GB) plus ~8 GB of weights in `/data`.
+- ~25 GB of disk: the image (~16 GB) plus ~8 GB of weights in `/data`, and another 4 GB there
+  when the GGUF engine is used (its files, made once from the weights).
 
 ## Run
 
@@ -31,9 +34,11 @@ docker run --gpus all -p 7860:7860 \
 ```
 
 Then open http://localhost:7860. The first start downloads the weights (`weights` step in the
-log), verifies their hashes and the GPU (`verify`), and starts the app (`start` → `ready`).
-Works and downloaded weights live in the `groove-data` volume (`/data/runs`, `/data/hf`,
-`/data/models`) and survive image updates. `docker compose` equivalent:
+log), verifies their hashes and the GPU (`verify` — its line ends in the engine this card gets,
+`backend=auto→torch` or `auto→gguf`), on a card that gets the GGUF engine converts the weights
+once (`gguf`), and starts the app (`start` → `ready`). Works, downloaded weights and GGUF files
+live in the `groove-data` volume (`/data/runs`, `/data/hf`, `/data/models`) and survive image
+updates. `docker compose` equivalent:
 
 ```yaml
 services:
@@ -59,7 +64,8 @@ volumes:
 | `YUE2_GROOVE_PORT` | `7860` | port the app listens on inside the container |
 | `HF_HOME` | `/data/hf` | Hugging Face cache (YuE2 weights, MERT snapshot) |
 | `YUE2_GROOVE_RUNS` | `/data/runs` | where works are stored |
-| `YUE2_GROOVE_MODELS` | `/data/models` | SheetSage2 snapshot directory |
+| `YUE2_GROOVE_MODELS` | `/data/models` | SheetSage2 snapshot directory; the GGUF files go in its `gguf/` |
+| `YUE2_GROOVE_BACKEND` | `auto` | `auto` (the VRAM rule), `torch`, `gguf` — `docs/GGUF_ENGINE.md` §3; the engine's other knobs (`YUE2_GROOVE_GGUF_*`) pass through the same way |
 | `GROOVE_PROGRESS_URL`, `GROOVE_PROGRESS_TOKEN` | (none) | when set, every start step is POSTed as JSON to that URL with a bearer token — used by the pod launcher, ignored otherwise |
 
 ## On RunPod
@@ -78,16 +84,23 @@ follows the progress protocol below, hands back the URL and deletes the pod on a
 ## Progress protocol (for launchers)
 
 `groove-start` reports `{"step", "status", "message", "ts", "pod"}` with
-`step ∈ {weights, verify, start, ready}` and `status ∈ {started, done, failed}`; `ready/done`
+`step ∈ {weights, verify, gguf, start, ready}` and `status ∈ {started, done, failed}`; `ready/done`
 carries the URL in `message` (the RunPod proxy URL when `RUNPOD_POD_ID` is set, else
-`http://localhost:<port>`). A `failed` status ends the start; the container stays up so the
-log can be read. The same lines are printed to the container log.
+`http://localhost:<port>`). `gguf` appears only on a card that gets the GGUF engine and never
+fails the start (a failed preparation is reported in its `done` message and retried by the
+app). A `failed` status ends the start; the container stays up so the log can be read. The
+same lines are printed to the container log.
 
 ## Build
 
 `.github/workflows/image.yml` builds and pushes `ghcr.io/deadjoe/yue2_groove` on every `v*`
-tag (also tagged `latest`) and on manual dispatch (tag `main` by default). Local build:
+tag (also tagged `latest`) and on manual dispatch (tag `main` by default). The yue2.cpp binaries
+come from a release asset (`yue2cpp-<pin>-linux-x64.tar.gz`, built by `yue2cpp.yml`); the
+workflow picks the newest release that lists the pinned name and, right after a pin bump, waits
+for it. Local build:
 
 ```bash
 docker build -f deploy/docker/Dockerfile -t yue2-groove .
+# after a pin bump, name a release that already lists the new asset:
+docker build -f deploy/docker/Dockerfile --build-arg YUE2CPP_PIN=<pin> --build-arg YUE2CPP_RELEASE=v<x.y.z> -t yue2-groove .
 ```

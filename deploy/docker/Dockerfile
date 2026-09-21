@@ -1,9 +1,11 @@
 # YUE2 // GROOVE — Linux + NVIDIA CUDA image.
 #
 # Same environment docs/LINUX_CUDA.md validates (torch 2.10.0+cu128, yue2-infer 0.1.6, the
-# SheetSage2 Cover environment), baked once so a pod or a desktop container starts in minutes
-# instead of installing for half an hour. Contains code only: the YuE2 / SheetSage2 / MERT
-# weights (CC BY-NC 4.0) are downloaded by the user at first start into /data (mount it).
+# SheetSage2 Cover environment) plus the GGUF engine's yue2.cpp binaries (docs/GGUF_ENGINE.md;
+# the app's own release asset, so a card under 16 GB gets the engine by itself), baked once so
+# a pod or a desktop container starts in minutes instead of installing for half an hour.
+# Contains code only: the YuE2 / SheetSage2 / MERT weights (CC BY-NC 4.0) are downloaded by
+# the user at first start into /data (mount it); the GGUF files are made there from them.
 #
 #   docker build -f deploy/docker/Dockerfile -t yue2-groove .
 #   docker run --gpus all -p 7860:7860 -v groove-data:/data ghcr.io/deadjoe/yue2_groove:latest
@@ -34,7 +36,7 @@ COPY pyproject.toml /app/
 COPY overrides/ /app/overrides/
 RUN uv venv env --python 3.12 \
  && uv pip install --python env/bin/python torch==2.10.0 --index-url https://download.pytorch.org/whl/cu128 \
- && python3 -c "import tomllib; p = tomllib.load(open('pyproject.toml', 'rb'))['project']; print('\\n'.join(p['dependencies'] + p['optional-dependencies']['yue2']))" > /tmp/requirements.txt \
+ && python3 -c "import tomllib; p = tomllib.load(open('pyproject.toml', 'rb'))['project']; print('\\n'.join(p['dependencies'] + p['optional-dependencies']['yue2'] + p['optional-dependencies']['gguf']))" > /tmp/requirements.txt \
  && uv pip install --python env/bin/python -r /tmp/requirements.txt --overrides overrides/linux.txt hf_transfer \
  && rm /tmp/requirements.txt \
  && env/bin/python -c "import yue2, gradio; print('deps ok')"
@@ -51,10 +53,27 @@ RUN uv python install 3.11 \
  && rm -rf /tmp/sheetsage2 \
  && .venv-sheetsage2/bin/python -c "import torch, transformers; print('sheetsage env ok', torch.__version__)"
 
-# 3. The app itself (code only; see .dockerignore).
+# 3. The GGUF engine's binaries: the linux-x64 asset the app's own workflow attached to a
+#    release (yue2cpp-<pin>-linux-x64.tar.gz — CUDA 12.8 + Vulkan + CPU, the CUDA runtime
+#    inside, rpath $ORIGIN), unpacked where the app looks first, <repo>/bin/yue2cpp. Keyed on
+#    the two build args alone so the ~1.1 GB layer survives code changes. YUE2CPP_RELEASE is
+#    any release listing that asset (the name carries the pin, so they are all the same
+#    bytes); image.yml resolves it, the default here is for local builds. Step 4 checks that
+#    the pin matches the code.
+ARG YUE2CPP_PIN=e8b39f7
+ARG YUE2CPP_RELEASE=v1.0.1
+RUN mkdir -p bin/yue2cpp \
+ && curl -fsSL "https://github.com/deadjoe/yue2_groove/releases/download/${YUE2CPP_RELEASE}/yue2cpp-${YUE2CPP_PIN}-linux-x64.tar.gz" \
+    | tar -xz -C bin/yue2cpp \
+ && chmod +x bin/yue2cpp/yue-* bin/yue2cpp/neural-codec bin/yue2cpp/quantize bin/yue2cpp/mp3-codec \
+ && cat bin/yue2cpp/VERSION \
+ && { out="$(bin/yue2cpp/yue-synth 2>&1 || true)"; echo "$out" | grep -q Usage; }  # starts, libraries resolve (no GPU here)
+
+# 4. The app itself (code only; see .dockerignore).
 COPY . /app
 RUN uv pip install --python env/bin/python -e . --no-deps \
- && env/bin/python -c "import yue2, yue2_groove, gradio; print('groove ok')"
+ && env/bin/python -c "import yue2, yue2_groove, gradio, gguf; print('groove ok')" \
+ && env/bin/python -c "import yue2_groove.gguf_engine as g; from pathlib import Path; d = Path('/app/bin/yue2cpp'); assert g.binary_dir() == d, g.binary_dir(); assert g.installed_version(d) == g.YUE2CPP_PIN, (g.installed_version(d), g.YUE2CPP_PIN); print('gguf engine ok:', g.engine_version())"
 
 COPY deploy/docker/groove-start.sh /usr/local/bin/groove-start
 COPY deploy/docker/gpu_check.py /usr/local/bin/groove-gpu-check

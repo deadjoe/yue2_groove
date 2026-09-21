@@ -3,6 +3,12 @@ name: image
 # Builds deploy/docker/Dockerfile and pushes it to GHCR as ghcr.io/deadjoe/yue2_groove.
 # Runs only on version tags and on manual dispatch: the image is ~15 GB and the app's
 # regular CI (tests.yml) does not need it.
+#
+# The image carries the GGUF engine's Linux binaries, taken from a release asset that
+# yue2cpp.yml built (yue2cpp-<pin>-linux-x64.tar.gz). The asset name carries the pin, so any
+# release listing it will do; the step below picks the newest one — and, when the pin has just
+# been bumped (no release lists the new name until yue2cpp.yml's Linux job is done, ~80 min
+# after the release is published), waits for it.
 
 on:
   push:
@@ -31,6 +37,26 @@ jobs:
           sudo docker image prune -af >/dev/null 2>&1 || true
           df -h / | tail -1
 
+      - id: yue2cpp
+        name: Which release carries the pinned Linux binaries
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pin=$(sed -n 's/^YUE2CPP_PIN = "\(.*\)"$/\1/p' yue2_groove/gguf_engine.py)
+          [ -n "$pin" ] || { echo "YUE2CPP_PIN not found in yue2_groove/gguf_engine.py"; exit 1; }
+          asset="yue2cpp-${pin}-linux-x64.tar.gz"
+          for attempt in $(seq 1 75); do  # up to 2.5 h, every 2 min
+            tag=$(gh api "repos/${{ github.repository }}/releases?per_page=30" \
+                    --jq "first(.[] | select(any(.assets[]; .name == \"$asset\")) | .tag_name) // empty")
+            [ -n "$tag" ] && break
+            echo "no release lists $asset yet (attempt $attempt) — waiting for yue2cpp.yml"
+            sleep 120
+          done
+          [ -n "$tag" ] || { echo "$asset never appeared on a release; run yue2cpp.yml, then re-run this"; exit 1; }
+          echo "$asset from release $tag"
+          echo "pin=$pin" >> "$GITHUB_OUTPUT"
+          echo "release=$tag" >> "$GITHUB_OUTPUT"
+
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
@@ -57,6 +83,9 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            YUE2CPP_PIN=${{ steps.yue2cpp.outputs.pin }}
+            YUE2CPP_RELEASE=${{ steps.yue2cpp.outputs.release }}
           # registry cache: the GHA cache is capped at 10 GB per repo, the venv layers alone are
           # larger than that; a `buildcache` tag on the public package costs nothing
           cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache

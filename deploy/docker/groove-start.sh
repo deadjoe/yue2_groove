@@ -1,7 +1,7 @@
 #!/bin/bash
-# Bring YUE2 // GROOVE up inside the container: weights → verification → app, reporting each
-# step on stdout and, when GROOVE_PROGRESS_URL is set, to that URL as JSON (bearer
-# GROOVE_PROGRESS_TOKEN). Steps: weights | verify | start | ready | failed.
+# Bring YUE2 // GROOVE up inside the container: weights → verification → (GGUF files) → app,
+# reporting each step on stdout and, when GROOVE_PROGRESS_URL is set, to that URL as JSON
+# (bearer GROOVE_PROGRESS_TOKEN). Steps: weights | verify | gguf | start | ready | failed.
 set -uo pipefail
 cd /app
 # never run twice in one container (a second /start.sh hook, a manual start over ssh, …)
@@ -52,7 +52,21 @@ env/bin/python -m yue2.cli doctor --model m-a-p/YuE2-3B --vae m-a-p/YuE2-Vae --v
 GPU_INFO=$(env/bin/python /usr/local/bin/groove-gpu-check 2>&1) || fail verify "$GPU_INFO"
 progress verify done "$GPU_INFO"
 
-# 3. the app
+# 3. the GGUF engine's files, when that is the engine this card gets (the check above ends in
+#    backend=gguf or backend=auto→gguf, docs/GGUF_ENGINE.md §3): converted and quantized once
+#    from the weights, into $YUE2_GROOVE_MODELS/gguf, so the first generation does not spend
+#    the minute on it. Not fatal: the app repeats the attempt at the first GGUF generation and
+#    reports there, and BACKEND=torch stays available.
+if [[ "$GPU_INFO" == *"backend="*gguf ]]; then
+  progress gguf started "Q8_0 GGUF files from the YuE2 weights (once)"
+  if env/bin/python -m yue2_groove.gguf_engine prepare 2>&1 | sed 's/^/[gguf] /'; then
+    progress gguf done
+  else
+    progress gguf done "preparation failed — the app will try again at the first GGUF generation"
+  fi
+fi
+
+# 4. the app
 progress start started "port $PORT"
 AUTH_ARGS=()
 [[ -n "${YUE2_GROOVE_AUTH:-}" ]] && AUTH_ARGS=(--auth "$YUE2_GROOVE_AUTH")
