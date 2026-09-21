@@ -382,9 +382,14 @@ def cached_sha256(path: Path, out_dir: Path) -> str:
     return digest
 
 
-def converter_version() -> str:
-    """SHA-256 of the vendored converter: a converter change is a conversion-input change."""
-    return sha256_file(config.PACKAGE_DIR / "vendor" / "yue2cpp_convert.py", cache=False)
+def converter_version(path: Path | None = None) -> str:
+    """SHA-256 of the vendored converter: a converter change is a conversion-input change.
+
+    Hashed with CRLF folded to LF — a Windows checkout under Git's ``autocrlf`` reads the
+    same converter, and must name the same GGUF file, as a Linux or macOS one.
+    """
+    path = path or config.PACKAGE_DIR / "vendor" / "yue2cpp_convert.py"
+    return hashlib.sha256(Path(path).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
 
 
 def checkpoint_identity(checkpoint_dir: Path, out_dir: Path) -> dict:
@@ -515,6 +520,19 @@ def prepare(
     for path in (backbone, vae):
         if not path.is_file():
             raise RuntimeError(f"GGUF preparation did not produce {path}")
+    # files of an earlier identity (another revision, an older converter) are left in place —
+    # nothing here deletes what another process may be reading — but named, with their size
+    superseded = sorted(
+        old
+        for pattern in (f"YuE2-3B-{quant_label}-*.gguf", "YuE2-Vae-F32-*.gguf")
+        for old in out_dir.glob(pattern)
+        if old not in (backbone, vae)
+    )
+    if superseded:
+        say(
+            "no longer used, can be deleted: "
+            + ", ".join(f"{old.name} ({old.stat().st_size / 1e9:.1f} GB)" for old in superseded)
+        )
     return Prepared(backbone, vae, "converted", model, vae_source)
 
 
@@ -1350,6 +1368,7 @@ def local_env(pipe: GgufPipeline) -> dict:
 # `check` prints what would be used.
 
 RELEASES = "https://github.com/deadjoe/yue2_groove/releases"
+RELEASES_API = "https://api.github.com/repos/deadjoe/yue2_groove/releases"
 
 
 def platform_asset() -> str:
@@ -1373,6 +1392,32 @@ def app_release_tag() -> str:
         return "latest"
 
 
+def release_with_asset(asset: str) -> str | None:
+    """The newest release that lists *asset*, or None (no such release, or no API).
+
+    The asset name carries the yue2.cpp pin, so any release listing it has the right binaries:
+    a release just published has none for the first two hours (the workflow is still building),
+    and an install run in that window takes them from the release before.  ``GH_TOKEN`` /
+    ``GITHUB_TOKEN``, when set, lifts the API's anonymous rate limit (CI builds).
+    """
+    request = urllib.request.Request(
+        f"{RELEASES_API}?per_page=30",
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "yue2-groove"},
+    )
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            releases = json.loads(response.read().decode("utf-8"))
+        for release in releases:  # newest first
+            if any(item.get("name") == asset for item in release.get("assets") or ()):
+                return release.get("tag_name") or None
+    except (OSError, ValueError, AttributeError, TypeError):  # offline, rate-limited, odd JSON
+        return None
+    return None
+
+
 def installed_version(directory: Path) -> str:
     """The commit named in an install's VERSION file (``yue2.cpp <commit> <platform> …``), or ``""``."""
     try:
@@ -1380,6 +1425,11 @@ def installed_version(directory: Path) -> str:
         return words[1] if len(words) > 1 and words[0] == "yue2.cpp" else ""
     except OSError:
         return ""
+
+
+def _fetch(url: str) -> bytes:
+    with urllib.request.urlopen(url, timeout=60) as response:
+        return response.read()
 
 
 def install_binaries(
@@ -1408,13 +1458,21 @@ def install_binaries(
     )
     say(f"downloading {url}")
     try:
-        with urllib.request.urlopen(url, timeout=60) as response:
-            data = response.read()
+        data = _fetch(url)
     except urllib.error.HTTPError as exc:
-        raise RuntimeError(
-            f"{url}: HTTP {exc.code}. Releases before the GGUF engine carry no binaries — "
-            "try `--tag latest`, or a release that lists yue2cpp-* assets."
-        ) from exc
+        if exc.code != 404:
+            raise RuntimeError(f"{url}: HTTP {exc.code}") from exc
+        # not on that release (yet): any release listing the pinned asset name will do
+        other = release_with_asset(asset)
+        if other is None or other == tag:
+            raise RuntimeError(
+                f"{url}: HTTP 404 — no release lists {asset}. The binaries are attached to a "
+                "release about two hours after it is published (and releases before the GGUF "
+                "engine carry none); try again later, or `--tag` a release that lists them."
+            ) from exc
+        url = f"{RELEASES}/download/{other}/{asset}"
+        say(f"not on {tag} (yet) — taking {asset} from {other}: {url}")
+        data = _fetch(url)
     if (dest / "VERSION").is_file():  # ours from an earlier install: no stale libraries left behind
         shutil.rmtree(dest, ignore_errors=True)
     dest.mkdir(parents=True, exist_ok=True)

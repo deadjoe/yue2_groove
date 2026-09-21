@@ -280,7 +280,9 @@ def _load_gguf(settings: RuntimeSettings, vae_path: str, vae_name: str, key, pro
         raise gr.Error(gguf_engine.INSTALL_HINT)
     unload_pipeline()
     if progress is not None:
-        progress(0.05, desc="Preparing the GGUF engine…")
+        progress(
+            0.05, desc="Preparing the GGUF engine (first run downloads ~7.3 GB; see the terminal)…"
+        )
 
     def say(line: str) -> None:
         log.info("gguf: %s", line)

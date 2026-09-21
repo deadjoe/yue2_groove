@@ -578,6 +578,84 @@ def test_install_unpacks_this_platforms_asset(tmp_path, monkeypatch):
     assert seen["url"] == f"{gguf_engine.RELEASES}/latest/download/{asset}"
 
 
+def test_install_takes_the_pinned_asset_from_an_earlier_release_when_the_newest_has_none(
+    tmp_path, monkeypatch
+):
+    """A release just published lists no binaries for its first two hours (the workflow is
+    still building); the asset name carries the pin, so the release before it is as good."""
+    import io
+    import tarfile
+    import urllib.error
+
+    asset = gguf_engine.platform_asset()
+    payload = io.BytesIO()
+    if asset.endswith(".zip"):
+        import zipfile
+
+        with zipfile.ZipFile(payload, "w") as archive:
+            archive.writestr("yue-synth.exe", b"MZ")
+            archive.writestr("VERSION", "yue2.cpp test windows-x64\n")
+    else:
+        with tarfile.open(fileobj=payload, mode="w:gz") as archive:
+            for name, data in (("yue-synth", b"#!/bin/sh\n"), ("VERSION", b"yue2.cpp test\n")):
+                info = tarfile.TarInfo(name)
+                info.size = len(data)
+                archive.addfile(info, io.BytesIO(data))
+    releases = [
+        {"tag_name": "v9.9.9", "assets": []},  # just published, nothing attached yet
+        {"tag_name": "v9.9.8", "assets": [{"name": asset}]},
+        {"tag_name": "v9.9.7", "assets": [{"name": asset}]},
+    ]
+    urls = []
+
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return None
+
+    def urlopen(request, timeout=0):
+        url = getattr(request, "full_url", request)
+        urls.append(url)
+        if url.startswith(gguf_engine.RELEASES_API):
+            return Response(json.dumps(releases).encode())
+        if "/v9.9.8/" in url:
+            return Response(payload.getvalue())
+        raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+
+    monkeypatch.setattr(gguf_engine.urllib.request, "urlopen", urlopen)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    said = []
+    dest = gguf_engine.install_binaries(tmp_path / "bin", tag="latest", say=said.append)
+    assert gguf_engine._binary(dest, "yue-synth") is not None
+    assert urls == [
+        f"{gguf_engine.RELEASES}/latest/download/{asset}",
+        f"{gguf_engine.RELEASES_API}?per_page=30",
+        f"{gguf_engine.RELEASES}/download/v9.9.8/{asset}",
+    ]  # the newest release that lists it, not the oldest
+    assert any("taking" in line and "v9.9.8" in line for line in said)
+    # an explicit tag that has it is served directly; one that lacks it falls back the same way
+    urls.clear()
+    gguf_engine.install_binaries(tmp_path / "bin2", tag="v9.9.8", say=said.append)
+    assert urls == [f"{gguf_engine.RELEASES}/download/v9.9.8/{asset}"]
+    # no release lists the asset at all (a pin bump still building): a plain, explained error
+    releases[1]["assets"] = releases[2]["assets"] = []
+    with pytest.raises(RuntimeError, match="no release lists"):
+        gguf_engine.install_binaries(tmp_path / "bin3", tag="latest", say=said.append)
+    # and an unreachable API is not a crash, only the same error
+    monkeypatch.setattr(
+        gguf_engine.urllib.request,
+        "urlopen",
+        lambda request, timeout=0: (_ for _ in ()).throw(
+            urllib.error.HTTPError(str(request), 404, "Not Found", {}, None)
+        ),
+    )
+    with pytest.raises(RuntimeError, match="no release lists"):
+        gguf_engine.install_binaries(tmp_path / "bin4", tag="latest", say=said.append)
+
+
 def test_auto_backend_uses_the_gpu_torch_cannot_see(monkeypatch):
     """A CPU-only torch (PyPI's Windows wheel) next to an NVIDIA card: the reference engine
     would crawl on the CPU; yue2.cpp drives the card itself — but only when installed."""
@@ -677,15 +755,20 @@ def test_prepare_names_files_after_verified_content_and_keeps_the_intermediate_p
     # a different quant converts its own private BF16 again, never the VAE
     gguf_engine.prepare(m, v, out, quant_label="Q6_K")
     assert [n for n, _ in produced] == ["backbone", "quantize"]
-    # a different model, or only a different config.json, converts afresh
+    # a different model, or only a different config.json, converts afresh; the earlier file is
+    # kept (never deleted from under another process) but named as deletable
     for other in (
         checkpoint(tmp_path / "m2", b"model-c"),
         checkpoint(tmp_path / "m3", b"model-a", config_text='{"changed": 1}'),
     ):
         produced.clear()
-        again = gguf_engine.prepare(other, v, out, quant_label="Q8_0")
+        said = []
+        again = gguf_engine.prepare(other, v, out, quant_label="Q8_0", log=said.append)
         assert again.backbone != first.backbone and first.backbone.is_file()
         assert [n for n, _ in produced] == ["backbone", "quantize"]
+        note = [line for line in said if line.startswith("no longer used")]
+        assert len(note) == 1 and first.backbone.name in note[0]
+        assert again.backbone.name not in note[0] and "Vae" not in note[0]  # only the superseded
 
 
 def test_checkpoint_identity_verifies_the_manifest_and_covers_the_conversion_inputs(tmp_path):
@@ -709,6 +792,24 @@ def test_checkpoint_identity_verifies_the_manifest_and_covers_the_conversion_inp
     )
     with pytest.raises(RuntimeError, match="no safetensors"):
         gguf_engine.checkpoint_identity(tmp_path / "nope", out)
+
+
+def test_converter_version_ignores_line_endings(tmp_path):
+    """A Windows checkout under Git's autocrlf hands the converter over with CRLF line endings;
+    it is the same converter and must name the same GGUF file (seen on the RTX 2070 run)."""
+    import hashlib
+
+    lf = tmp_path / "lf.py"
+    crlf = tmp_path / "crlf.py"
+    lf.write_bytes(b"import gguf\n\ndef convert():\n    pass\n")
+    crlf.write_bytes(lf.read_bytes().replace(b"\n", b"\r\n"))
+    assert gguf_engine.converter_version(crlf) == gguf_engine.converter_version(lf)
+    assert gguf_engine.converter_version(lf) == hashlib.sha256(lf.read_bytes()).hexdigest()
+    vendored = gguf_engine.config.PACKAGE_DIR / "vendor" / "yue2cpp_convert.py"
+    assert (
+        gguf_engine.converter_version()
+        == hashlib.sha256(vendored.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+    )  # the checked-in copy is LF, so the names existing installs made are kept
 
 
 def test_prepare_uses_ready_made_files_only_in_an_explicit_gguf_dir(tmp_path, monkeypatch):
