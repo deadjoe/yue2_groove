@@ -13,7 +13,7 @@ measured ([LINUX_CUDA.md](LINUX_CUDA.md)); Windows numbers are estimates (§4).
 | **12 GB** (RTX 3060 12G, 4070, 4070 Super, 4070 Ti, 5070, …) — Linux or Docker | With limits | Songs of ~5 min at CFG 1.0 · songs ≤ 3 min at CFG 1.5 · longer at CFG 1.5: §3 | MEMORY BUDGET **12**, CFG SCALE **empty** |
 | **12 GB** — Windows | Borderline | Songs ≤ 3 min at CFG 1.0 to start · CFG 1.5: FP8 or Docker (§3) | MEMORY BUDGET **12**, CFG SCALE **empty**, max_tokens **4 500** |
 | **12 GB**, any OS, with the [GGUF engine](GGUF_ENGINE.md) installed | Yes | Full-length songs at any CFG (measured peak 8.2 GB on a 16 GB card), faster AR stage; a different take for the same seed | Nothing — BACKEND=auto picks it |
-| **8–11 GB** (RTX 4060, 3070, 3080 10G, all RTX 20 series, …) | **No** on the reference engine | — | The [GGUF engine](GGUF_ENGINE.md): an 8 GB card gets a context cap automatically (songs up to ~4.9 min; not yet measured on a real 8 GB card), or a cloud GPU (RunPod, …) with the [Docker image](../deploy/docker/README.md); 16 GB there is enough |
+| **8–11 GB** (RTX 4060, 3070, 3080 10G, all RTX 20 series, …) | **No** on the reference engine | — | The [GGUF engine](GGUF_ENGINE.md): an 8 GB card gets a context cap automatically (songs up to ~4.9 min; measured on an RTX 2070 8 GB under Windows: a 4:51 song at 6.1 GB peak), or a cloud GPU (RunPod, …) with the [Docker image](../deploy/docker/README.md); 16 GB there is enough |
 
 ## 2. Where to set it
 
@@ -47,8 +47,10 @@ Every one of these changes (CFG, length, FP8, Windows vs Linux) turns the same s
 ## 4. Windows users, read this
 
 Windows is not a supported platform. Install, launch and Cover were verified once (Windows 11,
-RTX 2070 8 GB); the maintainer has not generated a song on Windows, so the Windows numbers on
-this page are the Linux measurements plus the known Windows overhead. Reports are welcome.
+RTX 2070 8 GB), and one full song was generated there — on the GGUF engine, which that card
+gets automatically; the reference engine has not been run on Windows by the maintainer, so
+the Windows numbers on this page are the Linux measurements plus the known Windows overhead.
+Reports are welcome.
 
 | What you see | Why | What to do |
 |---|---|---|

@@ -356,7 +356,7 @@ SheetSage2 — a different take for the same seed, never mixed with reference ru
 ```bash
 .venv/bin/python -m yue2_groove.gguf_engine install     # this platform's binaries → bin/yue2cpp
 uv pip install --python .venv/bin/python -e ".[gguf]"    # the converter's gguf writer
-.venv/bin/python -m yue2_groove.gguf_engine prepare      # optional: build the GGUF files now (~10 s)
+.venv/bin/python -m yue2_groove.gguf_engine prepare      # optional: build the GGUF files now (under a minute)
 ```
 
 Measurements, selection rule, environment variables and limits: [docs/GGUF_ENGINE.md](docs/GGUF_ENGINE.md).

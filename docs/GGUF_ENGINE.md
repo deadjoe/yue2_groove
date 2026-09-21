@@ -1,9 +1,10 @@
 # The GGUF engine — YuE2 through yue2.cpp, for cards under 16 GB
 
 **Status:** rendering measured on an M1 Max (Metal) against the CUDA reference run; full generations
-run through the app on the M1 Max and on an RTX A4000 16 GB (Linux, CUDA) with VRAM sampled
-(2026-09-20/21, experiment group `95-gguf-engine-branch`); not yet run on a physical 12 GB or 8 GB
-card, nor on Windows. **Not the reference configuration** — see §4 before relying on it.
+run through the app on the M1 Max, on an RTX A4000 16 GB (Linux, CUDA) and on an RTX 2070 8 GB
+(Windows 11, Pinokio install), the CUDA runs with VRAM sampled (2026-09-20/21, experiment group
+`95-gguf-engine-branch`); no physical 12 GB card yet. **Not the reference configuration** — see §4
+before relying on it.
 
 YUE2 // GROOVE's reference configuration is upstream's: the unmodified BF16 model in PyTorch, validated
 at 24 GB and measured down to a 12 GB budget ([LINUX_CUDA.md](LINUX_CUDA.md)). Below that, and on
@@ -42,13 +43,14 @@ to end through the app:
 | Host | Semantic | NAR | End to end | Reference (PyTorch, same request) |
 |---|---|---|---|---|
 | RTX A4000 16 GB, CUDA | 99.8 tok/s | 132 s | **229 s** for 272 s of audio | L4 24 GB: 39 tok/s, 69 s, 325 s |
+| RTX 2070 8 GB, Windows, CUDA | 96.7 tok/s | 194 s | **351 s** for 291 s of audio (context capped, §3) | — (does not fit) |
 | M1 Max 64 GB, Metal | 69.8 tok/s | 613 s | **785 s** for 265 s of audio | M4 Pro: 11 tok/s, 793 s, 1 231 s |
 
 Memory: on the A4000, `nvidia-smi` sampled every second put the full-length CFG 1.5 song at a
 **peak of 8 239 MiB** at the full 24 576 context — 2.3 GiB under the PyTorch reference's
-10.5–10.8 GiB (LINUX_CUDA §3), so a 12 GB card keeps ~3.8 GB for the desktop. An 8 GB card needs
-`YUE2_GROOVE_GGUF_MAX_SEQ` (see §3); yue2.cpp's own figures: a 65 s song peaks at 5.8 GB at the full
-context, 3.8 GB with `--max-seq 8192`.
+10.5–10.8 GiB (LINUX_CUDA §3), so a 12 GB card keeps ~3.8 GB for the desktop. On the RTX 2070 the
+same song with the automatic cap (§3) peaked at **6 125 MiB including the Windows desktop's
+~0.8 GB** — about 5.4 GB for the engine, 2 GB of headroom on an 8 GB card.
 
 ## 2. Install
 
@@ -68,7 +70,7 @@ one line in the log and STATUS saying the engine would fit better; nothing else 
    `cmake -S . -B build && cmake --build build` in a yue2.cpp checkout at the pinned commit.)
 2. **`gguf` package** — `uv pip install --python .venv/bin/python -e ".[gguf]"` — the writer the
    converter uses. Skip it if you place ready-made GGUF files in `YUE2_GROOVE_GGUF`.
-3. **GGUF files** — prepared automatically on the first GGUF generation (about ten seconds, no
+3. **GGUF files** — prepared automatically on the first GGUF generation (under a minute, no
    download): the checkpoints already on disk are converted with yue2.cpp's own converter (a
    byte-identical vendored copy, `yue2_groove/vendor/yue2cpp_convert.py`) and quantized with the
    release's `quantize`. Ahead of time: `python -m yue2_groove.gguf_engine prepare`. The result is
@@ -76,8 +78,10 @@ one line in the log and STATUS saying the engine would fit better; nothing else 
    so provenance stays with the weights you verified. The VAE is never quantized (F32). The files are
    named after everything the conversion reads — the weights (hashed once, remembered in
    `.hashes.json`, and checked against `weights_manifest.json`: a mismatch is an integrity error),
-   `config.json`, `qwen.tiktoken` and the converter itself — so a different MODEL, MODEL REVISION,
-   VAE, config or converter is converted afresh, never served an older file. The 7.2 GB BF16
+   `config.json`, `qwen.tiktoken` and the converter itself (line endings folded, so a Windows
+   checkout names the same file) — so a different MODEL, MODEL REVISION, VAE, config or converter
+   is converted afresh, never served an older file; the older file stays (nothing deletes what
+   another process may be reading) and the log names it as deletable. The 7.2 GB BF16
    intermediate lives in a private `.partial-*` directory for the duration of one preparation and
    is never shared, so two preparations cannot disturb each other. Plain-named files
    (`YuE2-3B-Q8_0.gguf`, `YuE2-Vae-F32.gguf`) downloaded from the published repository are used as
@@ -106,8 +110,9 @@ one line in the log and STATUS saying the engine would fit better; nothing else 
   cannot hold, so the engine trims the semantic `max_tokens` up front — from the exact prefix for an
   external score, from the worst case (the ABC budget) for a model-written one: a full-length
   request with default lyrics keeps ~4.9 minutes. STATUS shows the cap, `config.json` records it
-  (`max_seq`, `semantic_budget_cap`). `YUE2_GROOVE_GGUF_MAX_SEQ` sets the cap on any card. Not yet
-  measured on a physical 8 GB card.
+  (`max_seq`, `semantic_budget_cap`). `YUE2_GROOVE_GGUF_MAX_SEQ` sets the cap on any card. Measured
+  on an RTX 2070 8 GB: the reference request ended by itself at 4:51, one second under the cap,
+  at 6.1 GB peak with the desktop (`95/71`).
 
 - DEVICE does not apply either: yue2.cpp picks the best backend it finds (Metal / CUDA / Vulkan /
   CPU). An explicit `--device cpu` or `mps` does keep BACKEND=auto on the PyTorch engine — the
@@ -138,8 +143,8 @@ the exact ids were asked for and cannot be obtained, the run fails rather than r
   sampled token stream within a few dozen draws ([CROSS_PLATFORM.md](CROSS_PLATFORM.md)). The same
   seed reproduces on one machine with one engine — two GGUF runs here were byte-identical — but not
   across engines. Seeded A/B comparisons stay within one engine.
-- **Not validated end to end on a 12 GB or 8 GB card.** The numbers above are a rendering comparison
-  on an M1 Max; the yue2.cpp memory figures are its author's. Reports from real small cards are welcome.
+- **Not validated end to end on a 12 GB card.** 16 GB and 8 GB are measured (§1); 12 GB sits between
+  them with the A4000's 8.2 GB peak at the full context. Reports from real 12 GB cards are welcome.
 - **Not upstream.** yue2.cpp is a young, single-maintainer project on a patched GGML fork. It is pinned
   by commit, run behind the same process boundary as SheetSage2 (JSON in, files out, nothing imported),
   and can be removed without touching the reference path.
@@ -152,8 +157,8 @@ the exact ids were asked for and cannot be obtained, the run fails rather than r
 | Platform | Backend | Status |
 |---|---|---|
 | macOS, Apple Silicon | Metal | run through the app on an M1 Max with the CI package: install, prepare, GENERATE (`95/51`) |
-| Linux, NVIDIA | CUDA (Vulkan and CPU in the same archive) | run through the app on an RTX A4000 16 GB with the CI package: fresh host, prepare, GENERATE, COVER, Library (`95/61–63`); no physical 12 / 8 GB card yet |
-| Windows, NVIDIA / AMD | CUDA / Vulkan | built and smoke-tested by the workflow (starts, DLLs resolve, CUDA runtime in the zip); not yet run through the app |
+| Linux, NVIDIA | CUDA (Vulkan and CPU in the same archive) | run through the app on an RTX A4000 16 GB with the CI package: fresh host, prepare, GENERATE, COVER, Library (`95/61–63`); the [Docker image](../deploy/docker/README.md) carries this package, so a container on a small card gets the engine by itself |
+| Windows, NVIDIA / AMD | CUDA / Vulkan | run through the app on an RTX 2070 8 GB (Windows 11) by way of the Pinokio launcher's Update: install, prepare, GENERATE with the automatic context cap (`95/71`); Vulkan (AMD) built and smoke-tested only |
 
 Each yue-synth process on macOS compiles the Metal shader library (~20 s) before it starts; CUDA
 loads in a second or two from the page cache.
