@@ -2,9 +2,8 @@
 
 **Status:** rendering measured on an M1 Max (Metal) against the CUDA reference run; full generations
 run through the app on the M1 Max, on an RTX A4000 16 GB (Linux, CUDA) and on an RTX 2070 8 GB
-(Windows 11, Pinokio install), the CUDA runs with VRAM sampled (2026-09-20/21, experiment group
-`95-gguf-engine-branch`); no physical 12 GB card yet. **Not the reference configuration** — see §4
-before relying on it.
+(Windows 11, Pinokio install), the CUDA runs with VRAM sampled every second (2026-09-20/21); no
+physical 12 GB card yet. **Not the reference configuration** — see §4 before relying on it.
 
 YUE2 // GROOVE's reference configuration is upstream's: the unmodified BF16 model in PyTorch, validated
 at 24 GB and measured down to a 12 GB budget ([LINUX_CUDA.md](LINUX_CUDA.md)). Below that, and on
@@ -15,9 +14,10 @@ every platform, and — measured below — a rendering the ear could not tell fr
 
 ## 1. What it changes, in numbers
 
-The test in `yue2-experiments/90-yue2cpp-quant-rerender` removes the sampling stage (which forks on any
-perturbation) and renders the **reference run's own score, semantic tokens and seeded noise** through
-each stack. Both inputs were verified bit-identical before the runs. Metrics as in `scripts/rerender.py`.
+The rendering test removes the sampling stage (which forks on any perturbation) and renders the
+**reference run's own score, semantic tokens and seeded noise** (the CUDA run of
+[LINUX_CUDA.md](LINUX_CUDA.md)) through each stack. Both inputs were verified bit-identical before
+the runs. Metrics as in `scripts/rerender.py`.
 
 | Same tokens + noise rendered by | latent Δ / std | latent corr | audio SNR |
 |---|---|---|---|
@@ -37,8 +37,8 @@ own note, "an audio code LM breaks below Q5", agrees. Q8_0 is therefore the only
 default (`YUE2_GROOVE_GGUF_QUANT` can pick the others for experiments).
 
 Speed: the AR stage is bandwidth-bound and is where the 8-bit weights pay; the NAR stage is
-compute-bound and does not. The reference request (Something True, CFG 1.5, cot full), generated end
-to end through the app:
+compute-bound and does not. The reference request (the full-length song of LINUX_CUDA.md, CFG 1.5,
+cot full), generated end to end through the app:
 
 | Host | Semantic | NAR | End to end | Reference (PyTorch, same request) |
 |---|---|---|---|---|
@@ -112,7 +112,7 @@ one line in the log and STATUS saying the engine would fit better; nothing else 
   request with default lyrics keeps ~4.9 minutes. STATUS shows the cap, `config.json` records it
   (`max_seq`, `semantic_budget_cap`). `YUE2_GROOVE_GGUF_MAX_SEQ` sets the cap on any card. Measured
   on an RTX 2070 8 GB: the reference request ended by itself at 4:51, one second under the cap,
-  at 6.1 GB peak with the desktop (`95/71`).
+  at 6.1 GB peak with the desktop.
 
 - DEVICE does not apply either: yue2.cpp picks the best backend it finds (Metal / CUDA / Vulkan /
   CPU). An explicit `--device cpu` or `mps` does keep BACKEND=auto on the PyTorch engine — the
@@ -128,9 +128,9 @@ run like any other. 06 DECODE decodes with yue2.cpp's VAE (`neural-codec`); VAE 
 torch backend.
 
 **The score ids.** yue2.cpp feeds the semantic stage the ids it sampled; the app re-tokenizes the
-score *text* it returns (`config.json: "plan_ids_provenance": "retokenized"`). In every archived
-model-written score (28 of 28, CUDA and MPS) the two are identical — the model writes canonical
-tokenizations — and an external score is re-tokenized by upstream itself. For an exact record set
+score *text* it returns (`config.json: "plan_ids_provenance": "retokenized"`). In every
+model-written score from the validation runs (28 of 28, CUDA and MPS) the two are identical — the
+model writes canonical tokenizations — and an external score is re-tokenized by upstream itself. For an exact record set
 `YUE2_GROOVE_GGUF_EXACT_IDS=1`: the engine's own ids are read from its debug dump (a few hundred MB
 of scratch per song, deleted afterwards), parsed at the protocol's markers (the dump holds the first
 acoustic chunk, which is the whole song unless `max_seq` splits it) and checked against the returned
@@ -156,9 +156,9 @@ the exact ids were asked for and cannot be obtained, the run fails rather than r
 
 | Platform | Backend | Status |
 |---|---|---|
-| macOS, Apple Silicon | Metal | run through the app on an M1 Max with the CI package: install, prepare, GENERATE (`95/51`) |
-| Linux, NVIDIA | CUDA (Vulkan and CPU in the same archive) | run through the app on an RTX A4000 16 GB with the CI package: fresh host, prepare, GENERATE, COVER, Library (`95/61–63`); the [Docker image](../deploy/docker/README.md) carries this package, so a container on a small card gets the engine by itself |
-| Windows, NVIDIA / AMD | CUDA / Vulkan | run through the app on an RTX 2070 8 GB (Windows 11) by way of the Pinokio launcher's Update: install, prepare, GENERATE with the automatic context cap (`95/71`); Vulkan (AMD) built and smoke-tested only |
+| macOS, Apple Silicon | Metal | run through the app on an M1 Max with the release package: install, prepare, GENERATE |
+| Linux, NVIDIA | CUDA (Vulkan and CPU in the same package) | run through the app on an RTX A4000 16 GB with the release package: fresh host, prepare, GENERATE, COVER, Library; the [Docker image](../deploy/docker/README.md) carries this package, so a container on a small card gets the engine by itself |
+| Windows, NVIDIA / AMD | CUDA / Vulkan | run through the app on an RTX 2070 8 GB (Windows 11) by way of the Pinokio launcher's Update: install, prepare, GENERATE with the automatic context cap; Vulkan (AMD) built and smoke-tested only |
 
 Each yue-synth process on macOS compiles the Metal shader library (~20 s) before it starts; CUDA
 loads in a second or two from the page cache.

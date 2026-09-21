@@ -6,7 +6,7 @@
 
 Upstream YuE2 documents a single validated platform: *Linux · Python 3.12 · NVIDIA GPU with BF16 support and 24 GB VRAM*. This report turns that guideline into measured numbers for this app: what actually runs, what it actually needs in VRAM, where the failure boundary is, and what the experimental FP8 mode does and costs.
 
-All runs below were executed on rented cloud GPUs (RunPod, NVIDIA L4) with one fixed song request so that single variables could be changed per run — session 1 (2026-09-15, driver 595.91.07) through the real UI, session 2 (2026-09-17, a different L4 host, driver 570.195.03) headlessly through the same app functions the UI's batch tab calls. Raw artifacts (timings, hashes, audio) are recorded in each run's `result.json`; session-2 runs add `session.json` with a 1-second `nvidia-smi` peak.
+All runs below were executed on rented cloud GPUs (RunPod, NVIDIA L4) with one fixed song request so that single variables could be changed per run — session 1 (2026-09-15, driver 595.91.07) through the real UI, session 2 (2026-09-17, a different L4 host, driver 570.195.03) headlessly through the same app functions the UI's batch tab calls. Raw artifacts (timings, hashes, audio) are recorded in each run's `result.json`; session-2 peaks come from `nvidia-smi` sampled every second alongside each run.
 
 ---
 
@@ -100,11 +100,11 @@ Same request, same seed, only the memory setting changed:
 
 | Run | dtype | Memory budget | Effective cap¹ | Result | Peak VRAM observed² |
 |---|---|---|---|---|---|
-| `20260915-142716` | BF16 | 24 | 20.0 GiB | ✅ complete | 10.53 GiB |
-| `20260915-150457` | BF16 | **16** | 14.0 GiB | ✅ complete | 10.81 GiB |
-| `20260915-151249` | BF16 | **12** | 10.0 GiB | ❌ OOM at ~60 s | 10.25 GiB at failure |
-| `20260915-151448` | BF16 | 12 | 10.0 GiB | ❌ OOM at ~60 s (reproduced) | 10.25 GiB at failure |
-| `20260915-151926` | **FP8** | 12 | 10.0 GiB | ✅ complete | 9.92 GiB |
+| reference | BF16 | 24 | 20.0 GiB | ✅ complete | 10.53 GiB |
+| budget 16 | BF16 | **16** | 14.0 GiB | ✅ complete | 10.81 GiB |
+| budget 12 | BF16 | **12** | 10.0 GiB | ❌ OOM at ~60 s | 10.25 GiB at failure |
+| budget 12, repeated | BF16 | 12 | 10.0 GiB | ❌ OOM at ~60 s (reproduced) | 10.25 GiB at failure |
+| FP8 at budget 12 | **FP8** | 12 | 10.0 GiB | ✅ complete | 9.92 GiB |
 
 ¹ On this L4: `min(budget − 2, 22.04 − 2)` GiB.
 ² Sampled every 5 s with `nvidia-smi`; brief spikes between samples are possible, so treat peaks as lower bounds (the OOM runs give an independent lower bound of ≥ 10.25 GiB for the BF16 working set).
@@ -163,22 +163,22 @@ The BF16 failure at budget 12 (§3.3) is the semantic stage's KV cache: `StaticK
 
 | Run | Setting | Result | Peak (`nvidia-smi`, 1 s) | Take |
 |---|---|---|---|---|
-| `20260917-190622-E4-budget12-cfg1.0` | **CFG 1.0** (upstream's default), no other change | ✅ complete, 301 s | **9 576 MiB** | different from the 24 GB take — a different sampling distribution |
-| `20260917-190042-E3-budget12-cap7200` | CFG 1.5, semantic `max_tokens` 7 200 | ✅ complete, 327 s | **10 338 MiB** (tight) | different from the 24 GB take (first differing semantic token 22): the smaller KV buffers change FlashAttention's tiling, and any numeric perturbation flips a token within a few dozen draws |
-| `20260917-191137-E5-budget12-piano-cap5000` | CFG 1.5, a 2-minute song (`Grand_Piano` request), cap 5 000 | ✅ complete, 123 s | **9 480 MiB** | — |
+| E4 | **CFG 1.0** (upstream's default), no other change | ✅ complete, 301 s | **9 576 MiB** | different from the 24 GB take — a different sampling distribution |
+| E3 | CFG 1.5, semantic `max_tokens` 7 200 | ✅ complete, 327 s | **10 338 MiB** (tight) | different from the 24 GB take (first differing semantic token 22): the smaller KV buffers change FlashAttention's tiling, and any numeric perturbation flips a token within a few dozen draws |
+| E5 | CFG 1.5, a 2-minute song (a solo-piano request), cap 5 000 | ✅ complete, 123 s | **9 480 MiB** | — |
 
 So a 12 GB-class card runs the unquantized BF16 model when the song is short or the CFG is 1.0; at the default CFG 1.5 a full-length song needs a length cap and lands within ~100 MiB of the limit. The cap is "lossless" in the sense of full precision — but it is **not** the same take as the uncapped run, for the same reason every other perturbation in [CROSS_PLATFORM.md](CROSS_PLATFORM.md) is not: the sampled tokens diverge early and stay diverged. FP8 (§4) remains the fallback for full-length CFG 1.5 songs on 12 GB.
 
 ### 3.7 Session 2: the longest song the app can produce, at budget 16
 
-A request with 207 lines of lyrics drove every stage to its ceiling: the score reached 3 969 tokens (cap 4 096), the semantic stage hit its **9 000-token cap** (6:00 of audio, `truncated.semantic = true`), the semantic prefix was 5 456 tokens and the NAR ran over ~14 500 tokens of context. Under the 16 GB budget (14 GiB cap) it completed at **11 568 MiB** peak (`20260917-192809-E8-budget16-long-song`, 447 s). Upstream's model card quotes 14.08 GiB for its own maximum-context test; on this stack the app's maximum stays ~2.4 GiB below the 16 GB-class cap.
+A request with 207 lines of lyrics drove every stage to its ceiling: the score reached 3 969 tokens (cap 4 096), the semantic stage hit its **9 000-token cap** (6:00 of audio, `truncated.semantic = true`), the semantic prefix was 5 456 tokens and the NAR ran over ~14 500 tokens of context. Under the 16 GB budget (14 GiB cap) it completed at **11 568 MiB** peak (E8, 447 s). Upstream's model card quotes 14.08 GiB for its own maximum-context test; on this stack the app's maximum stays ~2.4 GiB below the 16 GB-class cap.
 
 ### 3.8 Session 2: AR offload and the eager decoder
 
 | Run | Setting | Result | Peak | Output |
 |---|---|---|---|---|
-| `20260917-191353-E6-budget24-offload-ar` | budget 24, **AR offload on** | ✅ 330 s | 10 962 MiB | **byte-identical** to the reference (`semantic.npy`, `latent.npy`, `audio.flac`) |
-| `20260917-191937-E7-budget24-torch-eager` | budget 24, **BACKEND = torch-eager** | ✅ 498 s | 11 478 MiB | a different take from the ABC stage on (different kernels) |
+| E6 | budget 24, **AR offload on** | ✅ 330 s | 10 962 MiB | **byte-identical** to the reference (`semantic.npy`, `latent.npy`, `audio.flac`) |
+| E7 | budget 24, **BACKEND = torch-eager** | ✅ 498 s | 11 478 MiB | a different take from the ABC stage on (different kernels) |
 
 AR offload is lossless but does **not** lower this workload's peak — the peak is the semantic stage (two CFG branches + KV), and offload only parks the AR weights during the acoustic stage. The eager decoder — the path the app falls back to when a torch build cannot run FlashAttention — costs **1.8× per semantic token** (22.0 vs 39.0 tok/s) and about **1.5× end to end**, and uses ~700 MiB more than the CUDA-graph path.
 
@@ -271,17 +271,7 @@ rated *slightly* better, while 32 → 16 and 32 → 8 land 21.1 and 16.6 dB away
 
 ## 6. Artifacts and reproduction
 
-Each run directory contains `result.json` (timings, model identities, artifact SHA-256s), `config.json` (effective settings), `request.json`, `score.abc`, `semantic.npy`, `latent.npy` and `audio.flac`. Run IDs referenced in this report:
-
-```
-20260915-142716-…CFG15          BF16 · budget 24 · ODE 32   (reference)
-20260915-144732-…CFG15_ODE48    BF16 · budget 24 · ODE 48
-20260915-150457-…CFG15_MB16G    BF16 · budget 16 · ODE 32
-20260915-151249-…CFG15_MB12G    BF16 · budget 12            (OOM, kept as evidence)
-20260915-151448-…CFG15_MB12G    BF16 · budget 12            (OOM, reproduced)
-20260915-151926-…CFG15_MB12G    FP8  · budget 12 · ODE 32
-20260915-150141-comparison      ODE 32 vs ODE 48 listening page
-```
+Each run directory contains `result.json` (timings, model identities, artifact SHA-256s), `config.json` (effective settings), `request.json`, `score.abc`, `semantic.npy`, `latent.npy` and `audio.flac`. Every number in this report comes from those files: session 1 is the five budget runs of §3 (the reference, budget 16, budget 12 twice, FP8 at budget 12) plus the ODE-48 run of §5 and its listening page; session 2 is E1–E10 below.
 
 Setup on a fresh Linux + CUDA host (mirrors the launcher's steps, see the Pinokio repo for the GUI path):
 
@@ -299,19 +289,19 @@ Install torch **before** the app: otherwise the app's dependency resolution pull
 separate `nvidia-*` CUDA wheels, several GB) only for the cu128 wheel to replace it. On one cloud host
 with ~4 MB/s to PyPI that first, wasted install took 26 minutes. The same environment is available
 pre-built as a container image — `ghcr.io/deadjoe/yue2_groove`, see [deploy/docker/README.md](../deploy/docker/README.md) —
-which turns this whole setup into an image pull. Session-2 run IDs (all in the archive):
+which turns this whole setup into an image pull. The session-2 runs, as named in this report:
 
 ```
-20260917-185421-E1-reference-budget24        reference request on a second L4 host — bit-identical to 9/15
-20260917-190036-E2-decode-reference-latent   archived latent re-decoded — bit-identical audio
-20260917-190042-E3-budget12-cap7200          §3.6
-20260917-190622-E4-budget12-cfg1.0           §3.6
-20260917-191137-E5-budget12-piano-cap5000    §3.6
-20260917-191353-E6-budget24-offload-ar       §3.8
-20260917-191937-E7-budget24-torch-eager      §3.8
-20260917-192809-E8-budget16-long-song        §3.7
-20260917-193551 … 195440-E10-fixedscore-s*   five performances of the reference score (CROSS_PLATFORM §9.1)
-20260917-200124-E9-cover-transcription       §7
+E1   the reference request on a second L4 host — bit-identical to session 1      §7
+E2   the session-1 reference latent re-decoded — bit-identical audio             §7
+E3   budget 12, CFG 1.5, semantic cap 7 200                                       §3.6
+E4   budget 12, CFG 1.0                                                           §3.6
+E5   budget 12, CFG 1.5, a 2-minute solo-piano song, cap 5 000                    §3.6
+E6   budget 24, AR offload on                                                     §3.8
+E7   budget 24, BACKEND = torch-eager                                             §3.8
+E8   budget 16, the longest song the app can produce                              §3.7
+E9   Cover: SheetSage2 transcription on CUDA                                      §7
+E10  five performances of the reference score, seeds 831001–831005               CROSS_PLATFORM §9.1
 ```
 
 ---
@@ -320,7 +310,7 @@ which turns this whole setup into an image pull. Session-2 run IDs (all in the a
 
 **Bit-exact across L4 hosts and driver versions.** The reference request, re-run from a fresh install on a
 different L4 (driver 570.195.03 vs 595.91.07 in session 1), reproduced `abc_tokens.npy`, `semantic.npy`,
-`latent.npy` **and `audio.flac`** byte for byte; re-decoding the archived reference latent reproduced the
+`latent.npy` **and `audio.flac`** byte for byte; re-decoding the session-1 reference latent reproduced the
 reference audio; and the reference score fed back as an exact ABC with seed 831001 reproduced
 `semantic.npy` exactly (the CUDA-side equivalent of the Mac validation row in
 [CROSS_PLATFORM.md](CROSS_PLATFORM.md) §9.1). Same GPU model + same torch build ⇒ same bits, on
@@ -332,7 +322,7 @@ the second environment was built exactly as the README describes (`uv venv .venv
 MERT-v2-FullSong snapshot) and `sheetsage_driver.py` transcribed the first 60 s of the reference song with
 `--device cuda`: `result.json` records `device: cuda, dtype: bf16`, the full score export (ABC, MIDI, lab
 files) was written with no warnings, and the score came back in **F minor at 128 BPM** — the song it was
-transcribing is Fm / 130. FFmpeg 6.1.1 was present on the image. (`20260917-200124-E9-cover-transcription`.)
+transcribing is Fm / 130. FFmpeg 6.1.1 was present on the image. (E9.)
 
 ---
 

@@ -745,8 +745,7 @@ generate with several seeds: composition, key, tempo, progression and melody are
 everywhere; only the performance (semantic stage) and the rendering (NAR/VAE) are drawn — which
 is exactly the layer the listening notes ("vocals, instruments, arrangement") point at.
 
-**Run (M4 Pro, `07 // BATCH`, batch `20260916-045609-batch-fixedabc`, settings identical to
-Control 2).** Six rows:
+**Run (M4 Pro, one `07 // BATCH` job, settings identical to Control 2).** Six rows:
 
 - *Validation row* — Control 2's own `score.abc` with seed 831001. Its semantic prefix
   re-tokenised to Control 2's exactly (3 017 ABC ids, 3 903-token prefix), and the run reproduced
@@ -777,7 +776,7 @@ has probability 1/6. Loudness and dynamics vary widely between Mac performances 
 0.206, P10–P95 5 to 17 dB): the semantic stage decides how dense the mix is, and it decides it
 differently every draw. None of this is a quality judgement; that is §9.5.
 
-**CUDA side (L4, second session, 2026-09-17; runs `20260917-19…-E10-fixedscore-s831001…5`).**
+**CUDA side (L4, second session, 2026-09-17; LINUX_CUDA.md's E10, seeds 831001–831005).**
 The same five seeds with the same exact score on an L4. Seed 831001 reproduced the reference
 `semantic.npy` / `latent.npy` / `audio.flac` **byte for byte** — the CUDA-side validation row
 (same prefix, same RNG stream, same kernels; ABC stage skipped). The other four are new CUDA
@@ -808,11 +807,11 @@ different take. Copy the file with `cp`, not through an editor.
 
 ### 9.2 Same-machine repeat — is MPS reproducible at all? → **done: bit-exact**
 
-The fixed request was re-run on the M4 Pro with identical settings (run
-`20260916-031521-Something_True_M4PRO_CFG15`; `request.json` and `config.json` identical to
-Control 2 apart from the run id). Every artifact matched Control 2 byte for byte:
+The fixed request was re-run on the M4 Pro with identical settings (`request.json` and
+`config.json` identical to Control 2 apart from the run id). Every artifact matched Control 2
+byte for byte:
 
-| Artifact | Control 2 (`…005839`) | Repeat (`…031521`) |
+| Artifact | Control 2 | Repeat |
 |---|---|---|
 | `abc_tokens.npy` | `cec10145…` | `cec10145…` |
 | `semantic.npy` | `99d780be…` | `99d780be…` |
@@ -1062,7 +1061,7 @@ L4 2.14 bf16 (Exp A)
   latent.npy     f3e90f8968bbd16d07d8e6410d91052206576708b1901dd39c083c3e0c0fb82d
   audio.flac     a824641c442d9e9ed5f22871d58a5118c942ab9e0672867a08379722aec0418f
 
-L4 FP8 (calibration; LINUX_CUDA.md run 20260915-151926)
+L4 FP8 (calibration; the FP8 row of LINUX_CUDA.md §3)
   score.abc      e1bd6badaa6fc6a87888903978211d9bfa90dbf7e35768e5e65c6c5e05c806cc
   abc_tokens.npy 9f30f6a6f4ec50aad31e12a7ea933c886520c0fa06c29f2ee54e1a96d57b62af
   semantic.npy   fa8193769086779a3c672fde9b1a845be3bd23c26de7270bf9cb11d5015c6cd1
@@ -1105,12 +1104,12 @@ Upstream runtime (identical in all runs)
   "request": {"seed": 831001, "cfg_scale": 1.5, "cot": "full", "ode_steps": 32},
   "rng": {"cuda": "CUDA device generator", "mps": "CPU generator", "nar_noise": "CPU generator on all platforms", "same_seed_same_stream": false},
   "runs": [
-    {"id": "20260915-142716-Something_True_CFG15",             "platform": "cuda/L4",   "torch": "2.10.0+cu128", "dtype": "bfloat16", "key": "Fm", "bpm": 130, "abc_tokens": 3073, "semantic_tokens": 7123, "e2e_s": 324.8,  "rtf": 1.14},
-    {"id": "20260915-173431-Something_True_CFG15_T214",        "platform": "cuda/L4",   "torch": "2.14.0+cu130", "dtype": "bfloat16", "key": "Fm", "bpm": 130, "abc_tokens": 3073, "semantic_tokens": 7123, "e2e_s": 331.5,  "rtf": 1.16},
-    {"id": "20260915-151926-Something_True_CFG15_MB12G",       "platform": "cuda/L4",   "torch": "2.10.0+cu128", "dtype": "bfloat16", "quantization": "fp8", "key": "Fm", "bpm": 130, "abc_tokens": 3311, "semantic_tokens": 7846, "e2e_s": 1398.0},
-    {"id": "20260916-001257-Something_True_CFG15_M1MAX",       "platform": "mps/M1Max", "torch": "2.14.0",       "dtype": "bfloat16", "key": "E",  "bpm": 126, "abc_tokens": 2686, "semantic_tokens": 6665, "e2e_s": 1525.6, "rtf": 5.72},
-    {"id": "20260916-005839-Something_True_CFG15_M4MPRO",      "platform": "mps/M4Pro", "torch": "2.14.0",       "dtype": "bfloat16", "key": "E",  "bpm": 126, "abc_tokens": 3017, "semantic_tokens": 6677, "e2e_s": 1231.4, "rtf": 4.61},
-    {"id": "20260916-012748-Something_True_CFG15_M4MPRO_FL32", "platform": "mps/M4Pro", "torch": "2.14.0",       "dtype": "float32",  "key": "E",  "bpm": 126, "abc_tokens": 2839, "semantic_tokens": 7155, "e2e_s": 2036.1, "rtf": 7.11}
+    {"run": "Control 1 — L4, torch 2.10",  "platform": "cuda/L4",   "torch": "2.10.0+cu128", "dtype": "bfloat16", "key": "Fm", "bpm": 130, "abc_tokens": 3073, "semantic_tokens": 7123, "e2e_s": 324.8,  "rtf": 1.14},
+    {"run": "L4, torch 2.14",              "platform": "cuda/L4",   "torch": "2.14.0+cu130", "dtype": "bfloat16", "key": "Fm", "bpm": 130, "abc_tokens": 3073, "semantic_tokens": 7123, "e2e_s": 331.5,  "rtf": 1.16},
+    {"run": "L4, FP8 (calibration)",       "platform": "cuda/L4",   "torch": "2.10.0+cu128", "dtype": "bfloat16", "quantization": "fp8", "key": "Fm", "bpm": 130, "abc_tokens": 3311, "semantic_tokens": 7846, "e2e_s": 1398.0},
+    {"run": "M1 Max, bf16",                "platform": "mps/M1Max", "torch": "2.14.0",       "dtype": "bfloat16", "key": "E",  "bpm": 126, "abc_tokens": 2686, "semantic_tokens": 6665, "e2e_s": 1525.6, "rtf": 5.72},
+    {"run": "Control 2 — M4 Pro, bf16",    "platform": "mps/M4Pro", "torch": "2.14.0",       "dtype": "bfloat16", "key": "E",  "bpm": 126, "abc_tokens": 3017, "semantic_tokens": 6677, "e2e_s": 1231.4, "rtf": 4.61},
+    {"run": "M4 Pro, fp32",                "platform": "mps/M4Pro", "torch": "2.14.0",       "dtype": "float32",  "key": "E",  "bpm": 126, "abc_tokens": 2839, "semantic_tokens": 7155, "e2e_s": 2036.1, "rtf": 7.11}
   ],
   "first_differing_abc_token": {
     "L4_2.10 vs L4_2.14": null,
@@ -1122,19 +1121,19 @@ Upstream runtime (identical in all runs)
   },
   "audio_pcm_snr_db": {"L4_2.10 vs L4_2.14": 119, "L4_ODE32 vs L4_ODE48": 28},
   "follow_up": {
-    "same_machine_repeat": {"id": "20260916-031521-Something_True_M4PRO_CFG15", "vs": "20260916-005839", "artifacts_identical": true},
+    "same_machine_repeat": {"run": "M4 Pro repeat of Control 2", "artifacts_identical": true},
     "rerender_of_reference_on_M4Pro": {
-      "vae_only": {"id": "20260916-035647-rerender-vae-Something_True_CFG15", "snr_db_vs_cuda": 109.8},
-      "nar_vae_32": {"id": "20260916-040751-rerender-nar-Something_True_CFG15", "snr_db_vs_cuda": 28.6, "latent_rms_delta_over_std": 0.022},
-      "nar_vae_16": {"id": "20260917-162741-rerender-nar16-Something_True_CFG15", "snr_db_vs_mac32": 21.1},
-      "nar_vae_8":  {"id": "20260917-155954-rerender-nar8-Something_True_CFG15",  "snr_db_vs_mac32": 16.6}
+      "vae_only": {"snr_db_vs_cuda": 109.8},
+      "nar_vae_32": {"snr_db_vs_cuda": 28.6, "latent_rms_delta_over_std": 0.022},
+      "nar_vae_16": {"snr_db_vs_mac32": 21.1},
+      "nar_vae_8":  {"snr_db_vs_mac32": 16.6}
     },
-    "fixed_score_batch": {"id": "20260916-045609-batch-fixedabc", "score": "reference 20260915-142716 score.abc", "platform": "mps/M4Pro",
+    "fixed_score_batch": {"run": "M4 Pro batch on Control 1's score.abc", "platform": "mps/M4Pro",
                           "validation_row_reproduces_control2": true, "seeds": [831001, 831002, 831003, 831004, 831005]},
     "blind_listening": {"listener": "author", "scale": "1-5 overall", "noise_floor_points": 1,
                         "ratings": {"A_cuda_reference": 3, "B_mac_rerender_of_A": 4, "C_vae_only_redecode_of_A": 4,
                                     "M_s831001": 2, "M_s831002": 2, "M_s831003": 5, "M_s831004": 3, "M_s831005": 4}},
-    "fixed_score_batch_cuda": {"ids": "20260917-193551 … 20260917-195440-E10-fixedscore-s831001..5", "platform": "cuda/L4 (second host)",
+    "fixed_score_batch_cuda": {"run": "LINUX_CUDA.md E10, seeds 831001..5", "platform": "cuda/L4 (second host)",
                                "seed_831001_reproduces_reference": true, "centroid_hz": [2895, 4121, 4298, 3142, 3232]},
     "blind_listening_2": {"status": "built, not rated", "cases": 10, "composition": "reference score", "cuda": 5, "mac": 5}
   }
@@ -1145,9 +1144,8 @@ Upstream runtime (identical in all runs)
 
 The run directories (each containing `result.json`, `config.json`, `request.json`,
 `local_env.json`, `score.abc`, `semantic.npy`, `abc_tokens.npy`, `prefix.npy`, `latent.npy`,
-`audio.flac`) are archived together with the other validation artifacts. Every number in this
+`audio.flac`) are kept by the author with the other validation artifacts. Every number in this
 document is derived from those files; `result.json` additionally carries the per-stage timings
 and artifact hashes recorded by the app at generation time. All artifact hashes were re-verified
-against the archive for this revision. The follow-up runs of §9 (the M4 Pro repeat, the
-re-renders, the fixed-score batch and the blind bundle with its key) live in the M4 Pro's run
-directory and are listed by id in Appendix B.
+against those files for this revision, including the follow-up runs of §9 (the M4 Pro repeat, the
+re-renders, the fixed-score batch and the blind bundle with its key).

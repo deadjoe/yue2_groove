@@ -25,12 +25,9 @@ The UI is a thin layer over the `yue2` package: it never modifies upstream code,
 single file that imports `yue2` (`yue2_groove/adapter.py`) is covered by contract tests
 that fail loudly when an upstream release changes something the UI depends on.
 
-> **Platforms.** Developed and tested on macOS / Apple Silicon (MPS). Linux + NVIDIA CUDA
-> is validated end-to-end — generation and Cover, two sessions on NVIDIA L4 hosts. See
-> [docs/LINUX_CUDA.md](docs/LINUX_CUDA.md) for the measured VRAM budgets (24 / 16 / 12 GB),
-> ODE-step cost, FP8 findings and cross-host reproducibility. A ready-made Linux + CUDA
-> container image (also the way to run the Linux path on Windows via Docker Desktop / WSL2)
-> is described in [deploy/docker/README.md](deploy/docker/README.md).
+> **Platforms.** macOS / Apple Silicon (developed here), Linux + NVIDIA (validated end to
+> end), Windows + NVIDIA (best effort, through the GGUF engine), Docker and cloud GPUs — the
+> table under [Requirements](#requirements) says what each needs and how far it was tested.
 
 ## Screenshots
 
@@ -56,21 +53,28 @@ that fail loudly when an upstream release changes something the UI depends on.
 
 ## Requirements
 
-- Python 3.10 or newer and [uv](https://docs.astral.sh/uv/) (`pip` also works, see below).
-- Apple Silicon Mac with 32 GB or more unified memory (developed on a 64 GB machine), or a
-  Linux machine with an NVIDIA GPU of 24 GB (upstream's validated configuration). Measured on an
-  L4: a 16 GB memory budget runs everything the app can produce, and 12 GB runs the unquantized
-  model at CFG 1.0 or for shorter songs — see [docs/LINUX_CUDA.md](docs/LINUX_CUDA.md) §3.
-  Smaller cards: [docs/LOW_VRAM.md](docs/LOW_VRAM.md) (what to set) and the optional
-  [GGUF engine](docs/GGUF_ENGINE.md) (YuE2 through yue2.cpp with an 8-bit backbone; selected
-  automatically under 16 GB once its binaries are installed — a different take for the same
-  seed, not the reference configuration).
-- About 8 GB of disk for the model weights (`m-a-p/YuE2-3B` + `m-a-p/YuE2-Vae`), which
-  download from Hugging Face on first use.
-- The model weights are licensed **CC BY-NC 4.0 (non-commercial)** by the YuE2 project.
-- *Optional, for covers:* a separate SheetSage2 environment (Python 3.10/3.11, its own
-  torch/transformers, FFmpeg 6.1+) — see [Cover from audio](#cover-from-audio-sheetsage2).
-  Everything except 02 COVER works without it.
+Python 3.10 or newer, [uv](https://docs.astral.sh/uv/) (`pip` also works, see below), about
+8 GB of disk for the model weights (`m-a-p/YuE2-3B` + `m-a-p/YuE2-Vae`, downloaded from Hugging
+Face on first use; licensed **CC BY-NC 4.0**, non-commercial, by the YuE2 project) — and one of
+these machines. The app has two engines: **PyTorch**, upstream's reference configuration, and the
+optional **GGUF engine** (the same model, 8-bit, through yue2.cpp) for cards the reference does not
+fit; BACKEND=auto picks per machine as the table says.
+
+| Machine | Memory | Engine the app picks | How far it was tested | Read |
+|---|---|---|---|---|
+| **macOS, Apple Silicon** | 32 GB+ unified memory (developed on 64 GB) | PyTorch on MPS | Developed and tested here, every release | [docs/MACOS_MPS.md](docs/MACOS_MPS.md) |
+| **Linux + NVIDIA, 16 GB or more** | 24 GB is upstream's validated configuration; 16 GB runs everything the app can produce | PyTorch on CUDA | Validated end to end — generation, Cover, memory budgets, reproducibility — in two sessions on L4 24 GB cards | [docs/LINUX_CUDA.md](docs/LINUX_CUDA.md) |
+| **Linux + NVIDIA, 8 – 15 GB** | 12 GB: full-length songs at any CFG; 8 GB: songs up to ~5 min (automatic context cap) | GGUF engine, once its binaries are installed | Run through the app on a 16 GB card (RTX A4000) and on an 8 GB card (RTX 2070, under Windows); no physical 12 GB card yet | [docs/GGUF_ENGINE.md](docs/GGUF_ENGINE.md), [docs/LOW_VRAM.md](docs/LOW_VRAM.md) |
+| **Windows + NVIDIA** | as Linux | GGUF engine under 16 GB (PyTorch's Windows build has no FlashAttention; the GGUF engine brings its own); PyTorch, slower, on bigger cards | Best effort: install, Cover and one full-length song (RTX 2070 8 GB) verified through the Pinokio launcher | [docs/LOW_VRAM.md §4](docs/LOW_VRAM.md) |
+| **Docker** — Linux + NVIDIA, or Windows through Docker Desktop / WSL2 | as Linux | Both engines are in the image | The image is the Linux environment above, prebuilt; it is what the RunPod launcher runs | [deploy/docker/README.md](deploy/docker/README.md) |
+| **Cloud GPU** (RunPod, …) | 16 GB is enough | as Linux | The Linux validation ran on rented L4 and A4000 pods | same image |
+
+Not supported: Intel Macs, machines without a GPU (a song takes hours on a CPU), AMD / Intel GPUs
+(the GGUF engine's Vulkan build exists but has not been run through the app).
+
+*Optional, for covers:* a separate SheetSage2 environment (Python 3.10/3.11, its own
+torch/transformers, FFmpeg 6.1+) — see [Cover from audio](#cover-from-audio-sheetsage2).
+Everything except 02 COVER works without it.
 
 
 ## Run in Pinokio (easiest)
@@ -176,7 +180,8 @@ YUE2_GROOVE_RUNS=/path/to/runs       # where works are stored (default: ./runs)
 YUE2_GROOVE_MODEL=m-a-p/YuE2-3B      # Hugging Face id or a local directory
 YUE2_GROOVE_VAE=m-a-p/YuE2-Vae
 YUE2_GROOVE_VAE_LEGACY=m-a-p/YuE2-Vae-legacy
-YUE2_GROOVE_MODELS=/path/to/models   # optional: a folder holding YuE2-3B/, YuE2-Vae/, YuE2-Vae-legacy/, SheetSage2/
+YUE2_GROOVE_MODELS=/path/to/models   # optional: a folder holding YuE2-3B/, YuE2-Vae/, YuE2-Vae-legacy/, SheetSage2/ (and gguf/)
+YUE2_GROOVE_BACKEND=auto             # auto | torch | gguf — the engine (see "GGUF engine" below; its knobs are in docs/GGUF_ENGINE.md)
 YUE2_GROOVE_SHEETSAGE_PYTHON=/path/to/.venv-sheetsage2/bin/python   # 02 COVER (separate env)
 YUE2_GROOVE_SHEETSAGE_MODEL=m-a-p/SheetSage2   # or a local SheetSage2 snapshot
 YUE2_GROOVE_SHEETSAGE_BASE_MODEL=/path/to/MERT-v2-FullSong   # offline parent encoder snapshot
@@ -346,20 +351,34 @@ builds the same local listening bundle as 05 TOOLS with the link shown under the
 
 ## GGUF engine (optional): cards under 16 GB and Windows
 
-`--backend gguf` (or BACKEND in the settings rail) runs the same model through
-[yue2.cpp](https://github.com/ServeurpersoCom/yue2.cpp) with a Q8_0 backbone: 3.8 GB of weights,
-its own FlashAttention on Windows, and a rendering that a blind ABX could not tell from the CUDA
-reference (6/12). It is a second, clearly labelled engine behind the same process boundary as
-SheetSage2 — a different take for the same seed, never mixed with reference runs. `--backend auto`
-(the default) picks it on a CUDA card under 16 GB when the binaries are installed:
+A second engine for the same model: YuE2 through [yue2.cpp](https://github.com/ServeurpersoCom/yue2.cpp)
+(a GGML port, MIT) with an 8-bit (Q8_0) backbone.
+
+- **Why.** The reference engine needs ~11 GB of VRAM for a full-length song and, on Windows, runs
+  on a PyTorch build without FlashAttention. The GGUF engine has 3.8 GB of weights, peaks at
+  8.2 GB for a full-length song (measured on a 16 GB card; 6.1 GB on an 8 GB card with the
+  automatic context cap), brings its own FlashAttention on every platform, and composes (the AR
+  stage) 2.5–6× faster; the rendering stage is not faster.
+- **What it costs.** It is **not the reference configuration**: the same seed gives a *different
+  take*. The rendering itself is as close to the reference as the CUDA → Apple Silicon difference
+  the project already accepts (24 dB SNR with the reference's own tokens and noise), and a blind
+  ABX could not tell the two apart (6/12). Every run records which engine made it; GGUF runs are
+  never mixed with reference runs in a comparison.
+- **When it is used.** `--backend auto` (the default) picks it on a CUDA card under 16 GB — or an
+  NVIDIA card that a CPU-only torch cannot see — once its binaries are installed. Never
+  automatically on Apple Silicon or on 16 GB and up; BACKEND → **gguf** in the settings rail
+  switches by hand anywhere (a Mac composes faster with it too).
+- **Getting it.** Pinokio installs it with Update and the Docker image carries it. By hand:
 
 ```bash
 .venv/bin/python -m yue2_groove.gguf_engine install     # this platform's binaries → bin/yue2cpp
 uv pip install --python .venv/bin/python -e ".[gguf]"    # the converter's gguf writer
-.venv/bin/python -m yue2_groove.gguf_engine prepare      # optional: build the GGUF files now (under a minute)
+.venv/bin/python -m yue2_groove.gguf_engine prepare      # optional: make the GGUF files now (under a minute, +4.3 GB on disk)
 ```
 
-Measurements, selection rule, environment variables and limits: [docs/GGUF_ENGINE.md](docs/GGUF_ENGINE.md).
+The GGUF files are made from the weights already on disk at the first GGUF generation (no
+download). Measurements, the selection rule, environment variables and limits:
+[docs/GGUF_ENGINE.md](docs/GGUF_ENGINE.md).
 
 ## Tips: creativity knobs and instrumental / vocals
 

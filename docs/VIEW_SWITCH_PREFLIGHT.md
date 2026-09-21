@@ -20,7 +20,7 @@ hide.click(lambda: gr.update(visible=False), outputs=[studio])
 show.click(lambda: gr.update(visible=True), outputs=[studio])
 ```
 
-Result (`/tmp/bb-preflight/result.json`):
+Result:
 
 | observation | before hide | hidden | shown again |
 | --- | --- | --- | --- |
@@ -47,7 +47,7 @@ with gr.Column(elem_id="song", visible=True): …
 #      html.bb-view-studio #song { display: none !important; }
 ```
 
-Result (`/tmp/bb-preflight/result-css.json`):
+Result:
 
 | observation | before | SONG view | back to STUDIO |
 | --- | --- | --- | --- |
