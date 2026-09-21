@@ -6,6 +6,7 @@
 #   release published  → build all three, upload as release assets (yue2cpp-<pin>-<platform>)
 #   workflow_dispatch  → build, upload as workflow artifacts; with `release_tag`, also attach
 #   push touching this file (a pin bump, on any branch) → build, workflow artifacts only
+#   (branches only: a tag push ignores `paths` and would build a duplicate of the release run)
 #
 # Keep `YUE2CPP_SHORT` equal to `gguf_engine.YUE2CPP_PIN` (and `YUE2CPP_REF` its full SHA); tests/test_gguf_engine.py does not
 # check that (it cannot see this file) — the release ritual does.
@@ -15,6 +16,7 @@ on:
   release:
     types: [published]
   push:
+    branches: ["**"]
     paths: [".github/workflows/yue2cpp.yml"]
   workflow_dispatch:
     inputs:
