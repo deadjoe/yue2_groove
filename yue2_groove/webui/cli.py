@@ -11,7 +11,7 @@ import threading
 from pathlib import Path
 
 from .. import config, sheetsage_adapter
-from . import frontend, layout, runtime, song_view, theme
+from . import frontend, layout, runtime, settings_store, song_view, theme
 
 log = logging.getLogger("yue2_groove")
 
@@ -37,26 +37,29 @@ def main():
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=7860)
     parser.add_argument("--share", action="store_true", help="Create a public Gradio share link")
-    parser.add_argument("--device", default="auto", choices=["auto", "mps", "cpu", "cuda"])
-    parser.add_argument("--dtype", default="auto", choices=["auto", "float32", "bfloat16"])
+    # DEVICE / DTYPE / BACKEND / MODEL / VAE: a flag (or env) wins over the saved settings
+    # rail, which wins over the automatic rules; None = not given (settings_store.startup)
+    parser.add_argument("--device", default=None, choices=["auto", "mps", "cpu", "cuda"])
+    parser.add_argument("--dtype", default=None, choices=["auto", "float32", "bfloat16"])
     parser.add_argument(
         "--backend",
-        default=os.environ.get("YUE2_GROOVE_BACKEND", "auto"),
+        default=os.environ.get("YUE2_GROOVE_BACKEND") or None,
         choices=runtime.BACKEND_MODES,
         help="Inference engine: torch (reference), torch-eager, gguf (yue2.cpp, for cards "
         "under 16 GB) or auto — the VRAM rule (or set YUE2_GROOVE_BACKEND)",
     )
     parser.add_argument(
         "--model",
-        default=config.default_model(),
-        help="Hugging Face id or local directory of the 3B model",
+        default=None,
+        help="Hugging Face id or local directory of the 3B model (default: the local "
+        "models directory, else the Hub)",
     )
     parser.add_argument(
         "--runs",
         default=None,
         help="Directory for generated works (default: $YUE2_GROOVE_RUNS or ./runs)",
     )
-    parser.add_argument("--vae", default="standard", choices=["standard", "legacy"])
+    parser.add_argument("--vae", default=None, choices=["standard", "legacy"])
     parser.add_argument(
         "--tab",
         type=int,
@@ -98,25 +101,17 @@ def main():
             parser.error("--auth user and password must not be empty")
         auth = (user, password)
 
-    device = runtime.pick_device(args.device)
-    dtype = args.dtype
-    if dtype == "auto":
-        dtype = "bfloat16" if device in ("cuda", "mps") else "float32"
-    backend, backend_note = runtime.resolve_backend(
-        args.backend, device, device_explicit=args.device != "auto"
+    rail, factory, notes = settings_store.startup(
+        device=args.device, dtype=args.dtype, backend=args.backend, model=args.model, vae=args.vae
     )
-    if backend_note:
-        log.info("backend: %s", backend_note)
+    for note in notes:
+        log.info("settings: %s", note)
     view_mode, tab = song_view.resolve_view(args.view, args.tab, os.environ.get("YUE2_GROOVE_VIEW"))
     runtime.RUNS.mkdir(parents=True, exist_ok=True)
     atexit.register(sheetsage_adapter.stop_worker)  # no resident SheetSage2 after exit
     defaults = {
-        "device": device,
-        "dtype": dtype,
-        "backend": backend,
-        "backend_note": backend_note,
-        "model": args.model,
-        "vae": args.vae,
+        "rail": rail,
+        "factory": factory,
         "tab": tab,
         "view_mode": view_mode,
         "status": (
@@ -124,7 +119,7 @@ def main():
             if args.no_preload
             else "Model is preloading in the background…"
         )
-        + (f"\n{backend_note}" if backend_note else ""),
+        + "".join(f"\n{note}" for note in notes),
     }
     demo = layout.build_ui(defaults)
     demo.queue(default_concurrency_limit=1)
@@ -132,24 +127,8 @@ def main():
 
         def preload():
             try:
-                runtime.load_pipeline(
-                    runtime.RuntimeSettings(
-                        device,
-                        dtype,
-                        backend,
-                        "none",
-                        False,
-                        24,
-                        32,
-                        "auto",
-                        args.model,
-                        args.vae,
-                        "",
-                        "",
-                        "",
-                        False,
-                    )
-                )
+                # the rail's own values, so the first run reuses what was preloaded
+                runtime.load_pipeline(runtime.RuntimeSettings(**rail))
                 log.info("model preload complete")
             except Exception as exc:  # noqa: BLE001
                 log.warning("preload failed (will retry on first generation): %s", exc)

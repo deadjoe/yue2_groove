@@ -103,6 +103,7 @@ one line in the log and STATUS saying the engine would fit better; nothing else 
   the binaries, the log and STATUS say that installing them would use the card.
 - Apple Silicon is never switched automatically (the reference path is what the app is developed on),
   but BACKEND → **gguf** in the settings rail works there too and is much faster for the AR stage.
+  The rail is saved on every change and restored at the next launch, so the choice sticks.
 - The rail's DTYPE / QUANTIZATION / OFFLOAD AR / MEMORY BUDGET do not apply to this engine; ODE STEPS
   and VAE CORE FRAMES do.
 - **8 GB cards** get a context cap by default: `max_seq 12288` (two KV sets ≈ 2.7 GB instead of

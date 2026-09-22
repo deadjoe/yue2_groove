@@ -16,6 +16,7 @@ from . import (
     generate_tab,
     library_tab,
     runtime,
+    settings_store,
     song_view,
     tools_tab,
 )
@@ -85,33 +86,59 @@ def _song_view() -> SimpleNamespace:
     return _components(locals())
 
 
+def _rail_values(defaults: dict, key: str) -> dict:
+    """The rail's fourteen values from ``defaults[key]`` (the CLI passes ``rail`` — the saved
+    settings merged at launch — and ``factory``); a caller that passes only the older flat
+    keys (device / dtype / backend / model / vae) gets those with the fixed defaults."""
+    if key in defaults:
+        return defaults[key]
+    return {
+        "device": defaults.get("device", "auto"),
+        "dtype": defaults.get("dtype", "bfloat16"),
+        "backend": defaults.get("backend", "torch"),
+        "model": defaults.get("model", ""),
+        "vae_choice": defaults.get("vae", "standard"),
+        **settings_store.FIXED_DEFAULTS,
+    }
+
+
 def _runtime_rail(defaults) -> SimpleNamespace:
-    """The settings rail: model & runtime."""
-    with gr.Accordion("RUNTIME", open=False):
+    """The settings rail: model & runtime (saved on every change, see settings_store)."""
+    values = _rail_values(defaults, "rail")
+    with gr.Accordion("RUNTIME", open=False, elem_id="bb-runtime"):
         device = gr.Dropdown(
-            choices=["auto", "mps", "cpu", "cuda"], value=defaults["device"], label="DEVICE"
+            choices=list(settings_store.DEVICES), value=values["device"], label="DEVICE"
         )
-        dtype = gr.Dropdown(choices=runtime.DTYPE_CHOICES, value=defaults["dtype"], label="DTYPE")
-        model = gr.Textbox(value=defaults["model"], label="MODEL ID / LOCAL DIR")
+        dtype = gr.Dropdown(choices=runtime.DTYPE_CHOICES, value=values["dtype"], label="DTYPE")
+        model = gr.Textbox(value=values["model"], label="MODEL ID / LOCAL DIR")
         vae_choice = gr.Radio(
             choices=[("STANDARD", "standard"), ("LEGACY", "legacy"), ("CUSTOM", "custom")],
-            value=defaults.get("vae", "standard"),
+            value=values["vae_choice"],
             label="DEFAULT VAE",
         )
-        vae_custom = gr.Textbox(label="CUSTOM VAE", max_lines=1)
+        vae_custom = gr.Textbox(value=values["vae_custom"], label="CUSTOM VAE", max_lines=1)
         with gr.Row():
-            revision = gr.Textbox(label="MODEL REVISION", max_lines=1)
-            vae_revision = gr.Textbox(label="VAE REVISION", max_lines=1)
-        offline = gr.Checkbox(value=False, label="OFFLINE")
+            revision = gr.Textbox(value=values["revision"], label="MODEL REVISION", max_lines=1)
+            vae_revision = gr.Textbox(
+                value=values["vae_revision"], label="VAE REVISION", max_lines=1
+            )
+        offline = gr.Checkbox(value=values["offline"], label="OFFLINE")
         backend = gr.Dropdown(
-            choices=runtime.BACKEND_CHOICES, value=defaults.get("backend", "torch"), label="BACKEND"
+            choices=runtime.BACKEND_CHOICES, value=values["backend"], label="BACKEND"
         )
-        quantization = gr.Dropdown(choices=["none", "fp8"], value="none", label="QUANTIZATION")
-        offload_ar = gr.Checkbox(value=False, label="OFFLOAD AR WEIGHTS")
-        budget = gr.Number(value=24, label="MEMORY BUDGET")
-        ode_steps = gr.Slider(4, 64, value=32, step=4, label="ODE STEPS")
+        quantization = gr.Dropdown(
+            choices=list(settings_store.QUANTIZATIONS),
+            value=values["quantization"],
+            label="QUANTIZATION",
+        )
+        offload_ar = gr.Checkbox(value=values["offload_ar"], label="OFFLOAD AR WEIGHTS")
+        budget = gr.Number(value=values["budget"], label="MEMORY BUDGET")
+        low, high, step = settings_store.ODE_RANGE
+        ode_steps = gr.Slider(low, high, value=values["ode_steps"], step=step, label="ODE STEPS")
         vae_core_frames = gr.Dropdown(
-            choices=["auto", "512", "1024"], value="auto", label="VAE CORE FRAMES"
+            choices=list(settings_store.CORE_FRAMES),
+            value=values["vae_core_frames"],
+            label="VAE CORE FRAMES",
         )
         with gr.Row():
             load_btn = gr.Button("LOAD / APPLY", size="sm", scale=1)
@@ -1168,40 +1195,33 @@ def build_ui(defaults: dict) -> gr.Blocks:
             lambda: ("", "", "full", runtime.RANDOM_SEED, 0, ""),
             outputs=[gen.style, gen.lyrics, gen.cot, gen.seed, gen.cfg, gen.out_id],
         )
+        # the rail is saved on every change (settings_store): pickers on input, sliders
+        # on release, typed fields on blur / Enter — never on the programmatic updates
+        # below, so a page load or a reset does not write the file back
+        rail_fields = [getattr(rail, field) for field in settings_store.FIELDS]
+        rail_save = {
+            "fn": settings_store.save_from_rail,
+            "inputs": rail_fields,
+            "outputs": [*rail_fields, rail.env_status],
+            "queue": False,
+            "show_progress": "hidden",
+        }
+        for component in rail_fields:
+            if isinstance(component, gr.Slider):
+                component.release(**rail_save)
+            elif isinstance(component, (gr.Textbox, gr.Number)):
+                component.blur(**rail_save)
+                component.submit(**rail_save)
+            else:
+                component.input(**rail_save)
+        # RESET DEFAULTS: the launch defaults with DEVICE back to auto, and the file removed
+        reset_values = {**_rail_values(defaults, "factory"), "device": "auto"}
         rail.runtime_reset_btn.click(
-            lambda: (
-                "auto",
-                defaults["dtype"],
-                defaults["model"],
-                defaults.get("vae", "standard"),
-                "",
-                "",
-                "",
-                False,
-                defaults.get("backend", "torch"),
-                "none",
-                False,
-                24,
-                32,
-                "auto",
-            ),
-            outputs=[
-                rail.device,
-                rail.dtype,
-                rail.model,
-                rail.vae_choice,
-                rail.vae_custom,
-                rail.revision,
-                rail.vae_revision,
-                rail.offline,
-                rail.backend,
-                rail.quantization,
-                rail.offload_ar,
-                rail.budget,
-                rail.ode_steps,
-                rail.vae_core_frames,
-            ],
+            lambda: settings_store.reset(reset_values),
+            outputs=[*rail_fields, rail.env_status],
+            queue=False,
         )
+        demo.load(settings_store.rail_values, outputs=rail_fields, queue=False)
 
         def _load_text(path):
             return Path(path).read_text(encoding="utf-8", errors="replace") if path else gr.update()

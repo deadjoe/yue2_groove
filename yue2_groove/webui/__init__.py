@@ -20,7 +20,9 @@ for one parameter.
                 full or tiled) without generating again; single .npy upload supported
   07 BATCH      one JSON request per line (the equivalent of ``yue2 batch``), run in order
   Settings rail model & runtime: device / dtype / backend / quantization / offload_ar /
-                memory budget / ODE steps / VAE core frames / revisions / offline; load & unload
+                memory budget / ODE steps / VAE core frames / revisions / offline; load & unload;
+                saved on every change to yue2_groove_settings.json next to the works directory
+                (checked against the machine; a flag or env var wins at launch; RESET removes it)
 
 Two views, one kernel.  **SONG** is the producer-facing director: it follows the
 current work, states its stage (DRAFT / SCORE / AUDIO / REVISE / DONE) and offers
@@ -67,6 +69,7 @@ from . import (
     layout,
     library_tab,
     runtime,
+    settings_store,
     song_view,
     theme,
     tools_tab,
@@ -85,6 +88,7 @@ __all__ = [
     "library_tab",
     "main",
     "runtime",
+    "settings_store",
     "song_view",
     "theme",
     "tools_tab",

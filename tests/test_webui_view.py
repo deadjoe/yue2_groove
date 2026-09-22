@@ -175,14 +175,21 @@ def test_view_toggle_is_flat_compact_chrome() -> None:
     assert "#bb-topbtns { flex-wrap: nowrap !important; }" in css
 
 
-def test_rail_toggle_is_disabled_in_song_view() -> None:
-    """The settings rail lives inside STUDIO, so its toggle is dead in SONG."""
-    assert "rail.disabled = songView" in config.static_text("view.js")
-    assert (
-        "__bbApplyRail" in config.static_text("view.js")
-        and "__bbApplyRail" in webui.frontend.HEAD_HTML
-    )
-    assert "Settings live in STUDIO" in config.static_text("view.js")
+def test_the_gear_opens_the_settings_from_song() -> None:
+    """The settings rail lives inside STUDIO, so in SONG a show/hide toggle would change
+    nothing visible (why it was once disabled).  The gear now opens STUDIO with the rail
+    shown, opens RUNTIME and scrolls the rail into view where it wraps under the tabs."""
+    js = config.static_text("view.js")
+    assert "rail.disabled = false" in js and "rail.disabled = songView" not in js
+    assert "window.__bbToggleRail" in js and "window.__bbSetView('studio')" in js
+    assert "#bb-runtime > button.label-wrap" in js and "scrollIntoView" in js
+    assert "Open the settings (in STUDIO)" in js
+    assert "__bbApplyRail" in js and "__bbApplyRail" in webui.frontend.HEAD_HTML
+    assert "window.__bbToggleRail" in webui.frontend.RAIL_TOGGLE_JS
+    assert 'elem_id="bb-runtime"' in Path(webui.layout.__file__).read_text(encoding="utf-8")
+    css = config.static_text("bearbone.css")
+    assert '--bb-gear: url("data:image/svg+xml,' in css
+    assert "mask: var(--bb-gear)" in css and "-webkit-mask: var(--bb-gear)" in css
 
 
 def test_forced_view_does_not_write_the_remembered_choice() -> None:

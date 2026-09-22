@@ -25,3 +25,7 @@ scores/
 
 # yue2.cpp binaries for the GGUF engine (release assets; `python -m yue2_groove.gguf_engine install`)
 bin/
+
+# the saved settings rail (yue2_groove/webui/settings_store.py)
+yue2_groove_settings.json
+yue2_groove_settings.json.*.tmp

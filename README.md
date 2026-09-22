@@ -189,6 +189,7 @@ YUE2_GROOVE_SHEETSAGE_DEVICE=auto              # auto | cuda | mps | cpu
 YUE2_GROOVE_SHEETSAGE_KEEP_WARM=1             # reuse a resident SheetSage2 worker (faster repeats)
 YUE2_GROOVE_SHEETSAGE_IDLE_SECONDS=900        # resident worker idle lifetime
 YUE2_GROOVE_TRANSCRIPTIONS=/path/to/transcriptions   # wins over <runs>/transcriptions
+YUE2_GROOVE_SETTINGS=/path/to/settings.json   # the saved settings rail (default: next to the runs directory)
 
 # Apple Silicon memory guard: cap PyTorch's MPS allocator so it cannot drive the
 # machine into swap.  Defaults are 1.7 (HIGH) / 1.4 (LOW) of the recommended
@@ -199,6 +200,16 @@ YUE2_GROOVE_TRANSCRIPTIONS=/path/to/transcriptions   # wins over <runs>/transcri
 PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.8
 PYTORCH_MPS_LOW_WATERMARK_RATIO=0.5
 ```
+
+**Saved settings.** The settings rail in STUDIO (DEVICE, BACKEND, ODE STEPS, …) is saved on
+every change to `yue2_groove_settings.json` next to the runs directory and restored at the next
+launch and on every page load. Only what you changed is restored: a field left at its default
+keeps following the automatic rules (a GGUF engine installed later is still picked up). A value
+the machine cannot run — an engine that is not installed, a device it does not have — falls back
+to its automatic choice on its own, and STATUS says why. A flag or environment variable
+(`--backend`, `YUE2_GROOVE_BACKEND`, …) still wins for that launch; RESET DEFAULTS deletes the
+file. The file also records the app version and the machine, so it is
+the thing to attach to a bug report.
 
 On Apple Silicon, run `bash scripts/watch_memory.sh` (or `--once` for one
 snapshot) in a second terminal while a generation runs: it shows free memory,
@@ -367,7 +378,7 @@ A second engine for the same model: YuE2 through [yue2.cpp](https://github.com/S
 - **When it is used.** `--backend auto` (the default) picks it on a CUDA card under 16 GB — or an
   NVIDIA card that a CPU-only torch cannot see — once its binaries are installed. Never
   automatically on Apple Silicon or on 16 GB and up; BACKEND → **gguf** in the settings rail
-  switches by hand anywhere (a Mac composes faster with it too).
+  switches by hand anywhere (a Mac composes faster with it too), and the choice is kept (see *Saved settings* under Configuration).
 - **Getting it.** Pinokio installs it with Update and the Docker image carries it. By hand:
 
 ```bash

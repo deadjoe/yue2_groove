@@ -68,22 +68,26 @@ footer, #footer, .built-with, .show-api, .api-links { display: none !important; 
   box-shadow: 0 -8px 0 -5px currentColor, 0 8px 0 -5px currentColor,
               -8px 0 0 -5px currentColor, 8px 0 0 -5px currentColor;
 }
-/* settings-rail toggle: a CSS-drawn sidebar icon */
+/* settings button: a gear, drawn as a 1px-stroke SVG used as a mask so it takes
+   currentColor (and so both scenes) like the CSS-drawn theme icon beside it.
+   A step brighter (ink2) than the theme icon's ink3: it is the only way to the
+   settings, not a secondary switch. */
 #bb-rail-btn {
   position: relative; width: 28px !important; height: 28px; min-width: 28px !important;
-  padding: 0 !important; color: var(--bb-ink3) !important; line-height: 1;
+  padding: 0 !important; color: var(--bb-ink2) !important; line-height: 1;
 }
 #bb-rail-btn:hover { color: var(--bb-ink) !important; }
 #bb-rail-btn.bb-on { color: var(--bb-ink) !important; }
 #bb-rail-btn::before {
-  content: ""; position: absolute; left: 8px; top: 8px; width: 12px; height: 12px;
-  border: 1px solid currentColor; border-radius: 2px;
+  content: ""; position: absolute; left: 50%; top: 50%; width: 18px; height: 18px;
+  margin: -9px 0 0 -9px; background: currentColor;
+  -webkit-mask: var(--bb-gear) center / contain no-repeat;
+  mask: var(--bb-gear) center / contain no-repeat;
 }
-#bb-rail-btn::after {
-  content: ""; position: absolute; left: 12px; top: 9px; width: 1px; height: 10px;
-  background: currentColor;
+#bb-rail-btn.bb-on::before { transform: rotate(22.5deg); }
+#bb-rail-btn {
+  --bb-gear: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.35' stroke-linejoin='round'%3E%3Cpath d='M19.39 10.23L21.86 10.35L21.86 13.65L19.39 13.77L18.48 15.97L20.14 17.81L17.81 20.14L15.97 18.48L13.77 19.39L13.65 21.86L10.35 21.86L10.23 19.39L8.03 18.48L6.19 20.14L3.86 17.81L5.52 15.97L4.61 13.77L2.14 13.65L2.14 10.35L4.61 10.23L5.52 8.03L3.86 6.19L6.19 3.86L8.03 5.52L10.23 4.61L10.35 2.14L13.65 2.14L13.77 4.61L15.97 5.52L17.81 3.86L20.14 6.19L18.48 8.03Z'/%3E%3Ccircle cx='12' cy='12' r='3.2'/%3E%3C/svg%3E");
 }
-#bb-rail-btn.bb-on::after { left: 13px; width: 6px; }
 /* the settings rail starts collapsed so the workspace gets the width */
 html.bb-rail-hidden #bb-rail { display: none !important; }
 /* header */

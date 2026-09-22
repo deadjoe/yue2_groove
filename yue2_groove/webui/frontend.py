@@ -70,17 +70,11 @@ THEME_TOGGLE_JS = """() => {
 }"""
 
 RAIL_TOGGLE_JS = """() => {
+  // the gear; view.js owns it (it also opens STUDIO from SONG)
+  if (window.__bbToggleRail) { window.__bbToggleRail(); return ''; }
   const r = document.documentElement;
   const hidden = r.classList.toggle('bb-rail-hidden');
   try { localStorage.setItem('bb-rail', hidden ? 'off' : 'on'); } catch (e) {}
-  const wrap = document.getElementById('bb-rail-btn');
-  const btn = wrap && (wrap.tagName === 'BUTTON' ? wrap : wrap.querySelector('button'));
-  if (btn) {
-    btn.classList.toggle('bb-on', !hidden);
-    const label = hidden ? 'Show the settings rail' : 'Hide the settings rail';
-    btn.title = label;
-    btn.setAttribute('aria-label', label);
-  }
   return '';
 }"""
 
@@ -249,7 +243,7 @@ HEAD_HTML = (
       } else {
         var hidden = document.documentElement.classList.contains('bb-rail-hidden');
         railBtn.classList.toggle('bb-on', !hidden);
-        var label = hidden ? 'Show the settings rail' : 'Hide the settings rail';
+        var label = hidden ? 'Show the settings' : 'Hide the settings';
         railBtn.title = label;
         railBtn.setAttribute('aria-label', label);
       }
