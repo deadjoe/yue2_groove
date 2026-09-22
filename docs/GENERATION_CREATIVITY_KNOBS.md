@@ -106,6 +106,24 @@ Empty CFG in the UI means “use the default,” not the number zero.
 Same style, lyrics, CFG, plan mode, and sampling + **different SEED** = another take.  
 It does not change what the knobs *mean*; it only changes which roll you get.
 
+The SEED box starts at **-1**, which means "a new seed every run"; the seed that was used
+is shown in STATUS and saved with the work, so type it back in (or use **TRY ANOTHER SEED**
+in SONG, which moves it by one) to repeat or vary that exact take. The number itself has no
+meaning — any two different seeds are two unrelated takes.
+
+---
+
+## Song length in one glance
+
+A song ends when its score ends, and the score is written from your lyrics — so length
+follows the lyrics. The semantic **max_tokens** (ADVANCED // SAMPLING) is only a ceiling:
+9 000 tokens = 6:00 by default, up to 18 000 = 12:00. Past 6:00 two things matter: the score
+needs a larger ABC budget too (the **Long song (~10 min)** preset sets both), and lyrics +
+score + song share the model's 24 576-token context — the app trims the ceiling at run time
+if they would not fit and says so in STATUS. PLAN MODE **off** leaves the whole context to the
+song. The model is unmeasured past 6 minutes; on the original engine a longer ceiling also
+costs memory (about 330 MB per extra minute at CFG 1.5).
+
 ---
 
 ## Leave alone until you need them

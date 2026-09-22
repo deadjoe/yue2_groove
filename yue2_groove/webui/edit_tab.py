@@ -183,12 +183,13 @@ def edit_generate(
         sem_max,
     )
     try:
+        seed = runtime.resolve_seed(seed)  # the request and the manifest carry the same seed
         request = edit_flow.build_edit_request(
             style,
             lyrics,
             abc,
             cot=cot,
-            seed=int(seed),
+            seed=seed,
             cfg_scale=cfg_scale,
             request_factory=adapter.song_request,
         )
@@ -234,7 +235,7 @@ def edit_generate(
             before_abc=baseline_abc or "",
             after_abc=abc,
             cot=cot,
-            seed=int(seed),
+            seed=seed,
             cfg_scale=float(cfg_scale) if cfg_scale else None,
             invariants=(check_state or {}).get("result"),
             voices=(check_state or {}).get("voices", "both"),

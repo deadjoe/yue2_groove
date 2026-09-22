@@ -21,6 +21,7 @@ import importlib.util
 import json
 import logging
 import os
+import secrets
 import threading
 import time
 from dataclasses import dataclass
@@ -71,6 +72,19 @@ def resolve_backend(mode: str, device: str, *, device_explicit: bool = False) ->
     return gguf_engine.auto_backend(device, gguf_engine.cuda_total_vram_gib())
 
 
+# The SEED fields: -1 (the GENERATE and COVER default) draws a fresh seed for every run — the
+# convention of most generation UIs — and the drawn seed is what the request carries, so the
+# run records it, STATUS shows it and TRY ANOTHER SEED / a retype repeat the take exactly.
+RANDOM_SEED = -1
+
+# Song length: upstream's default semantic budget is 9 000 tokens (6:00 at 25 tokens/s); the
+# model's real limit is its 24 576-token context, shared by the lyrics, the score and the
+# song, so the sliders reach 12:00 and `fit_semantic_budget` trims a budget that would not
+# fit at run time (upstream refuses one rather than shortening it).
+SEMANTIC_TOKENS_MAX = 18000  # 12:00
+ABC_TOKENS_MAX = 8192  # a 10-minute score is ~6 000 tokens (LINUX_CUDA §3.7: 600 / min)
+TOKENS_PER_SECOND = 25
+
 ABC_DEFAULTS = {
     "temperature": 0.7,
     "top_p": 0.9,
@@ -113,6 +127,46 @@ def resolve_vae(choice: str, custom: str) -> tuple[str, str]:
     if not (custom or "").strip():
         raise gr.Error("Custom VAE requires a path or Hugging Face ID")
     return custom.strip(), "custom"
+
+
+def random_seed() -> int:
+    return secrets.randbelow(2**31)
+
+
+def resolve_seed(value) -> int:
+    """The request seed for a SEED field: ``-1`` (or an empty field) draws one, anything else
+    is taken as typed.  Raises ValueError for text that is not a whole number."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return random_seed()
+    seed = int(float(value)) if isinstance(value, str) else int(value)
+    return random_seed() if seed < 0 else seed
+
+
+def fit_semantic_budget(pipe, request, abc_sampling, semantic_sampling):
+    """``(semantic_sampling, note)`` with ``max_tokens`` trimmed to what the model's context
+    leaves after the prompt (exact for an external score, the ABC budget's worst case for a
+    model-written one); *note* says so when it trimmed, else ``""``.  Upstream refuses a
+    prefix plus budget beyond the context instead of shortening it — after the ABC stage."""
+    tokenizer = getattr(pipe, "tokenizer", None)
+    if tokenizer is None:
+        return semantic_sampling, ""
+    prefix, capped = gguf_engine.semantic_budget(
+        request, tokenizer, abc_sampling, semantic_sampling, gguf_engine.CONTEXT
+    )
+    if capped >= semantic_sampling.max_tokens:
+        return semantic_sampling, ""
+    fields = {
+        name: getattr(semantic_sampling, name)
+        for name in adapter.sampling_fields(semantic_sampling)
+    }
+    fields["max_tokens"] = capped
+    fields["min_tokens"] = min(fields["min_tokens"], capped)
+    note = (
+        f"semantic max_tokens {semantic_sampling.max_tokens} → {capped} "
+        f"({capped / TOKENS_PER_SECOND / 60:.1f} min): the lyrics and the score budget "
+        f"({prefix} tokens at most) share the model's {gguf_engine.CONTEXT}-token context"
+    )
+    return adapter.sampling(**fields), note
 
 
 def sampling(temp, top_p, top_k, rep, window, min_tokens, max_tokens, label: str):
@@ -331,7 +385,7 @@ def get_pipe(settings: RuntimeSettings, progress=None):
     return _PIPE, "Model ready"
 
 
-def write_local_env(directory: Path, pipe, note: str = "") -> None:
+def write_local_env(directory: Path, pipe, note: str = "", *, budget_note: str = "") -> None:
     """Record what actually ran in this run directory (``local_env.json``).
 
     Upstream's ``config.json`` hardcodes ``"model_dtype": "bfloat16"``, so an
@@ -347,6 +401,7 @@ def write_local_env(directory: Path, pipe, note: str = "") -> None:
             "torch": torch.__version__,
             "yue2": adapter.yue2_version(),
             "note": note or None,
+            "semantic_budget_note": budget_note or None,
         }
         if isinstance(pipe, gguf_engine.GgufPipeline):
             payload.update(gguf_engine.local_env(pipe))
@@ -516,6 +571,11 @@ def run_generation(
     _write_pending(outdir, "running")
     log.info("run start: %s", outdir)
     counts = {"abc": 0, "semantic": 0}
+    semantic_sampling, budget_note = fit_semantic_budget(
+        pipe, request, abc_sampling, semantic_sampling
+    )
+    if budget_note:
+        log.info("run %s: %s", outdir.name, budget_note)
     abc_budget = abc_sampling.max_tokens if request.cot != "off" else 0
     sem_budget = semantic_sampling.max_tokens
 
@@ -558,7 +618,8 @@ def run_generation(
             (Path(outdir) / "edit_manifest.json").write_text(
                 json.dumps(extra_manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
             )
-        write_local_env(outdir, pipe, note)
+        write_local_env(outdir, pipe, note, budget_note=budget_note)
+        result["budget_note"] = budget_note  # for the status line; local_env.json keeps it
     except Exception as exc:
         _write_pending(
             outdir,
@@ -576,13 +637,15 @@ def run_generation(
 
 
 def generation_status(song, result, outdir, elapsed, request, note):
+    budget = result.get("budget_note") if isinstance(result, dict) else None
     return (
         f"Done: {result['audio_seconds']:.1f}s audio in {elapsed:.0f}s\n"
         f"truncated={result['truncated']}  seed={request.seed}  cfg={request.guidance}\n"
         f"NAR={song.timing['nar_seconds']:.0f}s  VAE={song.timing['vae_seconds']:.0f}s  "
         f"semantic={song.timing['semantic'].get('output_tps', 0):.1f} tok/s  "
         f"ABC={song.timing['abc'].get('output_tokens', 0)} tokens\n"
-        f"run directory: {outdir}\n{note}"
+        + (f"{budget}\n" if budget else "")
+        + f"run directory: {outdir}\n{note}"
     )
 
 

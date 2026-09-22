@@ -382,7 +382,7 @@ download). Measurements, the selection rule, environment variables and limits:
 
 ## Tips: creativity knobs and instrumental / vocals
 
-- **[Generation creativity knobs](docs/GENERATION_CREATIVITY_KNOBS.md)** — producer guide: three ideas (CFG / temperature+seed / plan mode), recipes, then a short glossary.
+- **[Generation creativity knobs](docs/GENERATION_CREATIVITY_KNOBS.md)** — producer guide: three ideas (CFG / temperature+seed / plan mode), recipes, then a short glossary. SEED `-1` (the default) draws a new seed per run and records it; song length follows the lyrics, with a ceiling of 6:00 by default and up to 12:00 (the *Long song* preset; the app trims a ceiling that would not fit the model's context and says so).
 - **[Exclude / instrumental research](docs/EXCLUDE_INSTRUMENTAL_RESEARCH.md)** — YuE2 has no Suno-style exclude API; upstream issues, community workarounds (empty lyric sections, ABC `V: Vocal` rests), and what groove can/cannot do.
 
 ## Keeping up with upstream

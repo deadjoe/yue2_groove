@@ -369,3 +369,32 @@ def test_knob_arc_geometry_keeps_the_bottom_gap() -> None:
     assert r["start"][0] < cx and r["start"][1] > cy
     assert r["end"][0] > cx and r["end"][1] > cy
     assert r["center"][1] < cy
+
+
+def test_song_length_reaches_twelve_minutes_and_the_long_preset_sets_both_budgets(demo) -> None:
+    """Upstream's 9 000 default (6:00) stays the default; the sliders reach the model's
+    context, the preset that goes past 6:00 also widens the ABC budget (a long score), and
+    every preset value sits on its slider's grid."""
+    by_id = _by_id(demo)
+    assert by_id["bb-sem-max"].maximum == webui.runtime.SEMANTIC_TOKENS_MAX == 18000
+    assert by_id["bb-abc-max"].maximum == webui.runtime.ABC_TOKENS_MAX == 8192
+    assert by_id["bb-sem-max"].value == 9000 and by_id["bb-abc-max"].value == 4096
+    preset = next(
+        c for c in demo.blocks.values() if isinstance(c, gr.Dropdown) and c.label == "BUDGET PRESET"
+    )
+    assert "Long song (~10 min)" in [c[1] if isinstance(c, tuple) else c for c in preset.choices]
+    _a_min, a_max, _s_min, s_max = (
+        u["value"] for u in webui.generate_tab.apply_preset("Long song (~10 min)")
+    )
+    assert (a_max, s_max) == (6144, 15000) and s_max / 25 / 60 == 10.0
+    for value, slider in ((a_max, by_id["bb-abc-max"]), (s_max, by_id["bb-sem-max"])):
+        assert slider.minimum <= value <= slider.maximum
+        assert (value - slider.minimum) % slider.step == 0
+    assert "Long song" in webui.generate_tab.duration_text(15000)
+    assert "Long song" not in webui.generate_tab.duration_text(9000)
+
+
+def test_generate_and_cover_seeds_default_to_random_and_edit_keeps_a_fixed_one(demo) -> None:
+    seeds = [c for c in demo.blocks.values() if isinstance(c, gr.Number) and c.label == "SEED"]
+    assert sorted(c.value for c in seeds) == [-1, -1, 831001]
+    assert all("-1" in (c.info or "") for c in seeds)

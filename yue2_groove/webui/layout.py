@@ -162,7 +162,9 @@ def _generate_tab() -> SimpleNamespace:
             label="PLAN MODE",
             scale=2,
         )
-        seed = gr.Number(value=831001, label="SEED", precision=0, scale=1)
+        seed = gr.Number(
+            value=runtime.RANDOM_SEED, label="SEED", precision=0, scale=1, info="-1 = random"
+        )
         cfg = gr.Number(value=0, label="CFG SCALE", scale=1)
         out_id = gr.Textbox(value="", label="OUTPUT ID", max_lines=1, scale=1)
         request_reset_btn = gr.Button("RESET", size="sm", scale=1, elem_id="bb-reset-request")
@@ -187,6 +189,7 @@ def _generate_tab() -> SimpleNamespace:
                 preset = gr.Dropdown(
                     choices=[
                         "Protocol defaults (full)",
+                        "Long song (~10 min)",
                         "Preview (~1–1.5 min song)",
                         "Quick test (~20 s)",
                     ],
@@ -257,7 +260,7 @@ def _generate_tab() -> SimpleNamespace:
                     )
                     abc_min = gr.Slider(
                         0,
-                        4096,
+                        runtime.ABC_TOKENS_MAX,
                         value=runtime.ABC_DEFAULTS["min_tokens"],
                         step=8,
                         label="min_tokens",
@@ -266,7 +269,7 @@ def _generate_tab() -> SimpleNamespace:
                     )
                     abc_max = gr.Slider(
                         64,
-                        4096,
+                        runtime.ABC_TOKENS_MAX,
                         value=runtime.ABC_DEFAULTS["max_tokens"],
                         step=32,
                         label="max_tokens",
@@ -322,7 +325,7 @@ def _generate_tab() -> SimpleNamespace:
                     )
                     sem_min = gr.Slider(
                         0,
-                        9000,
+                        runtime.SEMANTIC_TOKENS_MAX,
                         value=runtime.SEM_DEFAULTS["min_tokens"],
                         step=8,
                         label="min_tokens",
@@ -331,16 +334,18 @@ def _generate_tab() -> SimpleNamespace:
                     )
                     sem_max = gr.Slider(
                         64,
-                        9000,
+                        runtime.SEMANTIC_TOKENS_MAX,
                         value=runtime.SEM_DEFAULTS["max_tokens"],
-                        step=64,
+                        step=8,  # 9 000 (the default) and the presets sit on the 8-grid from 64
                         label="max_tokens",
                         elem_id="bb-sem-max",
                         elem_classes=["bb-sampling-slider"],
                     )
             gr.Markdown(
                 "ODE method and context are fixed by the protocol "
-                "(midpoint / 24576), same as upstream.",
+                "(midpoint / 24576), same as upstream. The context is shared by the lyrics, "
+                "the score and the song: a semantic budget that would not fit is trimmed at "
+                "run time (STATUS says so); above the 9 000 default the model is unmeasured.",
                 elem_classes=["bb-note"],
             )
     audio_out = gr.Audio(label="RESULT", type="filepath")
@@ -482,7 +487,9 @@ def _cover_tab() -> SimpleNamespace:
         cover_style = gr.Textbox(label="STYLE", lines=2, placeholder=runtime.EXAMPLE_STYLE)
         cover_lyrics = gr.Textbox(label="LYRICS", lines=5, placeholder=runtime.EXAMPLE_LYRICS)
         with gr.Row():
-            cover_seed = gr.Number(value=831001, label="SEED", precision=0, scale=1)
+            cover_seed = gr.Number(
+                value=runtime.RANDOM_SEED, label="SEED", precision=0, scale=1, info="-1 = random"
+            )
             cover_cfg = gr.Number(value=0, label="CFG SCALE", scale=1)
             cover_generate_btn = gr.Button(
                 "GENERATE COVER",
@@ -566,7 +573,9 @@ def _edit_tab() -> SimpleNamespace:
             label="PLAN MODE",
             scale=2,
         )
-        edit_seed = gr.Number(value=831001, label="SEED", precision=0, scale=1)
+        edit_seed = gr.Number(
+            value=831001, label="SEED", precision=0, scale=1, info="the baseline's; -1 = random"
+        )
         edit_cfg = gr.Number(value=0, label="CFG SCALE", scale=1)
     with gr.Accordion("INVARIANT CHECK", open=True):
         edit_contract = gr.Radio(
@@ -830,7 +839,7 @@ def _batch_tab() -> SimpleNamespace:
     """07 BATCH."""
     gr.Markdown(
         "One JSON request per line (same as `yue2 batch`): "
-        "`id` (required, unique), `style`/`tags`, `lyrics`, `cot`, `seed`, "
+        "`id` (required, unique), `style`/`tags`, `lyrics`, `cot`, `seed` (-1 = random), "
         "`cfg_scale`, `abc`, `abc_path` (relative to the uploaded file), optional "
         "`abc_sampling` / `semantic_sampling` overrides. Fields you omit use the "
         "sampling settings above. One request runs at a time.",
@@ -1156,7 +1165,7 @@ def build_ui(defaults: dict) -> gr.Blocks:
         # View layer only: knobs ↔ sliders; Gradio slider values / event graph unchanged.
         gen.sampling_view_btn.click(fn=None, js=frontend.SAMPLING_VIEW_TOGGLE_JS)
         gen.request_reset_btn.click(
-            lambda: ("", "", "full", 831001, 0, ""),
+            lambda: ("", "", "full", runtime.RANDOM_SEED, 0, ""),
             outputs=[gen.style, gen.lyrics, gen.cot, gen.seed, gen.cfg, gen.out_id],
         )
         rail.runtime_reset_btn.click(

@@ -193,8 +193,8 @@
   }
 
   /* The number field carries the component value (Gradio mirrors it into the
-     range, which quantises to its own step — e.g. sem_max 9000 sits at 8960
-     there). Writing the range as well would let its sanitised value win and
+     range, which quantises to its own step — e.g. the Preview preset's ABC
+     budget 700 sits at 704 there). Writing the range as well would let its sanitised value win and
      silently change the parameter, so only the number field is written. */
   function writeValue(inputs, v) {
     var s = String(v);

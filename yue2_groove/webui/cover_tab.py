@@ -338,7 +338,7 @@ def cover_generate(
             lyrics,
             abc_text,
             task=task,
-            seed=int(seed),
+            seed=runtime.resolve_seed(seed),
             cfg_scale=cfg_scale,
             keep_voice=keep_voice,
             request_factory=adapter.song_request,

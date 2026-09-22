@@ -207,7 +207,9 @@ def semantic_budget(
     request, tokenizer, abc_sampling, semantic_sampling, cap: int
 ) -> tuple[int, int]:
     """``(prefix_tokens, max_tokens)`` that fit *cap*: yue2.cpp refuses a prefix plus semantic
-    budget that its KV cache cannot hold, so the budget is derived from the cap up front.
+    budget that its KV cache cannot hold (and upstream one beyond the model's context), so
+    the budget is derived from the cap up front — the app applies it with ``CONTEXT`` for
+    both engines (``runtime.fit_semantic_budget``) and this engine again with its ``max_seq``.
 
     With an external score the prefix is exact; with a model-written one it is the worst
     case (the ABC stage's own ``max_tokens``), so a full-length request stays valid whatever
@@ -224,8 +226,9 @@ def semantic_budget(
     budget = cap - prefix_tokens - 1  # MUSIC_END
     if budget < 250:  # ten seconds of audio: below that the request is not worth running
         raise RuntimeError(
-            f"the prompt ({prefix_tokens} tokens) leaves no room for a song under max_seq={cap}: "
-            "shorten the lyrics or the ABC budget, or raise YUE2_GROOVE_GGUF_MAX_SEQ"
+            f"the prompt ({prefix_tokens} tokens) leaves no room for a song in a {cap}-token "
+            "context: shorten the lyrics or the ABC budget"
+            + (", or raise YUE2_GROOVE_GGUF_MAX_SEQ" if cap < CONTEXT else "")
         )
     return prefix_tokens, min(int(semantic_sampling.max_tokens), budget)
 

@@ -9,7 +9,7 @@ measured ([LINUX_CUDA.md](LINUX_CUDA.md)); Windows numbers are estimates (§4).
 | GPU | Works? | What you get | What to set |
 |---|---|---|---|
 | **24 GB+** (RTX 3090, 4090, 5090, …) | Yes | Everything | Nothing |
-| **16 GB** (RTX 4060 Ti 16G, 4070 Ti Super, 4080, 5060 Ti 16G, 5070 Ti, 5080, …) | Yes | Everything, including the longest song the app can make (6 min) at any CFG | Nothing |
+| **16 GB** (RTX 4060 Ti 16G, 4070 Ti Super, 4080, 5060 Ti 16G, 5070 Ti, 5080, …) | Yes | Everything at the default length ceiling (6 min) at any CFG; longer ceilings (§2) add ~330 MB per minute at CFG 1.5 | Nothing |
 | **12 GB** (RTX 3060 12G, 4070, 4070 Super, 4070 Ti, 5070, …) — Linux or Docker | With limits | Songs of ~5 min at CFG 1.0 · songs ≤ 3 min at CFG 1.5 · longer at CFG 1.5: §3 | MEMORY BUDGET **12**, CFG SCALE **empty** |
 | **12 GB** — Windows | Borderline | Songs ≤ 3 min at CFG 1.0 to start · CFG 1.5: FP8 or Docker (§3) | MEMORY BUDGET **12**, CFG SCALE **empty**, max_tokens **4 500** |
 | **12 GB**, any OS, with the [GGUF engine](GGUF_ENGINE.md) installed | Yes | Full-length songs at any CFG (measured peak 8.2 GB on a 16 GB card), faster AR stage; a different take for the same seed | Nothing — BACKEND=auto picks it |
@@ -24,9 +24,13 @@ measured ([LINUX_CUDA.md](LINUX_CUDA.md)); Windows numbers are estimates (§4).
 4. Song length → **ADVANCED // SAMPLING** → semantic phase → **max_tokens**; the *Estimated audio
    length* line updates. Shorten the lyrics to match, or the song is cut off at the limit.
 
-| max_tokens | 2 200 (*Preview* preset) | 4 500 | 6 000 | 7 200 | 9 000 (default) |
-|---|---|---|---|---|---|
-| Song length | ≈ 1:30 | 3:00 | 4:00 | 4:48 | 6:00 |
+| max_tokens | 2 200 (*Preview* preset) | 4 500 | 6 000 | 7 200 | 9 000 (default) | 15 000 (*Long song* preset) |
+|---|---|---|---|---|---|---|
+| Song length | ≈ 1:30 | 3:00 | 4:00 | 4:48 | 6:00 | 10:00 |
+
+   Above 9 000 the original engine reserves more memory (≈ 330 MB per extra minute at CFG 1.5,
+   half that at CFG 1.0): on a 12 GB card stay at the default; the GGUF engine reserves the
+   same either way. The song still ends when the score ends, so long songs need long lyrics.
 
 ## 3. 12 GB: what you want → what to set
 

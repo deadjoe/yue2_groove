@@ -141,7 +141,7 @@ Applying the app's own budget arithmetic to card classes:
 | Card class | VRAM visible to PyTorch¹ | App cap (total − 2 GiB) | BF16, CFG 1.5 (default) | BF16 with CFG 1.0 or a length cap (§3.6) | FP8 |
 |---|---|---|---|---|---|
 | 24 GB (3090 / 4090) | ~24 GiB | ~22 GiB | ✅ comfortable | ✅ | ✅ |
-| **16 GB (4060 Ti 16G, 5070 Ti, …)** | ~16 GiB | **~14 GiB** | ✅ ~3 GiB headroom, including the longest song the app can produce (§3.7) | ✅ | ✅ |
+| **16 GB (4060 Ti 16G, 5070 Ti, …)** | ~16 GiB | **~14 GiB** | ✅ ~3 GiB headroom, including the longest song at the default ceiling (§3.7) | ✅ | ✅ |
 | 12 GB (3060 12G, 4070, …) | ~12 GiB | **~10 GiB** | ❌ fails at ~10.25 GiB | ✅ measured: CFG 1.0 → 9.6 GiB; CFG 1.5 with a semantic cap → 10.3 GiB (tight) or a ≤ 3-minute song → 9.5 GiB | ✅ ~4× slower |
 | 8 GB | ~8 GiB | ~6 GiB | ❌ | ❌ | ❌ |
 
@@ -169,9 +169,9 @@ The BF16 failure at budget 12 (§3.3) is the semantic stage's KV cache: `StaticK
 
 So a 12 GB-class card runs the unquantized BF16 model when the song is short or the CFG is 1.0; at the default CFG 1.5 a full-length song needs a length cap and lands within ~100 MiB of the limit. The cap is "lossless" in the sense of full precision — but it is **not** the same take as the uncapped run, for the same reason every other perturbation in [CROSS_PLATFORM.md](CROSS_PLATFORM.md) is not: the sampled tokens diverge early and stay diverged. FP8 (§4) remains the fallback for full-length CFG 1.5 songs on 12 GB.
 
-### 3.7 Session 2: the longest song the app can produce, at budget 16
+### 3.7 Session 2: the longest song at the default ceiling, at budget 16
 
-A request with 207 lines of lyrics drove every stage to its ceiling: the score reached 3 969 tokens (cap 4 096), the semantic stage hit its **9 000-token cap** (6:00 of audio, `truncated.semantic = true`), the semantic prefix was 5 456 tokens and the NAR ran over ~14 500 tokens of context. Under the 16 GB budget (14 GiB cap) it completed at **11 568 MiB** peak (E8, 447 s). Upstream's model card quotes 14.08 GiB for its own maximum-context test; on this stack the app's maximum stays ~2.4 GiB below the 16 GB-class cap.
+A request with 207 lines of lyrics drove every stage to its ceiling: the score reached 3 969 tokens (cap 4 096), the semantic stage hit its **9 000-token cap** (6:00 of audio, `truncated.semantic = true`; the ceiling the sliders allowed at the time — they now reach 18 000, at ~330 MB more per extra minute at CFG 1.5), the semantic prefix was 5 456 tokens and the NAR ran over ~14 500 tokens of context. Under the 16 GB budget (14 GiB cap) it completed at **11 568 MiB** peak (E8, 447 s). Upstream's model card quotes 14.08 GiB for its own maximum-context test; on this stack the app's maximum stays ~2.4 GiB below the 16 GB-class cap.
 
 ### 3.8 Session 2: AR offload and the eager decoder
 
@@ -299,7 +299,7 @@ E4   budget 12, CFG 1.0                                                         
 E5   budget 12, CFG 1.5, a 2-minute solo-piano song, cap 5 000                    §3.6
 E6   budget 24, AR offload on                                                     §3.8
 E7   budget 24, BACKEND = torch-eager                                             §3.8
-E8   budget 16, the longest song the app can produce                              §3.7
+E8   budget 16, the longest song at the 9 000-token default ceiling                §3.7
 E9   Cover: SheetSage2 transcription on CUDA                                      §7
 E10  five performances of the reference score, seeds 831001–831005               CROSS_PLATFORM §9.1
 ```

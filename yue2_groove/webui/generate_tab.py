@@ -74,12 +74,18 @@ def reset_sampling_values():
 
 
 def duration_text(tokens):
-    seconds = max(0, int(tokens)) / 25.0
+    seconds = max(0, int(tokens)) / runtime.TOKENS_PER_SECOND
     minutes = seconds / 60.0
-    return (
-        f"**Estimated audio length:** ≈ {seconds:.0f} s "
-        f"({minutes:.1f} min) at {int(tokens)} semantic tokens"
+    text = (
+        f"**Estimated audio length:** up to ≈ {seconds:.0f} s "
+        f"({minutes:.1f} min) at {int(tokens)} semantic tokens — the song ends when the score ends"
     )
+    if int(tokens) > runtime.SEM_DEFAULTS["max_tokens"]:
+        text += (
+            "; a long song needs long lyrics and a larger ABC budget (the *Long song* preset "
+            "sets both), and lyrics + score + song must fit the model's 24 576-token context"
+        )
+    return text
 
 
 def generate(
@@ -152,7 +158,7 @@ def generate(
         kwargs["abc"] = textwrap.dedent(abc_text).strip()
     try:
         request = adapter.song_request(
-            style=style, lyrics=lyrics, cot=cot, seed=int(seed), **kwargs
+            style=style, lyrics=lyrics, cot=cot, seed=runtime.resolve_seed(seed), **kwargs
         )
     except (ValueError, TypeError) as exc:
         raise gr.Error(f"Invalid request: {exc}") from exc
@@ -272,7 +278,8 @@ def generate_all_modes(
     style, lyrics = runtime.request_texts(style, lyrics)
     base_id = (out_id or "").strip() or runtime.slug(style)
     try:
-        adapter.song_request(style=style, lyrics=lyrics, cot="full", seed=int(seed), id=base_id)
+        seed = runtime.resolve_seed(seed)  # one seed for all three modes
+        adapter.song_request(style=style, lyrics=lyrics, cot="full", seed=seed, id=base_id)
     except (ValueError, TypeError) as exc:
         raise gr.Error(f"Invalid request: {exc}") from exc
     abc_sampling, sem_sampling = runtime.sampling_pair(
@@ -341,7 +348,7 @@ def generate_all_modes(
                 "style": style,
                 "lyrics": lyrics,
                 "cot": mode,
-                "seed": int(seed),
+                "seed": seed,
                 "id": f"{base_id}_{mode}",
             }
             if cfg_scale:
@@ -408,7 +415,7 @@ def generate_all_modes(
             "request": {
                 "style": style,
                 "lyrics": lyrics,
-                "seed": int(seed),
+                "seed": seed,
                 "cfg_scale": float(cfg_scale) if cfg_scale else None,
                 "id": base_id,
             },
@@ -495,7 +502,7 @@ def plan_only(
         kwargs["cfg_scale"] = float(cfg_scale)
     try:
         request = adapter.song_request(
-            style=style, lyrics=lyrics, cot=cot, seed=int(seed), **kwargs
+            style=style, lyrics=lyrics, cot=cot, seed=runtime.resolve_seed(seed), **kwargs
         )
     except (ValueError, TypeError) as exc:
         raise gr.Error(f"Invalid request: {exc}") from exc
@@ -777,6 +784,8 @@ def batch_generate(
                 break
             row_start = time.perf_counter()
             kwargs = {k: v for k, v in row.items() if k in allowed and k != "id"}
+            if isinstance(kwargs.get("seed"), int) and kwargs["seed"] < 0:
+                kwargs["seed"] = runtime.random_seed()  # -1 = draw one per row
             if "abc_path" in row:
                 kwargs["abc"] = (base / row["abc_path"]).read_text(encoding="utf-8")
             try:
@@ -860,6 +869,9 @@ def batch_generate(
 def apply_preset(name):
     presets = {
         "Protocol defaults (full)": (32, 4096, 200, 9000),
+        # 15 000 = 10:00; a 10-minute score is ~6 000 ABC tokens, and 6 144 + typical lyrics
+        # still leave that much of the context (runtime.fit_semantic_budget)
+        "Long song (~10 min)": (32, 6144, 200, 15000),
         "Preview (~1–1.5 min song)": (32, 700, 64, 2200),
         "Quick test (~20 s)": (16, 256, 32, 512),
     }

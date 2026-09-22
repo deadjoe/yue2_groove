@@ -107,3 +107,65 @@ def test_a_closed_batch_generator_releases_the_job_slot(monkeypatch) -> None:
     gen.close()
     assert runtime.try_start_job(), "the slot stayed locked after the generator was closed"
     runtime.end_job()
+
+
+def test_resolve_seed_draws_for_minus_one_and_keeps_typed_seeds() -> None:
+    """-1 (the GENERATE / COVER default) means a fresh seed per run; a typed seed is kept as
+    typed, so a take repeats; text that is not a number is a ValueError for the caller."""
+    assert runtime.resolve_seed(831001) == 831001
+    assert runtime.resolve_seed(7.0) == 7 and runtime.resolve_seed("5") == 5
+    drawn = {runtime.resolve_seed(-1) for _ in range(8)}
+    assert len(drawn) > 1 and all(0 <= seed < 2**31 for seed in drawn)
+    assert 0 <= runtime.resolve_seed(None) < 2**31 and 0 <= runtime.resolve_seed(" ") < 2**31
+    with pytest.raises(ValueError):
+        runtime.resolve_seed("random")
+
+
+def test_fit_semantic_budget_trims_to_the_models_context() -> None:
+    """Lyrics, score and song share the 24 576-token context; upstream refuses a budget that
+    does not fit (after the ABC stage), so the app trims it first and says so."""
+    adapter = pytest.importorskip("yue2_groove.adapter")
+    pytest.importorskip("yue2")
+
+    class Tokenizer:  # a thousand tokens of style + lyrics
+        def encode(self, text):
+            return [1] * (1000 if len(text) > 40 else 5)
+
+    class Pipe:
+        tokenizer = Tokenizer()
+
+    lyrics = "[Verse]\n" + "la la la\n" * 40
+    request = adapter.song_request(style="pop", lyrics=lyrics, cot="full", seed=1)
+    abc = adapter.sampling(max_tokens=6144, min_tokens=32)
+    long = adapter.sampling(max_tokens=18000, min_tokens=200)
+    fitted, note = runtime.fit_semantic_budget(Pipe(), request, abc, long)
+    prefix = (
+        1 + 1000 + 1 + 6144 + 2
+    )  # EOD + text + ABC_START, the score budget, ABC_END + MUSIC_START
+    assert fitted.max_tokens == 24576 - prefix - 1 and fitted.min_tokens == 200
+    assert "18000 → " in note and "24576-token context" in note and str(prefix) in note
+    # the default budget fits: untouched, no note
+    default = adapter.sampling(max_tokens=9000, min_tokens=200)
+    assert runtime.fit_semantic_budget(Pipe(), request, abc, default) == (default, "")
+    # without a score (cot=off) the same 18 000 fits
+    off = adapter.song_request(style="pop", lyrics=lyrics, cot="off", seed=1)
+    assert runtime.fit_semantic_budget(Pipe(), off, abc, long) == (long, "")
+    # an engine stub without a tokenizer: nothing to measure, nothing changed
+    assert runtime.fit_semantic_budget(object(), request, abc, long) == (long, "")
+
+
+def test_generation_status_reports_a_trimmed_budget() -> None:
+    from types import SimpleNamespace
+
+    song = SimpleNamespace(timing={"nar_seconds": 1, "vae_seconds": 1, "semantic": {}, "abc": {}})
+    request = SimpleNamespace(seed=5, guidance=1.0)
+
+    result = {
+        "audio_seconds": 10.0,
+        "truncated": False,
+        "budget_note": "semantic max_tokens 18000 → 17000",
+    }
+    status = runtime.generation_status(song, result, "/runs/x", 3.0, request, "Loaded")
+    assert "seed=5" in status and "semantic max_tokens 18000 → 17000\nrun directory" in status
+    result.pop("budget_note")
+    assert "max_tokens" not in runtime.generation_status(song, result, "/runs/x", 3.0, request, "L")
