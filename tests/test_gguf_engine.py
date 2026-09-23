@@ -99,6 +99,16 @@ def test_request_json_mirrors_the_song_request():
     assert payload["abc_sampling"]["max_tokens"] == 4096
     assert payload["semantic_sampling"]["max_tokens"] == 9000
     assert "semantic_tokens" not in payload
+    # yue2.cpp caps the budget at duration x 25 frames and defaults duration to 360 s (9 000);
+    # the request carries a duration that never cuts the budget below what was asked for
+    for budget in (9000, 9001, 15000, 18000):
+        long = gguf_engine.build_request(
+            request,
+            abc_sampling=sampling(),
+            semantic_sampling=sampling(max_tokens=budget),
+            steps=32,
+        )
+        assert int(long["duration"] * gguf_engine.FRAME_RATE) >= budget
 
     default = adapter.song_request(style="pop", lyrics="la", cot="melody", abc="X:1\nK:C\n")
     payload = gguf_engine.build_request(

@@ -68,6 +68,7 @@ DEFAULT_VRAM_THRESHOLD_GIB = 16.0
 CONTEXT = 24576
 CODEC_OFFSET = 151853
 SAMPLE_RATE = 48000
+FRAME_RATE = 25  # semantic tokens per second of audio
 
 BINARIES = ("yue-synth", "yue-plan", "neural-codec", "quantize")
 
@@ -631,7 +632,11 @@ def build_request(request, *, abc_sampling, semantic_sampling, steps: int, seman
 
     Field for field the same protocol: ``cot`` / ``abc`` / ``cfg_scale`` (``-1`` = protocol
     default, exactly like ``cfg_scale=None`` upstream), both seeds from the one request seed
-    (upstream runs both stages from it), ``duration`` left at the semantic cap.
+    (upstream runs both stages from it).
+
+    ``duration`` is set just past the semantic budget: yue2.cpp caps the semantic stage at
+    ``duration`` x 25 frames and defaults it to 360 s, which cut every song at 9 000 tokens
+    (6:00) whatever the budget.  The budget is the one length limit, as upstream.
     """
     payload = {
         "style": request.style,
@@ -645,6 +650,7 @@ def build_request(request, *, abc_sampling, semantic_sampling, steps: int, seman
         "output_format": "wav32",
         "abc_sampling": _sampling_dict(abc_sampling),
         "semantic_sampling": _sampling_dict(semantic_sampling),
+        "duration": (int(semantic_sampling.max_tokens) + 1) / FRAME_RATE,
     }
     if semantic_tokens is not None:
         payload["semantic_tokens"] = ",".join(str(int(t)) for t in semantic_tokens)
