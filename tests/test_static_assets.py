@@ -27,7 +27,8 @@ VENDORED = {"abcjs-basic-min.js"}
 
 def _referenced_files() -> list[str]:
     return re.findall(
-        r'<script src="/gradio_api/file=[^"]*/static/([^"?]+)\?v=[0-9a-f]{12}"', webui.frontend.head_html("auto")
+        r'<script src="/gradio_api/file=[^"]*/static/([^"?]+)\?v=[0-9a-f]{12}"',
+        webui.frontend.head_html("auto"),
     )
 
 
