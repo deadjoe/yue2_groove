@@ -9,6 +9,7 @@ busy banner).
 
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 
@@ -88,8 +89,16 @@ SAMPLING_KNOBS_FILE = config.STATIC_DIR / "sampling-knobs.js"
 
 
 def _static_script(name: str) -> str:
-    """A <script src> for a bundled file (the same route abcjs is served from)."""
-    return f'<script src="/gradio_api/file={config.STATIC_DIR / name}"></script>'
+    """A <script src> for a bundled file (the same route abcjs is served from).
+
+    The route sends no Cache-Control, so a browser may keep a file it has for
+    hours on heuristic freshness (a tenth of its age since Last-Modified); an
+    update that changes the file would then run the old script against new
+    markup.  The content hash in the query makes every change a new URL.
+    """
+    path = config.STATIC_DIR / name
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+    return f'<script src="/gradio_api/file={path}?v={digest}"></script>'
 
 
 TIPS = {

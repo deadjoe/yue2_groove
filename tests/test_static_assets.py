@@ -27,7 +27,7 @@ VENDORED = {"abcjs-basic-min.js"}
 
 def _referenced_files() -> list[str]:
     return re.findall(
-        r'<script src="/gradio_api/file=[^"]*/static/([^"]+)"', webui.frontend.head_html("auto")
+        r'<script src="/gradio_api/file=[^"]*/static/([^"?]+)\?v=[0-9a-f]{12}"', webui.frontend.head_html("auto")
     )
 
 
@@ -99,3 +99,12 @@ def test_stylesheets_are_files_and_joined_in_order() -> None:
     assert (
         css.index(":root {") < css.index(base) < css.index(lib)
     )  # palette, base, (bright scene), library
+
+
+def test_script_urls_change_with_the_file(monkeypatch, tmp_path):
+    # the file route sends no Cache-Control: a changed script must get a new URL
+    (tmp_path / "x.js").write_text("var a = 1;")
+    monkeypatch.setattr(config, "STATIC_DIR", tmp_path)
+    before = webui.frontend._static_script("x.js")
+    (tmp_path / "x.js").write_text("var a = 2;")
+    assert webui.frontend._static_script("x.js") != before
