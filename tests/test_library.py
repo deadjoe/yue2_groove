@@ -190,6 +190,7 @@ def test_details_and_html_render(tmp_path: Path) -> None:
     assert "nothing" in lib.render_empty_html("nothing")
     player = lib.player_html("/tmp/a b.flac")
     assert "data-bb-play" in player and "data-bb-back" in player and "data-bb-viz" in player
+    assert "data-bb-hue" in player
     assert "a%20b.flac" in player
 
 

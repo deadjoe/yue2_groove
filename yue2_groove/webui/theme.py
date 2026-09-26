@@ -38,6 +38,10 @@ DARK = {
     "primary_hover": "#FBF8F2",
     "primary_text": "#16140F",
     "danger": "#D08A8A",
+    # spectrum hues (LIBRARY player): phosphor green and its companions
+    "hue_green": "#4AF626",
+    "hue_red": "#FF5F56",
+    "hue_blue": "#5CC8FF",
 }
 
 BRIGHT = {
@@ -55,6 +59,9 @@ BRIGHT = {
     "primary_hover": "#2B3244",
     "primary_text": "#F1ECE2",
     "danger": "#B23B3B",
+    "hue_green": "#1F7A3A",
+    "hue_red": "#B23B3B",
+    "hue_blue": "#1F5F99",
 }
 
 
@@ -206,6 +213,9 @@ def _bb_vars(p):
         "--bb-primary-bg-hover": p["primary_hover"],
         "--bb-primary-fg": p["primary_text"],
         "--bb-danger": p["danger"],
+        "--bb-hue-green": p["hue_green"],
+        "--bb-hue-red": p["hue_red"],
+        "--bb-hue-blue": p["hue_blue"],
         "--bb-chip-bg": p["stroke"] if p is not BRIGHT else p["primary_fill"],
         "--bb-chip-fg": p["fg"] if p is not BRIGHT else p["primary_text"],
     }

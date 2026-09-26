@@ -78,3 +78,12 @@ def test_dark_scene_unchanged_by_the_bright_controls() -> None:
     assert webui.theme.DARK["primary_fill"] == "#F1ECE2"  # ivory on the cool ground
     assert values["button_primary_background_fill"] == "#F1ECE2"
     assert webui.theme._bb_vars(webui.theme.DARK)["--bb-chip-bg"] != "#11141C"
+
+
+def test_spectrum_hues_exist_in_both_scenes():
+    for palette in (webui.theme.DARK, webui.theme.BRIGHT):
+        values = webui.theme._bb_vars(palette)
+        for hue in ("green", "red", "blue"):
+            assert values[f"--bb-hue-{hue}"].startswith("#")
+    css = webui.theme.BEARBONE_CSS
+    assert ':root[data-bb-viz-hue="green"] { --bb-viz: var(--bb-hue-green); }' in css

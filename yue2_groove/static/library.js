@@ -26,8 +26,43 @@
     try { BB_AUDIO_CTX = new AC(); } catch (error) { BB_AUDIO_CTX = null; }
     return BB_AUDIO_CTX;
   }
+  // spectrum hue: '' follows the ink, the rest are the --bb-hue-* colours.
+  // It sits on <html> (never morphed) and is remembered per browser.
+  var BB_HUES = ['', 'green', 'red', 'blue'];
+  var BB_HUE_KEY = 'bb-viz-hue';
+  function applyHue(hue) {
+    var root = document.documentElement;
+    if (hue) root.setAttribute('data-bb-viz-hue', hue);
+    else root.removeAttribute('data-bb-viz-hue');
+  }
+  (function () {
+    var stored = '';
+    try { stored = localStorage.getItem(BB_HUE_KEY) || ''; } catch (error) {}
+    if (BB_HUES.indexOf(stored) > 0) applyHue(stored);
+  })();
+  function nextHue() {
+    var now = document.documentElement.getAttribute('data-bb-viz-hue') || '';
+    var hue = BB_HUES[(BB_HUES.indexOf(now) + 1) % BB_HUES.length];
+    applyHue(hue);
+    try {
+      if (hue) localStorage.setItem(BB_HUE_KEY, hue);
+      else localStorage.removeItem(BB_HUE_KEY);
+    } catch (error) {}
+    // repaint now: a paused player has no frame loop to pick the hue up
+    for (var i = 0; i < BB_AUDIOS.length; i++) {
+      var state = BB_AUDIOS[i].__bbState;
+      if (!state) continue;
+      state.ink = readInk();
+      drawViz(state);
+    }
+  }
   function readInk() {
-    return getComputedStyle(document.documentElement).getPropertyValue('--bb-ink').trim() || '#F1ECE2';
+    return getComputedStyle(document.documentElement).getPropertyValue('--bb-viz').trim() || '#F1ECE2';
+  }
+  // a coloured hue on the dark scene glows a little, like a phosphor screen
+  function glows() {
+    var root = document.documentElement;
+    return root.hasAttribute('data-bb-viz-hue') && !root.classList.contains('bb-bright');
   }
   function playerOf(node) {
     return node && node.closest ? node.closest('[data-bb-player]') : null;
@@ -60,7 +95,7 @@
     var step = 6, barW = 3;
     var bars = Math.max(1, Math.floor(w / step));
     var usable = Math.max(1, Math.floor(bins * 0.85));
-    ctx.globalAlpha = 0.9;
+    var glow = glows();
     for (var i = 0; i < bars; i++) {
       // log-ish bin mapping: give the low end more bars, like a real analyser
       var f0 = Math.floor(Math.pow(i / bars, 1.7) * usable);
@@ -71,6 +106,12 @@
       // gentle high-frequency tilt so the right half keeps moving too
       level = Math.min(1, level * (0.6 + 1.3 * Math.pow(i / bars, 0.7)));
       var bh = Math.max(1.5, level * (mid - 1) * 1.25);
+      if (glow) {
+        // a wider, faint bar under the real one: a cheap halo (no shadowBlur)
+        ctx.globalAlpha = 0.2;
+        ctx.fillRect(i * step - 1, mid - bh - 1, barW + 2, bh * 2 + 2);
+      }
+      ctx.globalAlpha = 0.9;
       ctx.fillRect(i * step, mid - bh, barW, bh * 2);
     }
     ctx.globalAlpha = 1;
@@ -193,6 +234,7 @@
   document.addEventListener('click', function (event) {
     var button = event.target && event.target.closest ? event.target.closest('[data-bb-player] button') : null;
     if (!button) return;
+    if (button.hasAttribute('data-bb-hue')) { nextHue(); return; }
     var player = playerOf(button);
     var audio = player ? player.querySelector('audio') : null;
     if (!audio) return;

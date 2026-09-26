@@ -299,6 +299,8 @@ def player_html(audio_path: str) -> str:
         ' aria-label="Forward 15 seconds" title="Forward 15 seconds">15</button>'
         '<button type="button" class="bb-pend" data-bb-end'
         ' aria-label="Jump to the end" title="Jump to the end"></button>'
+        '<button type="button" class="bb-phue" data-bb-hue'
+        ' aria-label="Spectrum color" title="Spectrum color"></button>'
         '<span class="bb-ptime" data-bb-time>0:00 / 0:00</span>'
         "</div>"
         '<div class="bb-pseek" data-bb-seek>'
