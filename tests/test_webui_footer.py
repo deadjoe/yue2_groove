@@ -19,8 +19,8 @@ def test_release_version_is_consistent() -> None:
     pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
     match = re.search(r'^version = "([^"]+)"', pyproject.read_text(encoding="utf-8"), re.MULTILINE)
     assert match is not None
-    assert match.group(1) == "1.0.6"
-    assert yue2_groove.__version__ == "1.0.6"
+    assert match.group(1) == "1.0.7"
+    assert yue2_groove.__version__ == "1.0.7"
 
 
 def test_footer_credits_the_repository(monkeypatch, tmp_path) -> None:
