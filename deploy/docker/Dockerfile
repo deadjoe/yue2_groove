@@ -48,7 +48,7 @@ RUN uv python install 3.11 \
  && uv venv .venv-sheetsage2 --python 3.11 \
  && uv pip install --python .venv-sheetsage2/bin/python huggingface-hub==0.36.0 hf_transfer \
  && uv pip install --python .venv-sheetsage2/bin/python torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu126 \
- && .venv-sheetsage2/bin/hf download m-a-p/SheetSage2 requirements.txt --local-dir /tmp/sheetsage2 \
+ && .venv-sheetsage2/bin/hf download m-a-p/SheetSage2 requirements.txt --revision 24154de28aa6ca3539ae9d87b13364cae2ba2ca2 --local-dir /tmp/sheetsage2 \
  && uv pip install --python .venv-sheetsage2/bin/python -r /tmp/sheetsage2/requirements.txt \
  && rm -rf /tmp/sheetsage2 \
  && .venv-sheetsage2/bin/python -c "import torch, transformers; print('sheetsage env ok', torch.__version__)"

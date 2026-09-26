@@ -305,7 +305,9 @@ Install it next to the YuE checkout (Linux/CUDA shown; see the model card for ot
 cd /path/to/YuE
 python3.11 -m venv .venv-sheetsage2
 .venv-sheetsage2/bin/python -m pip install huggingface-hub==0.36.0
-.venv-sheetsage2/bin/hf download m-a-p/SheetSage2 --local-dir models/SheetSage2
+# pinned: later revisions do not load from a local directory under transformers 4.45
+.venv-sheetsage2/bin/hf download m-a-p/SheetSage2 --revision 24154de28aa6ca3539ae9d87b13364cae2ba2ca2 \
+  --local-dir models/SheetSage2
 .venv-sheetsage2/bin/python -m pip install torch==2.8.0 torchaudio==2.8.0 \
   --index-url https://download.pytorch.org/whl/cu126
 .venv-sheetsage2/bin/python -m pip install -r models/SheetSage2/requirements.txt

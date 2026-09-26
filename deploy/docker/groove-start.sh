@@ -34,9 +34,11 @@ mkdir -p "$HF_HOME" "$YUE2_GROOVE_RUNS" "$YUE2_GROOVE_MODELS"
 progress weights started "YuE2-3B, YuE2-Vae, SheetSage2, MERT-v2-FullSong"
 env/bin/hf download m-a-p/YuE2-3B > /dev/null || fail weights "YuE2-3B download failed"
 env/bin/hf download m-a-p/YuE2-Vae > /dev/null || fail weights "YuE2-Vae download failed"
-if [[ ! -f "$YUE2_GROOVE_MODELS/SheetSage2/config.json" ]]; then
-  .venv-sheetsage2/bin/hf download m-a-p/SheetSage2 --local-dir "$YUE2_GROOVE_MODELS/SheetSage2" > /dev/null || fail weights "SheetSage2 download failed"
-fi
+# SheetSage2 is pinned: from e8b16e3e (2026-09-22) its remote code does not load from a local
+# directory under transformers 4.45. Run every start (a no-op when current), so a /data volume
+# that already holds a later revision is put back on the pin.
+.venv-sheetsage2/bin/hf download m-a-p/SheetSage2 --revision 24154de28aa6ca3539ae9d87b13364cae2ba2ca2 \
+  --local-dir "$YUE2_GROOVE_MODELS/SheetSage2" > /dev/null || fail weights "SheetSage2 download failed"
 .venv-sheetsage2/bin/python - <<'PY' || fail weights "MERT-v2-FullSong download failed"
 import json, os
 from huggingface_hub import snapshot_download
