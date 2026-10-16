@@ -266,7 +266,7 @@ upstream code:
 
 | Pin | Reason |
 |---|---|
-| `torch==2.14.0` (macOS only) | YuE2 pins `torch==2.10.0`, whose MPS single-query attention kernel reads out of bounds once the KV cache passes 1024 tokens ([pytorch/pytorch#174861](https://github.com/pytorch/pytorch/issues/174861)) — in bfloat16 the values turn to garbage and NaN well before a minute of audio. Fixed in torch 2.11. `scripts/mps_sdpa_check.py` reproduces the defect on 2.10 and passes on 2.11+. |
+| `torch==2.14.1` (macOS only) | YuE2 pins `torch==2.10.0`, whose MPS single-query attention kernel reads out of bounds once the KV cache passes 1024 tokens ([pytorch/pytorch#174861](https://github.com/pytorch/pytorch/issues/174861)) — in bfloat16 the values turn to garbage and NaN well before a minute of audio. Fixed in torch 2.11. `scripts/mps_sdpa_check.py` reproduces the defect on 2.10 and passes on 2.11+. |
 | `huggingface-hub==0.36.2` | Gradio asks for `huggingface-hub>=1.16`, YuE2 pins `0.36.2` (transformers 4.57.x needs it). Keeping upstream's pin is safe; Gradio works with it. |
 
 With plain `pip` there is no override mechanism; install in this order and accept the
@@ -277,7 +277,7 @@ python -m venv .venv && . .venv/bin/activate
 pip install ../YuE
 pip install -e .
 pip install "huggingface-hub==0.36.2"            # both platforms
-pip install "torch==2.14.0"                      # macOS only
+pip install "torch==2.14.1"                      # macOS only
 ```
 
 More on the Apple Silicon story, with measurements: [docs/MACOS_MPS.md](docs/MACOS_MPS.md).
@@ -286,6 +286,14 @@ The Linux + NVIDIA story, with measured VRAM, memory budget and FP8 numbers:
 Why the same seed produces a different song on macOS than on CUDA — five controlled runs,
 two experiments, the sampler-level cause, and a blind listening test on a fixed composition
 that finds no platform deficit: [docs/CROSS_PLATFORM.md](docs/CROSS_PLATFORM.md).
+
+Project-mode `uv run` / `uv sync` also carry these overrides in `pyproject.toml`,
+so they cannot silently restore upstream's broken macOS Torch version. For testing
+without dependency changes, use `.venv/bin/python -m pytest` or `uv run --no-sync`.
+`uv pip install` still uses the platform override file shown above. Resolving the
+app and YuE2 together with plain pip reports the upstream pin
+conflict rather than choosing old Torch. Installing upstream alone can still
+overwrite an existing environment: always use the platform override for that step.
 
 ## Cover from audio (SheetSage2)
 

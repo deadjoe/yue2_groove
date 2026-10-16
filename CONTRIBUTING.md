@@ -19,6 +19,19 @@ documented exceptions live in `[tool.ruff]` in `pyproject.toml` — add an ignor
 with the reason next to it.  With `node` on `PATH`, the test suite also syntax-checks
 every bundled and inline script (`tests/test_static_assets.py`).
 
+## Dependency safety
+
+Use the existing `.venv/bin/python` for tests. `uv run` and `uv sync` can change
+installed packages before running a command. The project-level uv overrides keep
+macOS on Torch 2.14.1 and Hugging Face Hub on 0.36.2, even when no override file is
+passed. The matching files in `overrides/` are still required for `uv pip install`.
+Keep these declarations together when changing the supported runtime. For a
+command that must not sync dependencies, use `uv run --no-sync`.
+
+Do not remove a generated lockfile and assume the environment was restored:
+compare installed versions after dependency operations. Never use a blanket
+upgrade to repair the macOS Torch pin. Linux/CUDA remains on upstream's 2.10.0.
+
 ## Module map
 
 | Module | Owns | Never |

@@ -15,7 +15,38 @@ dependency level. These notes record what was verified and how.
 > scale around the CUDA one, and the Mac rendering of a CUDA performance was indistinguishable
 > from the CUDA rendering (CROSS_PLATFORM.md §9.5).
 
-## Tested configuration
+## Current runtime (1.0.9)
+
+The macOS runtime is pinned to **Torch 2.14.1** in the package requirement,
+`overrides/macos.txt`, and the project-level uv overrides. Linux keeps upstream's
+Torch 2.10.0. Project-mode `uv run` and `uv sync` now retain the macOS pin even
+without a command-line override; `uv pip install` uses `overrides/macos.txt`.
+
+On 2026-10-16, the existing environment's Torch 2.10.0 reproduced the MPS SDPA
+failure at KV lengths 1024–2048. After upgrading to 2.14.1, the same diagnostic
+passed for BF16, FP16 and FP32, with zero repeat differences in the tested cases.
+The native `enable_gqa=True` probe remains unsupported; YuE2 already expands GQA
+heads explicitly on MPS, and that path passed.
+
+A clean temporary project resolved macOS Torch 2.14.1 and non-macOS Torch 2.10.0.
+Actual `uv run`, followed by `uv sync` and another `uv run`, retained 2.14.1.
+The existing application environment changed only Torch and the editable app
+metadata. Static checks and all 304 model-free tests passed. `uv pip check`
+reports one expected metadata mismatch: upstream still declares torch==2.10.0.
+The macOS override intentionally replaces that requirement; installing old Torch
+to silence this warning would restore the demonstrated correctness bug.
+
+Historical measurements below used 2.14.0 and have not been relabelled as 2.14.1.
+
+A local BF16/MPS model smoke test also completed planning, 1,280 semantic tokens,
+32 NAR steps and VAE decoding in 162.4 seconds. Audio and latents were finite;
+audio RMS was 0.1176. This deliberately bounded test reached its semantic token
+cap (the score was not truncated), exercising the old 1,024-token failure boundary.
+It validates execution and numerical health, not full-song quality or performance
+against a controlled baseline. Local artifacts are in
+`runs/torch-2.14.1-validation/` (not distributed with the release).
+
+## Historical tested configuration
 
 | | |
 |---|---|

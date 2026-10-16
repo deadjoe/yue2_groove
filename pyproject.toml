@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "yue2-groove"
-version = "1.0.8"
+version = "1.0.9"
 description = "YUE2 // GROOVE: an unofficial Gradio web UI for YuE2 song generation"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -27,7 +27,8 @@ dependencies = [
     "gradio>=6,<7",
     "numpy",
     "soundfile",
-    "torch",
+    "torch==2.14.1; sys_platform == 'darwin'",
+    "torch; sys_platform != 'darwin'",
 ]
 
 [project.optional-dependencies]
@@ -49,6 +50,15 @@ include = ["yue2_groove*"]
 
 [tool.setuptools.package-data]
 yue2_groove = ["static/*", "examples/*.abc", "vendor/*.py"]
+
+# Project-mode uv commands resolve all extras, including YuE2's torch==2.10.0.
+# Keep the macOS MPS fix even when uv run/sync is used without --overrides.
+[tool.uv]
+override-dependencies = [
+    "torch==2.14.1; sys_platform == 'darwin'",
+    "torch==2.10.0; sys_platform != 'darwin'",
+    "huggingface-hub==0.36.2",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
