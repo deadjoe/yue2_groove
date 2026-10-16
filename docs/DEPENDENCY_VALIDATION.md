@@ -1,6 +1,6 @@
 # Dependency update validation — 2026-10-17
 
-This candidate updates SoundFile 0.13.1 → 0.14.0, safetensors 0.7.0 → 0.8.0,
+Release 1.0.10 updates SoundFile 0.13.1 → 0.14.0, safetensors 0.7.0 → 0.8.0,
 Ruff 0.16.7 → 0.17.1, and the vendored abcjs 6.5.2 → 6.7.1.
 Gradio is held at the previously validated 6.17.3 to prevent an unrelated UI / Hub
 migration during installation. An environment already using a later Gradio will
@@ -50,12 +50,11 @@ installing the latest Gradio. The command was dry-run against the candidate:
 only Gradio 6.17.3 and the editable app would be reinstalled. Four launcher policy
 tests cover macOS/Linux/Windows selection and the macOS CUDA exclusion.
 
-## Integration gate
+## Integration and release
 
-The companion launcher fix should be merged before the app update so new installs
+The companion launcher fix was merged before the app update so new installs
 cannot overwrite the Gradio pin. Existing users use Update, then Start; Reset is
-not required. Do not advertise the candidate as a released version until the
-native runtime CI and regular CI pass and the normal release process is complete.
+not required. The complete and native runtime CI passed on the merged app commit `6049f01`.
 Native CI verifies CPU audio/checkpoint handling and UI construction on Linux,
 Windows and macOS; it does not establish CUDA generation or Cover-model accuracy.
 The independent SheetSage2 environment is not changed by this update.
