@@ -1,0 +1,39 @@
+name: runtime compatibility
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  runtime:
+    name: runtime / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: .venv/bin/python
+            overrides: overrides/linux.txt
+          - os: windows-2022
+            python: .venv/Scripts/python.exe
+            overrides: overrides/linux.txt
+          - os: macos-latest
+            python: .venv/bin/python
+            overrides: overrides/macos.txt
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Create Python environment
+        run: uv venv .venv --python 3.12
+      - name: Install upstream CPU Torch on Linux and Windows
+        if: runner.os != 'macOS'
+        run: uv pip install --python ${{ matrix.python }} torch==2.10.0 --index-url https://download.pytorch.org/whl/cpu
+      - name: Install app and pinned upstream runtime
+        run: uv pip install --python ${{ matrix.python }} -e ".[yue2,gguf,test]" --overrides ${{ matrix.overrides }}
+      - name: Verify audio and checkpoint formats
+        run: ${{ matrix.python }} -m pytest -q tests/test_runtime_formats.py tests/test_dependency_policy.py
+      - name: Import and build the UI
+        run: ${{ matrix.python }} -c "from yue2_groove import webui, config; webui.build_ui({'device':'cpu','dtype':'float32','model':config.default_model(),'vae':'standard','tab':0,'status':''}); print('ui ok')"

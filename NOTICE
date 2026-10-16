@@ -20,7 +20,7 @@ The yue2.cpp binaries the optional GGUF engine runs are built from that commit b
 .github/workflows/yue2cpp.yml and distributed as release assets with yue2.cpp's LICENSE inside.
 
 This product includes abcjs (https://github.com/paulrosen/abcjs),
-Copyright (c) 2009-2024 Paul Rosen and Gregory Dyke, MIT License;
+Copyright (c) 2009-2026 Paul Rosen and Gregory Dyke, MIT License;
 see yue2_groove/static/abcjs.LICENSE.
 
 The file yue2_groove/sheetsage_driver.py is adapted from the YuE2 project's

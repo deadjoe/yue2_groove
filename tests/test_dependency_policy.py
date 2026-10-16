@@ -31,3 +31,22 @@ def test_macos_torch_requirement_and_uv_overrides_agree():
     macos = (root / "overrides/macos.txt").read_text(encoding="utf-8")
     assert "torch==2.14.1" in macos.splitlines()
     assert any(r.name == "huggingface-hub" and "0.36.2" in r.specifier for r in overrides)
+
+
+def test_runtime_overrides_match_install_files():
+    """Both uv entry points must retain our validated replacements for YuE2 pins."""
+    tomllib = pytest.importorskip("tomllib")
+    root = Path(__file__).resolve().parents[1]
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    deps = {r.name: r for r in map(Requirement, project["project"]["dependencies"])}
+    overrides = {
+        r.name: r for r in map(Requirement, project["tool"]["uv"]["override-dependencies"])
+    }
+    assert str(deps["gradio"].specifier) == "==6.17.3"
+    for name, version in (("soundfile", "0.14.0"), ("safetensors", "0.8.0")):
+        expected = f"=={version}"
+        assert str(deps[name].specifier) == expected
+        assert str(overrides[name].specifier) == expected
+        for platform in ("macos", "linux"):
+            lines = (root / "overrides" / f"{platform}.txt").read_text().splitlines()
+            assert f"{name}{expected}" in lines

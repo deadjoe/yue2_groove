@@ -2,6 +2,8 @@
 #   uv pip install -e . --overrides overrides/linux.txt
 #
 # torch stays at upstream's validated pin (2.10.0); the MPS defect does not affect CUDA.
-# Gradio asks for huggingface-hub >= 1.16 while YuE2 pins 0.36.2 (transformers 4.57.x
-# does not work with hub 1.x).  Keep upstream's pin; Gradio works fine with it.
+# Keep the YuE2 / Transformers 4 runtime on its validated Hub version.
 huggingface-hub==0.36.2
+# Validated replacements for YuE2 0.1.6 pins; keep in sync with pyproject.toml.
+soundfile==0.14.0
+safetensors==0.8.0

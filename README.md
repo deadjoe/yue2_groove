@@ -261,13 +261,15 @@ set `YUE2_GROOVE_MODELS=../YuE/models` or pass `--model /path/to/YuE2-3B`.
 
 ## Why the override file?
 
-Two dependency pins conflict, and `uv`'s `--overrides` resolves both without touching
-upstream code:
+YuE2 pins its runtime dependencies. `uv`'s `--overrides` applies the validated
+replacements below without modifying upstream code:
 
 | Pin | Reason |
 |---|---|
 | `torch==2.14.1` (macOS only) | YuE2 pins `torch==2.10.0`, whose MPS single-query attention kernel reads out of bounds once the KV cache passes 1024 tokens ([pytorch/pytorch#174861](https://github.com/pytorch/pytorch/issues/174861)) — in bfloat16 the values turn to garbage and NaN well before a minute of audio. Fixed in torch 2.11. `scripts/mps_sdpa_check.py` reproduces the defect on 2.10 and passes on 2.11+. |
-| `huggingface-hub==0.36.2` | Gradio asks for `huggingface-hub>=1.16`, YuE2 pins `0.36.2` (transformers 4.57.x needs it). Keeping upstream's pin is safe; Gradio works with it. |
+| `huggingface-hub==0.36.2` | Retains the YuE2 / Transformers 4 runtime. Gradio is held at the tested 6.17.3, which supports this Hub version. |
+| `soundfile==0.14.0` | Replaces YuE2's 0.13.1 pin; includes the concurrent file-open fix. |
+| `safetensors==0.8.0` | Replaces YuE2's 0.7.0 pin; model loading and tensor round trips are regression-tested. |
 
 With plain `pip` there is no override mechanism; install in this order and accept the
 version warning:
@@ -276,7 +278,7 @@ version warning:
 python -m venv .venv && . .venv/bin/activate
 pip install ../YuE
 pip install -e .
-pip install "huggingface-hub==0.36.2"            # both platforms
+pip install "huggingface-hub==0.36.2" "soundfile==0.14.0" "safetensors==0.8.0"
 pip install "torch==2.14.1"                      # macOS only
 ```
 
