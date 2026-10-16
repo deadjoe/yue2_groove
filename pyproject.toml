@@ -24,9 +24,10 @@ classifiers = [
 # https://github.com/multimodal-art-projection/YuE into the same environment (see README),
 # or use the `yue2` extra below to pull a pinned tag straight from GitHub.
 dependencies = [
-    "gradio>=6,<7",
+    "gradio==6.17.3",
     "numpy",
-    "soundfile",
+    "soundfile==0.14.0",
+    "safetensors==0.8.0",
     "torch==2.14.1; sys_platform == 'darwin'",
     "torch; sys_platform != 'darwin'",
 ]
@@ -36,7 +37,7 @@ yue2 = ["yue2-infer @ git+https://github.com/multimodal-art-projection/YuE@yue2-
 # the GGUF engine converts the checkpoints with yue2.cpp's converter (vendored), which
 # needs the gguf writer; the binaries themselves come from the release assets
 gguf = ["gguf>=0.10"]
-test = ["pytest>=8", "ruff>=0.16,<0.17", "pyright>=1.1.400,<2"]
+test = ["pytest>=8", "ruff==0.17.1", "pyright>=1.1.400,<2"]
 
 [project.urls]
 Repository = "https://github.com/deadjoe/yue2_groove"
@@ -58,6 +59,8 @@ override-dependencies = [
     "torch==2.14.1; sys_platform == 'darwin'",
     "torch==2.10.0; sys_platform != 'darwin'",
     "huggingface-hub==0.36.2",
+    "soundfile==0.14.0",
+    "safetensors==0.8.0",
 ]
 
 [tool.pytest.ini_options]

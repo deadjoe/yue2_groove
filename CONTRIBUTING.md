@@ -23,8 +23,10 @@ every bundled and inline script (`tests/test_static_assets.py`).
 
 Use the existing `.venv/bin/python` for tests. `uv run` and `uv sync` can change
 installed packages before running a command. The project-level uv overrides keep
-macOS on Torch 2.14.1 and Hugging Face Hub on 0.36.2, even when no override file is
-passed. The matching files in `overrides/` are still required for `uv pip install`.
+macOS on Torch 2.14.1, Hub on 0.36.2, SoundFile on 0.14.0 and safetensors on
+0.8.0, even when no override file is passed. Gradio is pinned to 6.17.3 in the
+package requirements; do not independently reinstall the latest Gradio. The matching
+files in `overrides/` are still required for `uv pip install`.
 Keep these declarations together when changing the supported runtime. For a
 command that must not sync dependencies, use `uv run --no-sync`.
 
