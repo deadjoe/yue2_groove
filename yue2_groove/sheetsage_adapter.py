@@ -78,23 +78,52 @@ def resolve_python(explicit: str | None = None) -> str:
 
 
 def _python_fragment() -> str:
+    # "packages" is keyed by import module name (huggingface_hub, what find_spec
+    # takes); "versions" by distribution name (huggingface-hub, what
+    # importlib.metadata takes).
     return (
         "import json, importlib.metadata, importlib.util, sys;"
         "mods={n: importlib.util.find_spec(n) is not None for n in "
-        "('torch','transformers','huggingface-hub','torchaudio')};"
+        "('torch','transformers','huggingface_hub','torchaudio')};"
         "versions={};"
-        "[versions.__setitem__(n, importlib.metadata.version(n)) "
-        "for n in ('torch','transformers','huggingface-hub') "
-        "if mods.get(n)];"
+        "[versions.__setitem__(d, importlib.metadata.version(d)) "
+        "for d in ('torch','transformers','huggingface-hub','torchaudio') "
+        "if mods.get(d.replace('-','_'))];"
         "print(json.dumps({'python': sys.version.split()[0], 'executable': sys.executable,"
         " 'packages': mods, 'versions': versions}))"
     )
 
 
+def _import_fragment() -> str:
+    # torchaudio is what actually breaks on Windows when a DLL dependency is
+    # missing (its libtorchaudio.pyd exists but cannot load), so probe imports it.
+    return "import torch, torchaudio"
+
+
+def _check_imports(interpreter: str, packages: dict, timeout: float) -> dict:
+    """Actually import torch+torchaudio: find_spec passes on a broken install."""
+    if not (packages.get("torch") and packages.get("torchaudio")):
+        return {"ok": False, "error": "torch/torchaudio are not both installed"}
+    try:
+        result = subprocess.run(
+            [interpreter, "-c", _import_fragment()],
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+            env=config.child_env(),
+            **config.SUBPROCESS_TEXT,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"ok": False, "error": f"could not run the import check: {exc}"}
+    if result.returncode == 0:
+        return {"ok": True, "error": ""}
+    return {"ok": False, "error": result.stderr.strip()[-800:] or f"exit {result.returncode}"}
+
+
 def probe(python: str | None = None, *, timeout: float = 180) -> dict:
     """Check the SheetSage2 environment without loading any model.
 
-    Returns ``{"python", "packages", "versions", "ffmpeg", "ok"}``; raises
+    Returns ``{"python", "packages", "versions", "imports", "ffmpeg", "ok"}``; raises
     ``SheetsageNotConfigured`` when the interpreter itself is missing.
     """
     interpreter = resolve_python(python)
@@ -122,8 +151,11 @@ def probe(python: str | None = None, *, timeout: float = 180) -> dict:
             f"Unexpected check output from {interpreter}: {result.stdout[-300:]!r}"
         ) from exc
     packages = info.get("packages") or {}
+    info["imports"] = _check_imports(interpreter, packages, timeout)
     info["ffmpeg"] = shutil.which("ffmpeg")
-    info["ok"] = bool(packages.get("torch") and packages.get("transformers"))
+    info["ok"] = bool(
+        packages.get("torch") and packages.get("transformers") and info["imports"]["ok"]
+    )
     return info
 
 
@@ -132,10 +164,20 @@ def format_probe(info: dict) -> str:
     versions = info.get("versions") or {}
     packages = info.get("packages") or {}
     for name in ("torch", "transformers", "huggingface_hub", "torchaudio"):
-        key = name.replace("_", "-")
-        mark = "ok" if packages.get(key) else "missing"
-        version = versions.get(key) or ""
+        mark = "ok" if packages.get(name) else "missing"
+        version = versions.get(name.replace("_", "-")) or ""
         lines.append(f"  {name}: {mark}{(' ' + version) if version else ''}")
+    imports = info.get("imports") or {}
+    if imports.get("ok"):
+        lines.append("  torch+torchaudio import: ok")
+    else:
+        lines.append(f"  torch+torchaudio import: FAILED — {imports.get('error') or 'unknown'}")
+        if os.name == "nt":
+            lines.append(
+                "  the error above is the authoritative detail; possible causes on Windows "
+                "include a missing Visual C++ 2015-2022 (x64) redistributable, a corrupt or "
+                "mismatched torch/torchaudio install, or a DLL search-path conflict"
+            )
     lines.append(f"ffmpeg: {info.get('ffmpeg') or 'not on PATH (SheetSage2 may need it)'}")
     lines.append(
         "ready" if info.get("ok") else "not ready — install the SheetSage2 requirements first"
