@@ -894,7 +894,7 @@ def test_library_flow_back_and_open_last_in_library(isolated_runs: Path) -> None
         with pytest.raises(gr.Error, match="Pick or generate"):
             call("")
     with pytest.raises(gr.Error, match="outside the runs directory"):
-        webui.library_tab.open_last_in_library("/tmp/somewhere-else")
+        webui.library_tab.open_last_in_library(str(isolated_runs.parent / "somewhere-else"))
 
 
 def generate_args(**overrides):
@@ -1019,6 +1019,33 @@ def test_cover_detect_python_uses_a_documented_location(monkeypatch, tmp_path) -
         webui.cover_tab, "_sheetsage_python_candidates", lambda: [tmp_path / "nope"]
     )
     assert "No SheetSage2 venv found" in webui.cover_tab.cover_detect_python()
+
+
+def test_sheetsage_python_candidates_cover_the_windows_layout() -> None:
+    """A Windows venv keeps its interpreter at Scripts/python.exe, not bin/python."""
+    candidates = webui.cover_tab._sheetsage_python_candidates()
+    windows = [p for p in candidates if p.parent.name == "Scripts" and p.name == "python.exe"]
+    posix = [p for p in candidates if p.parent.name == "bin" and p.name == "python"]
+    assert len(windows) == 2 and len(posix) == 2
+    assert any(p.parent.parent.name == ".venv-sheetsage2" for p in windows)
+
+
+def test_detect_python_finds_the_venv_in_a_real_windows_layout(monkeypatch, tmp_path) -> None:
+    """Regression: candidates must anchor at the repo root (Pinokio: app/), not the
+    yue2_groove package directory two levels down."""
+    app = tmp_path / "app"
+    fake_module = app / "yue2_groove" / "webui" / "cover_tab.py"
+    fake_module.parent.mkdir(parents=True)
+    fake_module.write_text("", encoding="utf-8")
+    venv_python = app / ".venv-sheetsage2" / "Scripts" / "python.exe"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.write_text("", encoding="utf-8")
+    monkeypatch.setattr(webui.cover_tab, "__file__", str(fake_module))
+    monkeypatch.delenv("YUE2_GROOVE_SHEETSAGE_PYTHON", raising=False)
+    message = webui.cover_tab.cover_detect_python()
+    expected = str(venv_python.resolve())
+    assert expected in message
+    assert os.environ["YUE2_GROOVE_SHEETSAGE_PYTHON"] == expected
 
 
 def test_cover_generate_event_wiring_matches_its_outputs(isolated_runs) -> None:

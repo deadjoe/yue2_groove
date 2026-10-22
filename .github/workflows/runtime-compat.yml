@@ -34,6 +34,6 @@ jobs:
       - name: Install app and pinned upstream runtime
         run: uv pip install --python ${{ matrix.python }} -e ".[yue2,gguf,test]" --overrides ${{ matrix.overrides }}
       - name: Verify audio and checkpoint formats
-        run: ${{ matrix.python }} -m pytest -q tests/test_runtime_formats.py tests/test_dependency_policy.py
+        run: ${{ matrix.python }} -m pytest -q tests/test_runtime_formats.py tests/test_dependency_policy.py tests/test_sheetsage_adapter.py tests/test_webui_cover_edit.py
       - name: Import and build the UI
         run: ${{ matrix.python }} -c "from yue2_groove import webui, config; webui.build_ui({'device':'cpu','dtype':'float32','model':config.default_model(),'vae':'standard','tab':0,'status':''}); print('ui ok')"

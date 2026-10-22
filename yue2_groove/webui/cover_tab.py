@@ -477,10 +477,14 @@ def cover_send_to_generate(text, task, style, lyrics, keep_voice):
 
 
 def _sheetsage_python_candidates() -> list[Path]:
-    repo = Path(__file__).resolve().parent.parent
-    return [
-        repo / ".venv-sheetsage2" / "bin" / "python",
-        repo.parent / "YuE" / ".venv-sheetsage2" / "bin" / "python",
+    # This file is <repo>/yue2_groove/webui/cover_tab.py: parents[2] is the
+    # repository root (in Pinokio, app/), where the venv is installed.
+    repo = Path(__file__).resolve().parents[2]
+    roots = [repo / ".venv-sheetsage2", repo.parent / "YuE" / ".venv-sheetsage2"]
+    # Windows venvs keep the interpreter in Scripts/python.exe, POSIX in bin/python;
+    # check both layouts so DETECT works on every platform.
+    return [root / "Scripts" / "python.exe" for root in roots] + [
+        root / "bin" / "python" for root in roots
     ]
 
 

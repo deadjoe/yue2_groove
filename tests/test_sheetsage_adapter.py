@@ -240,8 +240,18 @@ def test_probe_and_format(monkeypatch, tmp_path: Path) -> None:
     payload = {
         "python": "3.11.9",
         "executable": str(fake_python),
-        "packages": {"torch": True, "transformers": True, "huggingface-hub": True},
-        "versions": {"torch": "2.8.0", "transformers": "4.45.2", "huggingface-hub": "0.36.0"},
+        "packages": {
+            "torch": True,
+            "transformers": True,
+            "huggingface_hub": True,
+            "torchaudio": True,
+        },
+        "versions": {
+            "torch": "2.8.0",
+            "transformers": "4.45.2",
+            "huggingface-hub": "0.36.0",
+            "torchaudio": "2.8.0",
+        },
     }
 
     class Completed:
@@ -257,6 +267,8 @@ def test_probe_and_format(monkeypatch, tmp_path: Path) -> None:
     assert info["ok"] is True and info["ffmpeg"] == "/usr/bin/ffmpeg"
     text = adapter.format_probe(info)
     assert "transformers: ok 4.45.2" in text and "huggingface_hub: ok 0.36.0" in text
+    assert "torchaudio: ok 2.8.0" in text
+    assert "torch+torchaudio import: ok" in text
     assert "ffmpeg" in text and text.endswith("ready")
 
     class Broken:
@@ -267,6 +279,44 @@ def test_probe_and_format(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(adapter.subprocess, "run", lambda *a, **k: Broken())
     with pytest.raises(adapter.SheetsageFailed, match="no torch"):
         adapter.probe(str(fake_python))
+
+
+def test_probe_flags_a_present_but_unloadable_torchaudio(monkeypatch, tmp_path: Path) -> None:
+    """find_spec passes on a broken Windows install; the import check must catch it."""
+    fake_python = tmp_path / "python"
+    fake_python.write_text("#!/bin/sh\n", encoding="utf-8")
+    fake_python.chmod(fake_python.stat().st_mode | stat.S_IXUSR)
+    payload = {
+        "python": "3.11.9",
+        "executable": str(fake_python),
+        "packages": {
+            "torch": True,
+            "transformers": True,
+            "huggingface_hub": True,
+            "torchaudio": True,
+        },
+        "versions": {"torch": "2.8.0", "transformers": "4.45.2", "huggingface-hub": "0.36.0"},
+    }
+
+    class Completed:
+        returncode = 0
+        stdout = json.dumps(payload) + "\n"
+        stderr = ""
+
+    class ImportBroken:
+        returncode = 1
+        stdout = ""
+        stderr = "OSError: Could not load this library: .../torchaudio/lib/libtorchaudio.pyd"
+
+    def fake_run(args, **kwargs):
+        return Completed() if "importlib.util" in args[-1] else ImportBroken()
+
+    monkeypatch.setattr(adapter.subprocess, "run", fake_run)
+    monkeypatch.setattr(adapter.shutil, "which", lambda name: None)
+    info = adapter.probe(str(fake_python))
+    assert info["ok"] is False and "libtorchaudio" in info["imports"]["error"]
+    text = adapter.format_probe(info)
+    assert "torch+torchaudio import: FAILED" in text and not text.endswith("ready")
 
 
 def test_driver_task_settings_and_melody_only_interface() -> None:
@@ -455,11 +505,17 @@ def test_warm_worker_is_reused_and_stoppable(monkeypatch, tmp_path: Path) -> Non
     )
     status = adapter.worker_status()
     assert first["abc"] == "X:1" and first["worker"]["resident"] is True
-    assert status is not None and status["pid"] == int(pid_file.read_text())
+    assert status is not None
+    worker_pid = int(pid_file.read_text())
+    assert worker_pid > 0
+    # Windows venv python.exe can be a launcher with a different child PID.
+    if os.name != "nt":
+        assert status["pid"] == worker_pid
     assert [value for value in progress if value is not None] == [0.5]
 
     second = adapter.transcribe(audio, output_dir=tmp_path / "two", task="melody-full")
-    assert adapter.worker_status()["pid"] == status["pid"]  # same resident process
+    assert adapter.worker_status()["pid"] == status["pid"]  # same launcher/process
+    assert int(pid_file.read_text()) == worker_pid  # same actual resident worker
     assert second["task"] == "melody-full" and second["output_dir"].endswith("two")
 
     assert adapter.stop_worker() is True
@@ -707,7 +763,12 @@ def test_probe_pins_the_child_pipe_to_utf8(monkeypatch, tmp_path: Path) -> None:
     payload = {
         "python": "3.11.9",
         "executable": str(fake_python),
-        "packages": {"torch": True, "transformers": True, "huggingface-hub": True},
+        "packages": {
+            "torch": True,
+            "transformers": True,
+            "huggingface_hub": True,
+            "torchaudio": True,
+        },
         "versions": {"torch": "2.8.0", "transformers": "4.45.2", "huggingface-hub": "0.36.0"},
     }
 
