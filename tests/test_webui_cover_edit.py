@@ -894,7 +894,7 @@ def test_library_flow_back_and_open_last_in_library(isolated_runs: Path) -> None
         with pytest.raises(gr.Error, match="Pick or generate"):
             call("")
     with pytest.raises(gr.Error, match="outside the runs directory"):
-        webui.library_tab.open_last_in_library("/tmp/somewhere-else")
+        webui.library_tab.open_last_in_library(str(isolated_runs.parent / "somewhere-else"))
 
 
 def generate_args(**overrides):

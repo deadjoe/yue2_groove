@@ -505,11 +505,17 @@ def test_warm_worker_is_reused_and_stoppable(monkeypatch, tmp_path: Path) -> Non
     )
     status = adapter.worker_status()
     assert first["abc"] == "X:1" and first["worker"]["resident"] is True
-    assert status is not None and status["pid"] == int(pid_file.read_text())
+    assert status is not None
+    worker_pid = int(pid_file.read_text())
+    assert worker_pid > 0
+    # Windows venv python.exe can be a launcher with a different child PID.
+    if os.name != "nt":
+        assert status["pid"] == worker_pid
     assert [value for value in progress if value is not None] == [0.5]
 
     second = adapter.transcribe(audio, output_dir=tmp_path / "two", task="melody-full")
-    assert adapter.worker_status()["pid"] == status["pid"]  # same resident process
+    assert adapter.worker_status()["pid"] == status["pid"]  # same launcher/process
+    assert int(pid_file.read_text()) == worker_pid  # same actual resident worker
     assert second["task"] == "melody-full" and second["output_dir"].endswith("two")
 
     assert adapter.stop_worker() is True
