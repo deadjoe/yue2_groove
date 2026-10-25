@@ -326,6 +326,10 @@ python3.11 -m venv .venv-sheetsage2
 YUE2_GROOVE_SHEETSAGE_PYTHON=/path/to/YuE/.venv-sheetsage2/bin/python
 ```
 
+If using uv instead of pip, use `uv --no-config pip install --python <SheetSage2-python>`
+for every SheetSage2 dependency installation. Selecting a separate interpreter alone does
+not isolate uv from the main project's dependency overrides.
+
 FFmpeg 6.1+ must be on `PATH`. MERT-v2-FullSong, SheetSage2's parent encoder, downloads
 automatically — do not install it separately. On macOS use the same commands without the CUDA
 index and `device=mps` (untested) or `device=cpu` (works, slow). The **CHECK ENVIRONMENT**

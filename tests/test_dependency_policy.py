@@ -50,3 +50,22 @@ def test_runtime_overrides_match_install_files():
         for platform in ("macos", "linux"):
             lines = (root / "overrides" / f"{platform}.txt").read_text().splitlines()
             assert f"{name}{expected}" in lines
+
+
+def test_docker_sheetsage_installs_ignore_main_project_overrides():
+    root = Path(__file__).resolve().parents[1]
+    dockerfile = (root / "deploy/docker/Dockerfile").read_text()
+    installs = [
+        line
+        for line in dockerfile.splitlines()
+        if "pip install" in line and ".venv-sheetsage2" in line
+    ]
+    assert len(installs) == 3
+    assert all(
+        "uv --no-config pip install --python .venv-sheetsage2/bin/python" in line
+        for line in installs
+    )
+    assert "torch==2.8.0+cu126 torchaudio==2.8.0+cu126" in dockerfile
+    assert "import torch, torchaudio, transformers" in dockerfile
+    assert "torch.__version__ == torchaudio.__version__ == '2.8.0+cu126'" in dockerfile
+    assert "torchaudio.functional.resample" in dockerfile
