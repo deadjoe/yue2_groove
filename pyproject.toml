@@ -54,6 +54,7 @@ yue2_groove = ["static/*", "examples/*.abc", "vendor/*.py"]
 
 # Project-mode uv commands resolve all extras, including YuE2's torch==2.10.0.
 # Keep the macOS MPS fix even when uv run/sync is used without --overrides.
+# uv pip also discovers these overrides: independent SheetSage2 installs MUST use --no-config.
 [tool.uv]
 override-dependencies = [
     "torch==2.14.1; sys_platform == 'darwin'",

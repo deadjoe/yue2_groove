@@ -43,15 +43,16 @@ RUN uv venv env --python 3.12 \
 
 # 2. The SheetSage2 (Cover) environment: its own Python 3.11 venv and torch 2.8 / cu126, as in
 #    the README. Only the model's requirements.txt is fetched at build time; the model itself is
-#    downloaded at first start.
+#    downloaded at first start. --no-config prevents the main app uv overrides
+#    above from replacing SheetSage2 pins, even when the target interpreter differs.
 RUN uv python install 3.11 \
  && uv venv .venv-sheetsage2 --python 3.11 \
- && uv pip install --python .venv-sheetsage2/bin/python huggingface-hub==0.36.0 hf_transfer \
- && uv pip install --python .venv-sheetsage2/bin/python torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu126 \
+ && uv --no-config pip install --python .venv-sheetsage2/bin/python huggingface-hub==0.36.0 hf_transfer \
+ && uv --no-config pip install --python .venv-sheetsage2/bin/python torch==2.8.0+cu126 torchaudio==2.8.0+cu126 --index-url https://download.pytorch.org/whl/cu126 \
  && .venv-sheetsage2/bin/hf download m-a-p/SheetSage2 requirements.txt --revision 24154de28aa6ca3539ae9d87b13364cae2ba2ca2 --local-dir /tmp/sheetsage2 \
- && uv pip install --python .venv-sheetsage2/bin/python -r /tmp/sheetsage2/requirements.txt \
+ && uv --no-config pip install --python .venv-sheetsage2/bin/python -r /tmp/sheetsage2/requirements.txt \
  && rm -rf /tmp/sheetsage2 \
- && .venv-sheetsage2/bin/python -c "import torch, transformers; print('sheetsage env ok', torch.__version__)"
+ && .venv-sheetsage2/bin/python -c "import torch, torchaudio, transformers; assert torch.__version__ == torchaudio.__version__ == '2.8.0+cu126'; x = torchaudio.functional.resample(torch.zeros(1, 1600), 16000, 8000); assert x.shape == (1, 800) and torch.isfinite(x).all(); print('sheetsage env ok', torch.__version__, torchaudio.__version__)"
 
 # 3. The GGUF engine's binaries: the linux-x64 asset the app's own workflow attached to a
 #    release (yue2cpp-<pin>-linux-x64.tar.gz — CUDA 12.8 + Vulkan + CPU, the CUDA runtime
